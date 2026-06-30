@@ -18,7 +18,13 @@
     showWizard = firstRun;
 
     if (!firstRun) {
-      await conversationStore.loadAll();
+      // Tauri invoke nemusí být dostupný (např. webové E2E) — chybu spolkneme,
+      // ať se UI vždy vykreslí.
+      try {
+        await conversationStore.loadAll();
+      } catch (err) {
+        console.warn("loadAll selhal:", err);
+      }
     }
 
     ready = true;
@@ -27,7 +33,7 @@
   function onWizardComplete() {
     localStorage.setItem("weave.setup-complete", "1");
     showWizard = false;
-    conversationStore.loadAll();
+    conversationStore.loadAll().catch((err) => console.warn("loadAll selhal:", err));
   }
 </script>
 

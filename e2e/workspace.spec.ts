@@ -10,7 +10,7 @@ test.describe("Workspace panel", () => {
   test("tlačítko workspace toggleuje panel", async ({ page }) => {
     const wsBtn = page.locator("button[title='Workspace']");
     await wsBtn.click();
-    await expect(page.getByText("Workspace")).toBeVisible();
+    await expect(page.getByText("Workspace", { exact: true })).toBeVisible();
     await wsBtn.click();
     await expect(page.getByText("Otevřít složku")).not.toBeVisible();
   });

@@ -8,7 +8,9 @@
 
   let view = $state<"tree" | "search">("tree");
 
-  onMount(() => workspaceStore.load());
+  onMount(() => {
+    workspaceStore.load().catch((err) => console.warn("workspace load selhal:", err));
+  });
 
   async function pickFolder() {
     const selected = await open({ directory: true, multiple: false, title: "Vybrat workspace složku" });

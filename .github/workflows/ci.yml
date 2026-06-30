@@ -115,12 +115,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
@@ -128,32 +122,16 @@ jobs:
           node-version: "22"
           cache: "pnpm"
 
-      - name: Install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libsecret-1-dev \
-            pkg-config \
-            xvfb
-
       - name: Install deps
         run: pnpm install
 
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Build Tauri app (test mode)
-        run: pnpm tauri build --debug
-        env:
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-
+      # Playwright si přes webServer sám spustí `vite build && vite preview`.
+      # Testy ověřují webové UI (Tauri nativní vrstva se testuje ručně / později WebDriverem).
       - name: Run Playwright E2E
-        run: xvfb-run pnpm playwright
+        run: pnpm playwright
         env:
           CI: true
 
