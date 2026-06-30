@@ -1,0 +1,15 @@
+[package]
+name = "weave-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Weave — entry point"
+
+[build-dependencies]
+tauri-build = { workspace = true, features = [] }
+
+[dependencies]
+weave-shell = { path = "crates/weave-shell" }
+tauri = { workspace = true }

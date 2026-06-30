@@ -1,0 +1,137 @@
+<script lang="ts">
+  import type { Message } from "$lib/stores/conversations.svelte";
+  import { i18n } from "$lib/i18n/index.svelte";
+
+  let { msg }: { msg: Message } = $props();
+
+  const isUser = $derived(msg.role === "user");
+
+  // Jednoduchý markdown renderer — inline kód + code bloky
+  function renderContent(text: string): string {
+    return text
+      .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="lang-$1">$2</code></pre>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="inline-image" />')
+      .replace(/\n/g, "<br>");
+  }
+
+  async function copyContent() {
+    await navigator.clipboard.writeText(msg.content);
+  }
+</script>
+
+<div class="bubble-wrap" class:user={isUser}>
+  <div class="bubble" class:user={isUser} class:assistant={!isUser}>
+    <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+    <div class="bubble-content">{@html renderContent(msg.content)}</div>
+
+    {#if msg.stats}
+      <div class="stats">
+        {i18n.t("chat.tokensPerSecond", { tps: msg.stats.tokens_per_second.toFixed(1) })}
+        · {msg.stats.model_id}
+      </div>
+    {/if}
+  </div>
+
+  <div class="actions">
+    <button class="action-btn" onclick={copyContent} title={i18n.m.chat.copy}>⎘</button>
+  </div>
+</div>
+
+<style>
+  .bubble-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    max-width: 78%;
+  }
+
+  .bubble-wrap.user {
+    align-self: flex-end;
+    align-items: flex-end;
+  }
+
+  .bubble {
+    border-radius: 12px;
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+    line-height: 1.7;
+    word-break: break-word;
+  }
+
+  .bubble.user {
+    background: var(--color-user-bubble);
+    border: 1px solid var(--color-accent);
+    border-bottom-right-radius: 4px;
+  }
+
+  .bubble.assistant {
+    background: var(--color-assistant-bubble);
+    border: 1px solid var(--color-border);
+    border-bottom-left-radius: 4px;
+  }
+
+  .bubble-content :global(pre) {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.75rem;
+    overflow-x: auto;
+    font-size: 0.82rem;
+    margin: 0.5rem 0;
+  }
+
+  .bubble-content :global(code) {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.85em;
+    background: var(--color-surface-2);
+    padding: 0.1em 0.3em;
+    border-radius: 4px;
+  }
+
+  .bubble-content :global(pre code) {
+    background: transparent;
+    padding: 0;
+  }
+
+  .bubble-content :global(.inline-image) {
+    max-width: 100%;
+    border-radius: 8px;
+    margin-top: 0.5rem;
+  }
+
+  .stats {
+    margin-top: 0.4rem;
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .actions {
+    display: flex;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .bubble-wrap:hover .actions { opacity: 1; }
+
+  .action-btn {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    border-radius: 6px;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+  }
+
+  .action-btn:hover {
+    color: var(--color-text);
+    background: var(--color-surface-2);
+  }
+</style>

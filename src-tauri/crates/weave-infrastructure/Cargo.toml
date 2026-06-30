@@ -1,0 +1,29 @@
+[package]
+name = "weave-infrastructure"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Weave infrastructure layer — SQLite, keychain, HTTP adaptery pro LLM a ComfyUI."
+
+[dependencies]
+weave-domain = { path = "../weave-domain" }
+weave-application = { path = "../weave-application" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1"
+reqwest = { workspace = true }
+sqlx = { workspace = true }
+keyring = "3"
+futures-util = "0.3"
+
+[dev-dependencies]
+wiremock = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+sqlx = { workspace = true }
