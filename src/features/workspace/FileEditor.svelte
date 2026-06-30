@@ -43,7 +43,6 @@
       onkeydown={onKeydown}
       spellcheck={false}
       autocomplete="off"
-      autocorrect="off"
       autocapitalize="off"
     ></textarea>
 

@@ -19,6 +19,5 @@
       "$components/*": ["./src/components/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src/**/*.ts", "src/**/*.svelte", "src/**/*.svelte.ts"]
 }

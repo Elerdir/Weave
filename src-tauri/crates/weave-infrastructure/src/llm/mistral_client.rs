@@ -48,7 +48,6 @@ struct StreamDelta {
 #[derive(Deserialize)]
 struct StreamChoice {
     delta: StreamDelta,
-    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -116,7 +115,9 @@ impl LlmPort for MistralClient {
             let text = String::from_utf8_lossy(&bytes);
 
             for line in text.lines() {
-                let Some(data) = line.strip_prefix("data: ") else { continue };
+                let Some(data) = line.strip_prefix("data: ") else {
+                    continue;
+                };
                 if data == "[DONE]" {
                     let elapsed = start.elapsed().as_secs_f64();
                     let tps = if elapsed > 0.0 {

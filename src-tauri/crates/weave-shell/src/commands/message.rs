@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{Emitter, State};
 use weave_domain::message::Message;
 
 use crate::state::AppState;
@@ -33,13 +33,11 @@ pub async fn send_message(
     use tokio::sync::mpsc;
     use uuid::Uuid;
     use weave_application::{
-        ports::llm_port::StreamChunk,
-        use_cases::send_message::SendMessageUseCase,
+        ports::llm_port::StreamChunk, use_cases::send_message::SendMessageUseCase,
     };
     use weave_domain::conversation::ConversationId;
     use weave_infrastructure::db::{
-        conversation_repo::SqliteConversationRepository,
-        message_repo::SqliteMessageRepository,
+        conversation_repo::SqliteConversationRepository, message_repo::SqliteMessageRepository,
     };
 
     let uuid = Uuid::parse_str(&conversation_id).map_err(|e| e.to_string())?;

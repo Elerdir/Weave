@@ -17,7 +17,8 @@ impl FileSystemPort for NativeFileSystem {
         }
 
         let mut entries = Vec::new();
-        collect_recursive(root_path, &mut entries).map_err(|e| AppError::Repository(e.to_string()))?;
+        collect_recursive(root_path, &mut entries)
+            .map_err(|e| AppError::Repository(e.to_string()))?;
         Ok(entries)
     }
 
@@ -37,12 +38,10 @@ impl FileSystemPort for NativeFileSystem {
         }
 
         // Složky první, pak soubory, abecedně
-        entries.sort_by(|a, b| {
-            match (&a.kind, &b.kind) {
-                (EntryKind::Directory, EntryKind::File) => std::cmp::Ordering::Less,
-                (EntryKind::File, EntryKind::Directory) => std::cmp::Ordering::Greater,
-                _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            }
+        entries.sort_by(|a, b| match (&a.kind, &b.kind) {
+            (EntryKind::Directory, EntryKind::File) => std::cmp::Ordering::Less,
+            (EntryKind::File, EntryKind::Directory) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
         });
 
         Ok(entries)
@@ -89,7 +88,14 @@ impl FileSystemPort for NativeFileSystem {
 
 fn collect_recursive(dir: &Path, out: &mut Vec<WorkspaceEntry>) -> std::io::Result<()> {
     // Přeskočíme skryté složky a node_modules/target/.git
-    let skip_dirs = [".git", "node_modules", "target", ".pnpm-store", "__pycache__", ".venv"];
+    let skip_dirs = [
+        ".git",
+        "node_modules",
+        "target",
+        ".pnpm-store",
+        "__pycache__",
+        ".venv",
+    ];
 
     for entry in std::fs::read_dir(dir)?.flatten() {
         let path = entry.path();
@@ -122,15 +128,21 @@ fn fs_entry_to_domain(entry: &std::fs::DirEntry) -> Option<WorkspaceEntry> {
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| {
-            chrono::DateTime::from_timestamp(d.as_secs() as i64, 0).unwrap_or_default()
-        });
+        .map(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0).unwrap_or_default());
 
     Some(WorkspaceEntry {
         path: path.to_string_lossy().into_owned(),
         name,
-        kind: if meta.is_dir() { EntryKind::Directory } else { EntryKind::File },
-        size_bytes: if meta.is_file() { Some(meta.len()) } else { None },
+        kind: if meta.is_dir() {
+            EntryKind::Directory
+        } else {
+            EntryKind::File
+        },
+        size_bytes: if meta.is_file() {
+            Some(meta.len())
+        } else {
+            None
+        },
         modified_at,
     })
 }

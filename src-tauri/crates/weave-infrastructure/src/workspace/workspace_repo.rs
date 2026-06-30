@@ -19,6 +19,10 @@ impl SqliteWorkspaceRepository {
 #[async_trait]
 impl WorkspaceRepository for SqliteWorkspaceRepository {
     async fn upsert_file(&self, file: &IndexedFile) -> AppResult<()> {
+        let size = file.size_bytes as i64;
+        let modified_at = file.modified_at.to_rfc3339();
+        let indexed_at = file.indexed_at.to_rfc3339();
+
         sqlx::query!(
             r#"
             INSERT INTO workspace_files (path, name, extension, size_bytes, modified_at, indexed_at, text_content)
@@ -34,9 +38,9 @@ impl WorkspaceRepository for SqliteWorkspaceRepository {
             file.path,
             file.name,
             file.extension,
-            file.size_bytes as i64,
-            file.modified_at.to_rfc3339(),
-            file.indexed_at.to_rfc3339(),
+            size,
+            modified_at,
+            indexed_at,
             file.text_content,
         )
         .execute(&self.pool)

@@ -33,22 +33,26 @@ impl MessageRepository for SqliteMessageRepository {
         let stats = m
             .stats
             .as_ref()
-            .map(|s| serde_json::to_string(s))
+            .map(serde_json::to_string)
             .transpose()
             .map_err(|e| AppError::Repository(e.to_string()))?;
+
+        let id = m.id.to_string();
+        let conversation_id = m.conversation_id.as_uuid().to_string();
+        let created_at = m.created_at.to_rfc3339();
 
         sqlx::query!(
             r#"
             INSERT INTO messages (id, conversation_id, role, content, attachments, stats, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             "#,
-            m.id.to_string(),
-            m.conversation_id.as_uuid().to_string(),
+            id,
+            conversation_id,
             role,
             m.content,
             attachments,
             stats,
-            m.created_at.to_rfc3339(),
+            created_at,
         )
         .execute(&self.pool)
         .await
@@ -57,9 +61,10 @@ impl MessageRepository for SqliteMessageRepository {
     }
 
     async fn list_by_conversation(&self, id: &ConversationId) -> AppResult<Vec<Message>> {
+        let id_str = id.as_uuid().to_string();
         let rows = sqlx::query!(
             "SELECT id, conversation_id, role, content, attachments, stats, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC",
-            id.as_uuid().to_string()
+            id_str
         )
         .fetch_all(&self.pool)
         .await
@@ -96,13 +101,11 @@ impl MessageRepository for SqliteMessageRepository {
     }
 
     async fn delete_by_conversation(&self, id: &ConversationId) -> AppResult<()> {
-        sqlx::query!(
-            "DELETE FROM messages WHERE conversation_id = ?",
-            id.as_uuid().to_string()
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(|e| AppError::Repository(e.to_string()))?;
+        let id_str = id.as_uuid().to_string();
+        sqlx::query!("DELETE FROM messages WHERE conversation_id = ?", id_str)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| AppError::Repository(e.to_string()))?;
         Ok(())
     }
 }

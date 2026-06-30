@@ -1,18 +1,14 @@
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
-use weave_domain::{
-    conversation::ConversationId,
-    message::Message,
-    model::IntentClassifier,
-};
+use weave_domain::{conversation::ConversationId, message::Message, model::IntentClassifier};
 
 use crate::{
     error::{AppError, AppResult},
     ports::{
         conversation_repository::{ConversationRepository, MessageRepository},
-        llm_port::{ChatRequest, LlmPort, StreamChunk},
         image_gen_port::{ImageGenPort, ImageProgress, ImageRequest, StylePreset},
+        llm_port::{ChatRequest, LlmPort, StreamChunk},
     },
 };
 
@@ -30,7 +26,12 @@ impl SendMessageUseCase {
         llm: Arc<dyn LlmPort>,
         image_gen: Arc<dyn ImageGenPort>,
     ) -> Self {
-        Self { conv_repo, msg_repo, llm, image_gen }
+        Self {
+            conv_repo,
+            msg_repo,
+            llm,
+            image_gen,
+        }
     }
 
     pub async fn execute(
@@ -43,7 +44,9 @@ impl SendMessageUseCase {
         self.conv_repo
             .find_by_id(&conversation_id)
             .await?
-            .ok_or_else(|| AppError::Repository(format!("Konverzace {conversation_id} neexistuje")))?;
+            .ok_or_else(|| {
+                AppError::Repository(format!("Konverzace {conversation_id} neexistuje"))
+            })?;
 
         // Uložíme zprávu uživatele
         let user_msg = Message::user(conversation_id.clone(), &content);

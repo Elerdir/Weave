@@ -2,10 +2,7 @@ use std::sync::Arc;
 
 use weave_domain::conversation::{Conversation, ConversationTitle};
 
-use crate::{
-    error::AppResult,
-    ports::conversation_repository::ConversationRepository,
-};
+use crate::{error::AppResult, ports::conversation_repository::ConversationRepository};
 
 pub struct CreateConversationUseCase {
     repo: Arc<dyn ConversationRepository>,
@@ -33,7 +30,9 @@ mod tests {
     #[tokio::test]
     async fn creates_and_saves_conversation() {
         let mut mock = MockConversationRepository::new();
-        mock.expect_save().times(1).returning(|_| Ok(()));
+        mock.expect_save()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
 
         let uc = CreateConversationUseCase::new(Arc::new(mock));
         let result = uc.execute("Nová konverzace").await;

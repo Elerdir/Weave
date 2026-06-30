@@ -1,5 +1,5 @@
 use tauri::State;
-use weave_application::ports::model_manager_port::{GpuInfo, LocalModel, ModelManagerPort};
+use weave_application::ports::model_manager_port::{GpuInfo, LocalModel};
 
 use crate::state::AppState;
 

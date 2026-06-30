@@ -120,10 +120,13 @@ impl ModelManagerPort for LocalModelManager {
                 if output.status.success() {
                     let info = String::from_utf8_lossy(&output.stdout);
                     let parts: Vec<&str> = info.trim().split(',').collect();
-                    let name = parts.first().map(|s| s.trim().to_string()).unwrap_or_default();
+                    let name = parts
+                        .first()
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_default();
                     let vram = parts
                         .get(1)
-                        .and_then(|s| s.trim().split_whitespace().next())
+                        .and_then(|s| s.split_whitespace().next())
                         .and_then(|s| s.parse::<u64>().ok())
                         .unwrap_or(0);
                     return Ok(Some(GpuInfo {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { tick } from "svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { sendMessage } from "$lib/services/chat.service";
   import { i18n } from "$lib/i18n/index.svelte";
@@ -9,8 +9,10 @@
   let messagesEl = $state<HTMLDivElement | null>(null);
 
   $effect(() => {
-    // Scroll na konec při každé nové zprávě nebo streamu
-    const _ = conversationStore.messages.length + conversationStore.streamingContent;
+    // Scroll na konec při každé nové zprávě nebo streamu.
+    // Čteme reaktivní hodnoty, aby effect běžel při jejich změně.
+    void conversationStore.messages.length;
+    void conversationStore.streamingContent;
     tick().then(() => {
       if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
     });

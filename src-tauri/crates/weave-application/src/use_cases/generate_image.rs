@@ -22,9 +22,11 @@ impl GenerateImageUseCase {
         tx: mpsc::Sender<ImageProgress>,
     ) -> AppResult<()> {
         if !self.image_gen.is_available().await {
-            let _ = tx.send(ImageProgress::Error(
-                "ComfyUI není dostupný. Zkontroluj zda běží na localhost:8188.".into(),
-            )).await;
+            let _ = tx
+                .send(ImageProgress::Error(
+                    "ComfyUI není dostupný. Zkontroluj zda běží na localhost:8188.".into(),
+                ))
+                .await;
             return Ok(());
         }
         self.image_gen.generate(request, tx).await

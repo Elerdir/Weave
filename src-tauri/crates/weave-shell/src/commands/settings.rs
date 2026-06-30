@@ -1,7 +1,6 @@
 use tauri::State;
 use weave_application::{
-    ports::keychain_port::ApiService,
-    use_cases::manage_api_keys::ManageApiKeysUseCase,
+    ports::keychain_port::ApiService, use_cases::manage_api_keys::ManageApiKeysUseCase,
 };
 
 use crate::state::AppState;
@@ -37,10 +36,7 @@ pub async fn store_api_key(
 }
 
 #[tauri::command]
-pub async fn delete_api_key(
-    service: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn delete_api_key(service: String, state: State<'_, AppState>) -> Result<(), String> {
     let svc = parse_service(&service)?;
     let uc = ManageApiKeysUseCase::new(state.keychain.clone());
     uc.delete_token(svc).await.map_err(|e| e.to_string())

@@ -13,6 +13,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # sqlx používá offline cache (.sqlx/) — build nepotřebuje živou DB
+  SQLX_OFFLINE: "true"
 
 jobs:
   rust-test:
@@ -41,6 +43,11 @@ jobs:
             patchelf \
             libsecret-1-dev \
             pkg-config
+
+      # generate_context! embeduje frontend z ../dist; pro unit testy stačí placeholder
+      # (skutečný frontend se buildí v e2e jobu). Rust testy nezávisí na node.
+      - name: Placeholder frontend dist
+        run: mkdir -p dist && echo '<!doctype html><title>Weave</title>' > dist/index.html
 
       - name: Check formatting
         run: cargo fmt --all -- --check

@@ -1,4 +1,4 @@
-export default {
+const cs = {
   app: {
     name: "Weave",
   },
@@ -122,6 +122,8 @@ export default {
     yes: "Ano",
     no: "Ne",
   },
-} as const;
+};
 
-export type Messages = typeof import("./cs").default;
+export type Messages = typeof cs;
+
+export default cs;

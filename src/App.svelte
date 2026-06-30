@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { themeStore } from "$lib/theme/index.svelte";
-  import { i18n } from "$lib/i18n/index.svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import Wizard from "$features/wizard/Wizard.svelte";
   import MainLayout from "$features/chat/MainLayout.svelte";

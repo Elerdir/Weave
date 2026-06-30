@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use tauri::{State, Window};
+use tauri::{Emitter, State, Window};
 use tokio::sync::mpsc;
 use weave_application::use_cases::workspace::{IndexProgress, WorkspaceUseCase};
 use weave_domain::workspace::WorkspaceEntry;
@@ -15,16 +15,6 @@ fn make_uc(state: &AppState) -> WorkspaceUseCase {
         Arc::new(NativeFileSystem),
         Arc::new(SqliteWorkspaceRepository::new(state.pool.clone())),
     )
-}
-
-/// Otevře systémový dialog pro výběr složky a vrátí cestu.
-#[tauri::command]
-pub async fn pick_workspace_folder() -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
-    // Volat z Tauri window contextu — dialog vrátí Option<PathBuf>
-    // Implementace přes tauri::async_runtime protože dialog je sync
-    // Zde vrátíme None jako placeholder — frontend volá tauri-plugin-dialog přímo
-    Ok(None)
 }
 
 /// Uloží cestu workspace do konfigurace.
@@ -60,7 +50,11 @@ pub async fn index_workspace(
                 IndexProgress::Started { total } => {
                     serde_json::json!({ "type": "started", "total": total })
                 }
-                IndexProgress::File { path, indexed, total } => {
+                IndexProgress::File {
+                    path,
+                    indexed,
+                    total,
+                } => {
                     serde_json::json!({ "type": "file", "path": path, "indexed": indexed, "total": total })
                 }
                 IndexProgress::Done { indexed, skipped } => {

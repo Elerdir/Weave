@@ -36,12 +36,19 @@ pub enum Role {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Attachment {
-    Image { path: String, mime: String },
-    Document { path: String, name: String, mime: String },
+    Image {
+        path: String,
+        mime: String,
+    },
+    Document {
+        path: String,
+        name: String,
+        mime: String,
+    },
 }
 
 /// Statistiky generování — tokeny/s atd.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GenerationStats {
     pub tokens_per_second: f64,
     pub prompt_tokens: u32,
@@ -50,9 +57,10 @@ pub struct GenerationStats {
     pub backend: ModelBackend,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelBackend {
+    #[default]
     MistralApi,
     LocalCuda,
     LocalMetal,
@@ -141,11 +149,12 @@ mod tests {
 
     #[test]
     fn with_attachments_appends_correctly() {
-        let msg = Message::user(dummy_conv_id(), "Viz příloha")
-            .with_attachments(vec![Attachment::Image {
+        let msg = Message::user(dummy_conv_id(), "Viz příloha").with_attachments(vec![
+            Attachment::Image {
                 path: "/tmp/img.png".into(),
                 mime: "image/png".into(),
-            }]);
+            },
+        ]);
         assert_eq!(msg.attachments.len(), 1);
     }
 }

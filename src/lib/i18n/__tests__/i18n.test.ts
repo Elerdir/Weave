@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 
 // Testujeme resolve + format utility přímo (bez DOM/svelte state)
 function resolve(bundle: Record<string, unknown>, key: string): string {

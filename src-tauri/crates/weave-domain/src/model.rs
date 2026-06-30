@@ -36,35 +36,76 @@ impl IntentClassifier {
 
     fn matches_image(text: &str) -> bool {
         let keywords = [
-            "nakresli", "vygeneruj obrázek", "vytvoř obrázek", "generate image",
-            "draw", "paint", "ilustruj", "foto", "fotografie", "image of",
-            "picture of", "render", "visualize",
+            "nakresli",
+            "vygeneruj obrázek",
+            "vytvoř obrázek",
+            "generate image",
+            "draw",
+            "paint",
+            "ilustruj",
+            "foto",
+            "fotografie",
+            "image of",
+            "picture of",
+            "render",
+            "visualize",
         ];
         keywords.iter().any(|kw| text.contains(kw))
     }
 
     fn matches_code(text: &str) -> bool {
         let keywords = [
-            "napiš kód", "write code", "implement", "debug", "fix bug",
-            "funkce", "function", "třída", "class", "algorithm", "algoritmus",
-            "script", "program",
+            "napiš kód",
+            "write code",
+            "implement",
+            "debug",
+            "fix bug",
+            "funkce",
+            "function",
+            "třída",
+            "class",
+            "algorithm",
+            "algoritmus",
+            "script",
+            "program",
         ];
         keywords.iter().any(|kw| text.contains(kw))
     }
 
     fn matches_reasoning(text: &str) -> bool {
         let keywords = [
-            "vyřeš", "solve", "dokař", "prove", "matematik", "math",
-            "logick", "reasoning", "analyz", "analyze", "porovnej", "compare",
+            "vyřeš",
+            "solve",
+            "dokař",
+            "prove",
+            "matematik",
+            "math",
+            "logick",
+            "reasoning",
+            "analyz",
+            "analyze",
+            "porovnej",
+            "compare",
         ];
         keywords.iter().any(|kw| text.contains(kw))
     }
 
     fn matches_story(text: &str) -> bool {
         let keywords = [
-            "napiš příběh", "write story", "pokračuj v příběhu", "continue story",
-            "povídka", "román", "fiction", "fantasy", "scifi", "sci-fi",
-            "postava", "character", "dialóg", "dialogue",
+            "napiš příběh",
+            "write story",
+            "pokračuj v příběhu",
+            "continue story",
+            "povídka",
+            "román",
+            "fiction",
+            "fantasy",
+            "scifi",
+            "sci-fi",
+            "postava",
+            "character",
+            "dialóg",
+            "dialogue",
         ];
         keywords.iter().any(|kw| text.contains(kw))
     }
@@ -122,9 +163,6 @@ mod tests {
 
     #[test]
     fn defaults_to_text_chat() {
-        assert_eq!(
-            IntentClassifier::classify("jak se máš?"),
-            Intent::TextChat
-        );
+        assert_eq!(IntentClassifier::classify("jak se máš?"), Intent::TextChat);
     }
 }

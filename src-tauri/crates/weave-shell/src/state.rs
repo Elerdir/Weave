@@ -1,9 +1,7 @@
-use std::sync::Arc;
 use sqlx::SqlitePool;
+use std::sync::Arc;
 use weave_application::ports::{
-    image_gen_port::ImageGenPort,
-    keychain_port::KeychainPort,
-    llm_port::LlmPort,
+    image_gen_port::ImageGenPort, keychain_port::KeychainPort, llm_port::LlmPort,
     model_manager_port::ModelManagerPort,
 };
 

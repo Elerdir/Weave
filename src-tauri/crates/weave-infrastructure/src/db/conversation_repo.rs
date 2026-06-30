@@ -20,6 +20,12 @@ impl SqliteConversationRepository {
 #[async_trait]
 impl ConversationRepository for SqliteConversationRepository {
     async fn save(&self, c: &Conversation) -> AppResult<()> {
+        let id = c.id.as_uuid().to_string();
+        let title = c.title.as_str();
+        let persona_id = c.persona_id.map(|u| u.to_string());
+        let created_at = c.created_at.to_rfc3339();
+        let updated_at = c.updated_at.to_rfc3339();
+
         sqlx::query!(
             r#"
             INSERT INTO conversations (id, title, persona_id, pinned, created_at, updated_at)
@@ -30,12 +36,12 @@ impl ConversationRepository for SqliteConversationRepository {
                 pinned = excluded.pinned,
                 updated_at = excluded.updated_at
             "#,
-            c.id.as_uuid().to_string(),
-            c.title.as_str(),
-            c.persona_id.map(|u| u.to_string()),
+            id,
+            title,
+            persona_id,
             c.pinned,
-            c.created_at.to_rfc3339(),
-            c.updated_at.to_rfc3339(),
+            created_at,
+            updated_at,
         )
         .execute(&self.pool)
         .await
@@ -44,9 +50,10 @@ impl ConversationRepository for SqliteConversationRepository {
     }
 
     async fn find_by_id(&self, id: &ConversationId) -> AppResult<Option<Conversation>> {
+        let id_str = id.as_uuid().to_string();
         let row = sqlx::query!(
             "SELECT id, title, persona_id, pinned, created_at, updated_at FROM conversations WHERE id = ?",
-            id.as_uuid().to_string()
+            id_str
         )
         .fetch_optional(&self.pool)
         .await
@@ -84,7 +91,8 @@ impl ConversationRepository for SqliteConversationRepository {
     }
 
     async fn delete(&self, id: &ConversationId) -> AppResult<()> {
-        sqlx::query!("DELETE FROM conversations WHERE id = ?", id.as_uuid().to_string())
+        let id_str = id.as_uuid().to_string();
+        sqlx::query!("DELETE FROM conversations WHERE id = ?", id_str)
             .execute(&self.pool)
             .await
             .map_err(|e| AppError::Repository(e.to_string()))?;
@@ -92,6 +100,7 @@ impl ConversationRepository for SqliteConversationRepository {
     }
 
     async fn search(&self, query: &str) -> AppResult<Vec<Conversation>> {
+        let pattern = format!("%{query}%");
         let rows = sqlx::query!(
             r#"
             SELECT DISTINCT c.id, c.title, c.persona_id, c.pinned, c.created_at, c.updated_at
@@ -99,7 +108,7 @@ impl ConversationRepository for SqliteConversationRepository {
             WHERE c.title LIKE ?
             ORDER BY c.updated_at DESC
             "#,
-            format!("%{query}%")
+            pattern
         )
         .fetch_all(&self.pool)
         .await

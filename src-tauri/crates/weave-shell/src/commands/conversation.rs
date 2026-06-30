@@ -1,8 +1,9 @@
+use std::sync::Arc;
 use tauri::State;
+use weave_application::ports::conversation_repository::ConversationRepository;
 use weave_application::use_cases::create_conversation::CreateConversationUseCase;
 use weave_domain::conversation::Conversation;
 use weave_infrastructure::db::conversation_repo::SqliteConversationRepository;
-use std::sync::Arc;
 
 use crate::state::AppState;
 
@@ -23,13 +24,9 @@ pub async fn create_conversation(
 }
 
 #[tauri::command]
-pub async fn delete_conversation(
-    id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    use weave_domain::conversation::ConversationId;
+pub async fn delete_conversation(id: String, state: State<'_, AppState>) -> Result<(), String> {
     use uuid::Uuid;
-    use weave_application::ports::conversation_repository::ConversationRepository;
+    use weave_domain::conversation::ConversationId;
 
     let repo = Arc::new(SqliteConversationRepository::new(state.pool.clone()));
     let uuid = Uuid::parse_str(&id).map_err(|e| e.to_string())?;

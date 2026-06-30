@@ -45,13 +45,17 @@ mod tests {
     #[tokio::test]
     async fn stores_and_masks_token() {
         let mut mock = MockKeychainPort::new();
-        mock.expect_store().times(1).returning(|_, _| Ok(()));
+        mock.expect_store()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
         mock.expect_retrieve()
             .times(1)
-            .returning(|_| Ok(Some("sk-abc123xyz".into())));
+            .returning(|_| Box::pin(async { Ok(Some("sk-abc123xyz".into())) }));
 
         let uc = ManageApiKeysUseCase::new(Arc::new(mock));
-        uc.store_token(ApiService::Mistral, "sk-abc123xyz").await.unwrap();
+        uc.store_token(ApiService::Mistral, "sk-abc123xyz")
+            .await
+            .unwrap();
 
         let masked = uc.masked_token(&ApiService::Mistral).await.unwrap();
         assert!(masked.is_some());

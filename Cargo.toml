@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "src-tauri",
     "src-tauri/crates/weave-domain",
     "src-tauri/crates/weave-application",
     "src-tauri/crates/weave-infrastructure",

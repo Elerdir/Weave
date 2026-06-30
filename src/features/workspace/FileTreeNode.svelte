@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { WorkspaceEntry } from "$lib/stores/workspace.svelte";
   import { workspaceStore } from "$lib/stores/workspace.svelte";
+  import Self from "./FileTreeNode.svelte";
 
   let { entry, depth }: { entry: WorkspaceEntry; depth: number } = $props();
 
@@ -96,7 +97,7 @@
 
 {#if isDir && expanded}
   {#each children as child (child.path)}
-    <svelte:self entry={child} depth={depth + 1} />
+    <Self entry={child} depth={depth + 1} />
   {/each}
 {/if}
 

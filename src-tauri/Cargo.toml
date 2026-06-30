@@ -5,11 +5,26 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Weave — entry point"
+description = "Weave — Tauri kompoziční kořen a entry point"
+
+[lib]
+name = "weave_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { workspace = true, features = [] }
 
 [dependencies]
 weave-shell = { path = "crates/weave-shell" }
-tauri = { workspace = true }
+
+tauri = { workspace = true, features = ["tray-icon"] }
+serde_json = { workspace = true }
+tauri-plugin-stronghold = { workspace = true }
+tauri-plugin-notification = { workspace = true }
+tauri-plugin-shell = { workspace = true }
+tauri-plugin-fs = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
+tauri-plugin-updater = { workspace = true }
+tauri-plugin-process = { workspace = true }
+
+tracing-subscriber = { workspace = true }

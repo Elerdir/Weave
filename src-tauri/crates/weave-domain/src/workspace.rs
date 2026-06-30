@@ -10,7 +10,9 @@ impl WorkspacePath {
     pub fn new(path: impl Into<String>) -> Result<Self, DomainError> {
         let path = path.into();
         if path.trim().is_empty() {
-            return Err(DomainError::InvalidArgument("Cesta nesmí být prázdná".into()));
+            return Err(DomainError::InvalidArgument(
+                "Cesta nesmí být prázdná".into(),
+            ));
         }
         Ok(Self(path))
     }
@@ -54,11 +56,41 @@ impl IndexedFile {
     pub fn is_text_indexable(extension: &str) -> bool {
         matches!(
             extension.to_lowercase().as_str(),
-            "txt" | "md" | "markdown" | "rs" | "ts" | "tsx" | "js" | "jsx"
-                | "svelte" | "vue" | "html" | "css" | "scss" | "json" | "toml"
-                | "yaml" | "yml" | "xml" | "csv" | "py" | "go" | "java" | "c"
-                | "cpp" | "h" | "hpp" | "sh" | "bash" | "zsh" | "sql" | "graphql"
-                | "env" | "gitignore" | "dockerfile" | "lock"
+            "txt"
+                | "md"
+                | "markdown"
+                | "rs"
+                | "ts"
+                | "tsx"
+                | "js"
+                | "jsx"
+                | "svelte"
+                | "vue"
+                | "html"
+                | "css"
+                | "scss"
+                | "json"
+                | "toml"
+                | "yaml"
+                | "yml"
+                | "xml"
+                | "csv"
+                | "py"
+                | "go"
+                | "java"
+                | "c"
+                | "cpp"
+                | "h"
+                | "hpp"
+                | "sh"
+                | "bash"
+                | "zsh"
+                | "sql"
+                | "graphql"
+                | "env"
+                | "gitignore"
+                | "dockerfile"
+                | "lock"
         )
     }
 }

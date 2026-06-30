@@ -1,9 +1,8 @@
 <script lang="ts">
   import type { WorkspaceEntry } from "$lib/stores/workspace.svelte";
-  import { workspaceStore } from "$lib/stores/workspace.svelte";
   import FileTreeNode from "./FileTreeNode.svelte";
 
-  let { entries, root }: { entries: WorkspaceEntry[]; root: string } = $props();
+  let { entries }: { entries: WorkspaceEntry[]; root: string } = $props();
 </script>
 
 <div class="file-tree">

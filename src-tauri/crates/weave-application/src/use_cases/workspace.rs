@@ -10,9 +10,18 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub enum IndexProgress {
-    Started { total: u64 },
-    File { path: String, indexed: u64, total: u64 },
-    Done { indexed: u64, skipped: u64 },
+    Started {
+        total: u64,
+    },
+    File {
+        path: String,
+        indexed: u64,
+        total: u64,
+    },
+    Done {
+        indexed: u64,
+        skipped: u64,
+    },
     Error(String),
 }
 
@@ -27,11 +36,7 @@ impl WorkspaceUseCase {
     }
 
     /// Zindexuje celou workspace složku. Posílá progress přes channel.
-    pub async fn index(
-        &self,
-        root: &str,
-        tx: mpsc::Sender<IndexProgress>,
-    ) -> AppResult<()> {
+    pub async fn index(&self, root: &str, tx: mpsc::Sender<IndexProgress>) -> AppResult<()> {
         WorkspacePath::new(root)?;
 
         let entries = self.fs.list_recursive(root).await?;
@@ -199,17 +204,23 @@ mod tests {
         let mut repo = MockWorkspaceRepository::new();
 
         fs.expect_list_recursive().returning(|_| {
-            Ok(vec![
-                make_entry("/ws/readme.md", "readme.md", EntryKind::File),
-                make_entry("/ws/photo.png", "photo.png", EntryKind::File),
-            ])
+            Box::pin(async {
+                Ok(vec![
+                    make_entry("/ws/readme.md", "readme.md", EntryKind::File),
+                    make_entry("/ws/photo.png", "photo.png", EntryKind::File),
+                ])
+            })
         });
+        // read_text se zavolá jen pro textový soubor (readme.md), ne pro png
         fs.expect_read_text()
-            .times(1) // jen readme.md
-            .returning(|_| Ok("# Hello".to_string()));
+            .times(1)
+            .returning(|_| Box::pin(async { Ok("# Hello".to_string()) }));
 
-        repo.expect_clear().returning(|| Ok(()));
-        repo.expect_upsert_file().times(1).returning(|_| Ok(()));
+        repo.expect_clear().returning(|| Box::pin(async { Ok(()) }));
+        // Oba soubory se zaindexují (metadata), png ale bez text_contentu
+        repo.expect_upsert_file()
+            .times(2)
+            .returning(|_| Box::pin(async { Ok(()) }));
 
         let uc = WorkspaceUseCase::new(Arc::new(fs), Arc::new(repo));
         let (tx, _rx) = mpsc::channel(32);
@@ -229,8 +240,12 @@ mod tests {
         let mut fs = MockFileSystemPort::new();
         let mut repo = MockWorkspaceRepository::new();
 
-        fs.expect_write_text().times(1).returning(|_, _| Ok(()));
-        repo.expect_upsert_file().times(1).returning(|_| Ok(()));
+        fs.expect_write_text()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        repo.expect_upsert_file()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
 
         let uc = WorkspaceUseCase::new(Arc::new(fs), Arc::new(repo));
         uc.write_file("/ws/notes.md", "# Obsah").await.unwrap();

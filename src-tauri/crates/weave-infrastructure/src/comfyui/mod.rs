@@ -86,10 +86,8 @@ impl ImageGenPort for ComfyUiClient {
                 if let Some(outputs) = entry.get("outputs") {
                     if let Some(filename) = extract_output_filename(outputs) {
                         // Stáhni obrázek z ComfyUI
-                        let img_url = format!(
-                            "{}/view?filename={}&type=output",
-                            self.base_url, filename
-                        );
+                        let img_url =
+                            format!("{}/view?filename={}&type=output", self.base_url, filename);
                         let img_bytes = self
                             .http
                             .get(&img_url)
@@ -174,15 +172,12 @@ fn build_basic_workflow(req: &ImageRequest) -> serde_json::Value {
 }
 
 fn extract_output_filename(outputs: &serde_json::Value) -> Option<String> {
-    outputs
-        .as_object()?
-        .values()
-        .find_map(|node| {
-            node.get("images")?
-                .as_array()?
-                .first()?
-                .get("filename")?
-                .as_str()
-                .map(|s| s.to_string())
-        })
+    outputs.as_object()?.values().find_map(|node| {
+        node.get("images")?
+            .as_array()?
+            .first()?
+            .get("filename")?
+            .as_str()
+            .map(|s| s.to_string())
+    })
 }
