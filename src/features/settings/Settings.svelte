@@ -6,11 +6,22 @@
   import type { Theme } from "$lib/theme/index.svelte";
   import { settingsStore } from "$lib/stores/settings.svelte";
   import type { ApiServiceId } from "$lib/stores/settings.svelte";
+  import { modelsStore, formatBytes } from "$lib/stores/models.svelte";
 
   let { onClose }: { onClose: () => void } = $props();
 
-  type Section = "appearance" | "language" | "apiKeys" | "comfyui";
+  type Section = "appearance" | "language" | "apiKeys" | "comfyui" | "models";
   let section = $state<Section>("appearance");
+
+  let downloadUrl = $state("");
+  let downloadId = $state("");
+
+  const backendLabel: Record<string, string> = {
+    cuda: "CUDA (NVIDIA)",
+    metal: "Metal (Apple)",
+    vulkan: "Vulkan",
+    cpu: "CPU",
+  };
 
   // Dočasné hodnoty pro zadání nových klíčů
   let keyInputs = $state<Record<ApiServiceId, string>>({
@@ -32,7 +43,21 @@
 
   onMount(() => {
     settingsStore.load().catch((e) => console.warn("settings load selhal:", e));
+    modelsStore.load().catch((e) => console.warn("models load selhal:", e));
   });
+
+  async function startDownload() {
+    if (!downloadId.trim() || !downloadUrl.trim()) return;
+    await modelsStore.downloadModel(downloadId.trim(), downloadUrl.trim());
+    downloadId = "";
+    downloadUrl = "";
+  }
+
+  function downloadPercent(): number {
+    const d = modelsStore.download;
+    if (!d || d.total === 0) return 0;
+    return Math.round((d.downloaded / d.total) * 100);
+  }
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") onClose();
@@ -72,6 +97,9 @@
         </button>
         <button class:active={section === "comfyui"} onclick={() => (section = "comfyui")}>
           {i18n.m.settings.sections.comfyui}
+        </button>
+        <button class:active={section === "models"} onclick={() => (section = "models")}>
+          {i18n.m.settings.sections.models}
         </button>
       </nav>
 
@@ -157,6 +185,79 @@
             <span class="conn-status disconnected">● {i18n.m.settings.comfyui.disconnected}</span>
           {:else if settingsStore.comfyuiStatus === "testing"}
             <span class="conn-status testing">{i18n.m.common.loading}</span>
+          {/if}
+        {:else if section === "models"}
+          <h3>{i18n.m.settings.models.title}</h3>
+
+          {#if modelsStore.gpu}
+            <div class="gpu-info">
+              <span class="gpu-icon">⚡</span>
+              <span>{modelsStore.gpu.name}</span>
+              <span class="gpu-backend">{backendLabel[modelsStore.gpu.backend] ?? modelsStore.gpu.backend}</span>
+              {#if modelsStore.gpu.vram_mb > 0}
+                <span class="gpu-vram">{Math.round(modelsStore.gpu.vram_mb / 1024)} GB VRAM</span>
+              {/if}
+            </div>
+          {/if}
+
+          <div class="model-list">
+            {#each modelsStore.models as model (model.id)}
+              <div class="model-item">
+                <div class="model-meta">
+                  <span class="model-name">{model.name}</span>
+                  <span class="model-size">{formatBytes(model.size_bytes)}</span>
+                </div>
+                <button class="btn-sm danger" onclick={() => modelsStore.deleteModel(model.id)}>
+                  {i18n.m.settings.models.delete}
+                </button>
+              </div>
+            {/each}
+
+            {#if modelsStore.models.length === 0 && !modelsStore.download}
+              <p class="hint">{i18n.m.settings.models.noModels}</p>
+            {/if}
+          </div>
+
+          {#if modelsStore.download}
+            <div class="dl-progress">
+              <div class="dl-head">
+                <span>{modelsStore.download.modelId}</span>
+                <span>
+                  {#if modelsStore.download.phase === "verifying"}
+                    {i18n.m.common.loading}
+                  {:else}
+                    {downloadPercent()}% · {formatBytes(modelsStore.download.downloaded)} / {formatBytes(modelsStore.download.total)}
+                  {/if}
+                </span>
+              </div>
+              <div class="dl-bar">
+                <div class="dl-fill" style="width: {downloadPercent()}%"></div>
+              </div>
+            </div>
+          {:else}
+            <div class="dl-form">
+              <input
+                type="text"
+                placeholder="ID modelu (např. mistral-7b)"
+                bind:value={downloadId}
+              />
+              <input
+                type="text"
+                placeholder="URL ke stažení (HuggingFace / CivitAI)"
+                bind:value={downloadUrl}
+              />
+              <button
+                class="btn-sm primary"
+                onclick={startDownload}
+                disabled={!downloadId.trim() || !downloadUrl.trim()}
+              >
+                ↓
+              </button>
+            </div>
+          {/if}
+
+          {#if modelsStore.error}
+            <span class="conn-status disconnected">{modelsStore.error}</span>
           {/if}
         {/if}
       </div>
@@ -401,5 +502,102 @@
   }
   .conn-status.testing {
     color: var(--color-text-muted);
+  }
+
+  .gpu-info {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.6rem 0.85rem;
+    font-size: 0.82rem;
+    margin-bottom: 1rem;
+  }
+  .gpu-icon {
+    font-size: 1rem;
+  }
+  .gpu-backend,
+  .gpu-vram {
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+  }
+  .gpu-vram {
+    margin-left: auto;
+  }
+
+  .model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .model-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.55rem 0.85rem;
+  }
+
+  .model-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .model-name {
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+  .model-size {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+  }
+
+  .dl-form {
+    display: flex;
+    gap: 0.5rem;
+  }
+  .dl-form input {
+    flex: 1;
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    padding: 0.45rem 0.65rem;
+    font-size: 0.82rem;
+    outline: none;
+  }
+  .dl-form input:focus {
+    border-color: var(--color-accent);
+  }
+
+  .dl-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .dl-head {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .dl-bar {
+    height: 6px;
+    background: var(--color-border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .dl-fill {
+    height: 100%;
+    background: var(--color-accent);
+    border-radius: 3px;
+    transition: width 0.2s;
   }
 </style>

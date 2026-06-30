@@ -26,4 +26,10 @@ test.describe("Settings", () => {
     await page.locator(".settings-nav").getByRole("button", { name: /API klíče|API Keys/ }).click();
     await expect(page.getByText("Mistral")).toBeVisible();
   });
+
+  test("sekce Modely zobrazí formulář pro stažení", async ({ page }) => {
+    await page.getByRole("button", { name: /Nastavení|Settings/ }).click();
+    await page.locator(".settings-nav").getByRole("button", { name: /Modely|Models/ }).click();
+    await expect(page.getByPlaceholder(/ID modelu/)).toBeVisible();
+  });
 });
