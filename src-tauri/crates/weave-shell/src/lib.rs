@@ -45,6 +45,16 @@ pub fn run() {
             commands::settings::delete_api_key,
             commands::models::list_local_models,
             commands::models::detect_gpu,
+            commands::workspace::set_workspace,
+            commands::workspace::get_workspace,
+            commands::workspace::index_workspace,
+            commands::workspace::list_workspace_children,
+            commands::workspace::read_workspace_file,
+            commands::workspace::write_workspace_file,
+            commands::workspace::create_workspace_entry,
+            commands::workspace::delete_workspace_entry,
+            commands::workspace::rename_workspace_entry,
+            commands::workspace::search_workspace,
         ])
         .run(tauri::generate_context!())
         .expect("Chyba spuštění Tauri aplikace");

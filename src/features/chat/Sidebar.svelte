@@ -2,6 +2,8 @@
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { i18n } from "$lib/i18n/index.svelte";
 
+  let { showWorkspace = $bindable(false) }: { showWorkspace?: boolean } = $props();
+
   let search = $state("");
 
   const filtered = $derived(
@@ -21,9 +23,17 @@
 <aside class="sidebar">
   <div class="sidebar-header">
     <span class="logo">Weave</span>
-    <button class="btn-new" onclick={newConversation} title={i18n.m.chat.newConversation}>
-      +
-    </button>
+    <div class="header-btns">
+      <button
+        class="btn-icon"
+        class:active={showWorkspace}
+        onclick={() => showWorkspace = !showWorkspace}
+        title="Workspace"
+      >📁</button>
+      <button class="btn-new" onclick={newConversation} title={i18n.m.chat.newConversation}>
+        +
+      </button>
+    </div>
   </div>
 
   <div class="search-wrap">
@@ -81,6 +91,27 @@
     color: var(--color-accent);
     letter-spacing: 0.05em;
   }
+
+  .header-btns {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .btn-icon {
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    padding: 0.2rem 0.3rem;
+    border-radius: 5px;
+    font-size: 0.9rem;
+    transition: color 0.15s, background 0.15s;
+    line-height: 1;
+  }
+
+  .btn-icon:hover { color: var(--color-text); background: var(--color-surface-2); }
+  .btn-icon.active { color: var(--color-accent); }
 
   .btn-new {
     background: var(--color-surface-2);
