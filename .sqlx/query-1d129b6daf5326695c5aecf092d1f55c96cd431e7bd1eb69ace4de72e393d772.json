@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT wf.path, wf.name, wf.extension, wf.size_bytes, wf.modified_at,\n                   wf.indexed_at, wf.text_content\n            FROM workspace_files_fts fts\n            JOIN workspace_files wf ON wf.rowid = fts.rowid\n            WHERE workspace_files_fts MATCH ?\n            ORDER BY rank\n            LIMIT ?\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "path",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "extension",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "size_bytes",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "modified_at",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "indexed_at",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "text_content",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1d129b6daf5326695c5aecf092d1f55c96cd431e7bd1eb69ace4de72e393d772"
+}

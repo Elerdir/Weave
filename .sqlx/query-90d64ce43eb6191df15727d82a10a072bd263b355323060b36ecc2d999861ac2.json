@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO workspace_files (path, name, extension, size_bytes, modified_at, indexed_at, text_content)\n            VALUES (?, ?, ?, ?, ?, ?, ?)\n            ON CONFLICT(path) DO UPDATE SET\n                name = excluded.name,\n                extension = excluded.extension,\n                size_bytes = excluded.size_bytes,\n                modified_at = excluded.modified_at,\n                indexed_at = excluded.indexed_at,\n                text_content = excluded.text_content\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "90d64ce43eb6191df15727d82a10a072bd263b355323060b36ecc2d999861ac2"
+}

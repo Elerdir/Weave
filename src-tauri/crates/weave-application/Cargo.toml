@@ -1,0 +1,23 @@
+[package]
+name = "weave-application"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Weave application layer — use cases a porty (traits) pro závislosti."
+
+[dependencies]
+weave-domain = { path = "../weave-domain" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+mockall = { workspace = true }
+tokio = { version = "1", features = ["rt", "macros"] }

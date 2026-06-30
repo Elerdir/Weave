@@ -1,0 +1,46 @@
+pub mod commands;
+pub mod state;
+
+use std::sync::Arc;
+use tauri::Manager;
+use weave_application::ports::keychain_port::{ApiService, KeychainPort};
+use weave_infrastructure::{
+    comfyui::ComfyUiClient, db, keychain::OsKeychain, llm::mistral_client::MistralClient,
+    model_manager::LocalModelManager,
+};
+
+use state::AppState;
+
+/// Inicializuje aplikační stav (DB pool, adaptery) a vloží ho do Tauri.
+/// Volá se z `setup` hooku v kompozičním kořeni (binárka `weave-app`).
+pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .expect("Nepodařilo se získat data dir");
+    std::fs::create_dir_all(&data_dir)?;
+
+    let db_url = format!("sqlite://{}", data_dir.join("weave.db").to_string_lossy());
+    let pool = db::create_pool(&db_url).await?;
+
+    let keychain = Arc::new(OsKeychain);
+    let mistral_key = keychain
+        .retrieve(&ApiService::Mistral)
+        .await
+        .unwrap_or(None)
+        .unwrap_or_default();
+
+    let models_dir = data_dir.join("models");
+    let comfyui_url = "http://localhost:8188".to_string();
+
+    let state = AppState {
+        pool,
+        keychain,
+        llm: Arc::new(MistralClient::new(mistral_key)),
+        image_gen: Arc::new(ComfyUiClient::new(comfyui_url)),
+        model_manager: Arc::new(LocalModelManager::new(models_dir)),
+    };
+
+    app.manage(state);
+    Ok(())
+}

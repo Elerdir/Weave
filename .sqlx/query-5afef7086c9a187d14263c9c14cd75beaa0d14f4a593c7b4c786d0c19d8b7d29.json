@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT path, name, extension, size_bytes, modified_at, indexed_at, text_content FROM workspace_files WHERE path = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "path",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "extension",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "size_bytes",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "modified_at",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "indexed_at",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "text_content",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5afef7086c9a187d14263c9c14cd75beaa0d14f4a593c7b4c786d0c19d8b7d29"
+}

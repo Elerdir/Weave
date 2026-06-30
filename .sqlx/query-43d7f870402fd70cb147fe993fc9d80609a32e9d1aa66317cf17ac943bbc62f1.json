@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT DISTINCT c.id, c.title, c.persona_id, c.pinned, c.created_at, c.updated_at\n            FROM conversations c\n            WHERE c.title LIKE ?\n            ORDER BY c.updated_at DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "title",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "persona_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "pinned",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "43d7f870402fd70cb147fe993fc9d80609a32e9d1aa66317cf17ac943bbc62f1"
+}
