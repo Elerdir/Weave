@@ -1,3 +1,4 @@
+pub mod app_config;
 pub mod conversation_repo;
 pub mod message_repo;
 pub mod workspace_config;

@@ -2,7 +2,10 @@
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { i18n } from "$lib/i18n/index.svelte";
 
-  let { showWorkspace = $bindable(false) }: { showWorkspace?: boolean } = $props();
+  let {
+    showWorkspace = $bindable(false),
+    onOpenSettings,
+  }: { showWorkspace?: boolean; onOpenSettings?: () => void } = $props();
 
   let search = $state("");
 
@@ -64,6 +67,12 @@
       </div>
     {/if}
   </nav>
+
+  <footer class="sidebar-footer">
+    <button class="footer-btn" onclick={() => onOpenSettings?.()} title={i18n.m.settings.title}>
+      ⚙ {i18n.m.sidebar.settings}
+    </button>
+  </footer>
 </aside>
 
 <style>
@@ -191,5 +200,30 @@
     font-size: 0.82rem;
     color: var(--color-text-muted);
     text-align: center;
+  }
+
+  .sidebar-footer {
+    border-top: 1px solid var(--color-border);
+    padding: 0.5rem;
+  }
+
+  .footer-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted);
+    padding: 0.55rem 0.75rem;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .footer-btn:hover {
+    background: var(--color-surface-2);
+    color: var(--color-text);
   }
 </style>
