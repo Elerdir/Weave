@@ -1,0 +1,33 @@
+# Rust
+target/
+Cargo.lock
+
+# Node
+node_modules/
+dist/
+.pnpm-store/
+
+# Tauri
+src-tauri/gen/
+
+# Test artifacts
+coverage/
+playwright-report/
+test-results/
+storybook-static/
+
+# IDE
+.idea/
+.vscode/settings.json
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+
+# Logs
+*.log
