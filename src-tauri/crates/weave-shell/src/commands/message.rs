@@ -26,6 +26,7 @@ pub async fn list_messages(
 pub async fn send_message(
     conversation_id: String,
     content: String,
+    file_refs: Option<Vec<String>>,
     window: tauri::Window,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -36,8 +37,11 @@ pub async fn send_message(
         ports::llm_port::StreamChunk, use_cases::send_message::SendMessageUseCase,
     };
     use weave_domain::conversation::ConversationId;
-    use weave_infrastructure::db::{
-        conversation_repo::SqliteConversationRepository, message_repo::SqliteMessageRepository,
+    use weave_infrastructure::{
+        db::{
+            conversation_repo::SqliteConversationRepository, message_repo::SqliteMessageRepository,
+        },
+        workspace::workspace_repo::SqliteWorkspaceRepository,
     };
 
     let uuid = Uuid::parse_str(&conversation_id).map_err(|e| e.to_string())?;
@@ -45,6 +49,7 @@ pub async fn send_message(
 
     let conv_repo = Arc::new(SqliteConversationRepository::new(state.pool.clone()));
     let msg_repo = Arc::new(SqliteMessageRepository::new(state.pool.clone()));
+    let workspace_repo = Arc::new(SqliteWorkspaceRepository::new(state.pool.clone()));
 
     let (tx, mut rx) = mpsc::channel::<StreamChunk>(128);
 
@@ -53,6 +58,7 @@ pub async fn send_message(
         msg_repo,
         state.llm.clone(),
         state.image_gen.clone(),
+        workspace_repo,
     );
 
     let window_clone = window.clone();
@@ -62,7 +68,7 @@ pub async fn send_message(
         }
     });
 
-    uc.execute(conv_id, content, tx)
+    uc.execute(conv_id, content, file_refs.unwrap_or_default(), tx)
         .await
         .map_err(|e| e.to_string())
 }

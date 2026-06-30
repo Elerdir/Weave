@@ -8,7 +8,11 @@ type StreamChunk =
   | { Done: GenerationStats }
   | { Error: string };
 
-export async function sendMessage(conversationId: string, content: string): Promise<void> {
+export async function sendMessage(
+  conversationId: string,
+  content: string,
+  fileRefs: string[] = []
+): Promise<void> {
   conversationStore.pushUserMessage(content);
   conversationStore.startLoading();
 
@@ -33,7 +37,7 @@ export async function sendMessage(conversationId: string, content: string): Prom
   });
 
   try {
-    await invoke("send_message", { conversationId, content });
+    await invoke("send_message", { conversationId, content, fileRefs });
   } catch (err) {
     unlisten();
     conversationStore.finalizeStream({

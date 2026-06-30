@@ -109,6 +109,18 @@ impl Message {
         }
     }
 
+    pub fn system(conversation_id: ConversationId, content: impl Into<String>) -> Self {
+        Self {
+            id: MessageId::new(),
+            conversation_id,
+            role: Role::System,
+            content: content.into(),
+            attachments: vec![],
+            stats: None,
+            created_at: Utc::now(),
+        }
+    }
+
     pub fn with_attachments(mut self, attachments: Vec<Attachment>) -> Self {
         self.attachments = attachments;
         self
