@@ -35,6 +35,8 @@ pub fn run() {
             commands::settings::test_comfyui_connection,
             commands::models::list_local_models,
             commands::models::detect_gpu,
+            commands::models::download_model,
+            commands::models::delete_model,
             commands::workspace::set_workspace,
             commands::workspace::get_workspace,
             commands::workspace::index_workspace,
