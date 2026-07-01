@@ -3,4 +3,5 @@ pub mod db;
 pub mod keychain;
 pub mod llm;
 pub mod model_manager;
+pub mod pdf;
 pub mod workspace;
