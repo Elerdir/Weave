@@ -332,14 +332,17 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
 
         let mut msg_repo = MockMessageRepository::new();
-        msg_repo.expect_save().withf(|m: &Message| {
-            m.role == weave_domain::message::Role::User
-                && m.attachments
-                    == vec![Attachment::Image {
-                        path: "/data/weave/reference-images/stored.png".into(),
-                        mime: "image/png".into(),
-                    }]
-        }).returning(|_| Box::pin(async { Ok(()) }));
+        msg_repo
+            .expect_save()
+            .withf(|m: &Message| {
+                m.role == weave_domain::message::Role::User
+                    && m.attachments
+                        == vec![Attachment::Image {
+                            path: "/data/weave/reference-images/stored.png".into(),
+                            mime: "image/png".into(),
+                        }]
+            })
+            .returning(|_| Box::pin(async { Ok(()) }));
         msg_repo
             .expect_list_by_conversation()
             .returning(|_| Box::pin(async { Ok(vec![]) }));
@@ -397,7 +400,8 @@ mod tests {
         image_gen
             .expect_generate()
             .withf(|req: &ImageRequest, _tx| {
-                req.reference_image_path.as_deref() == Some("/data/weave/reference-images/stored.png")
+                req.reference_image_path.as_deref()
+                    == Some("/data/weave/reference-images/stored.png")
             })
             .returning(|_, _| Box::pin(async { Ok(()) }));
 

@@ -37,11 +37,12 @@ impl AttachmentStorePort for LocalAttachmentStore {
     async fn store_reference_image(&self, source_path: &str) -> AppResult<StoredImage> {
         let source = Path::new(source_path);
         let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let mime = mime_for_extension(ext).ok_or_else(|| {
-            AppError::Attachment(format!("Nepodporovaný typ obrázku: .{ext}"))
-        })?;
+        let mime = mime_for_extension(ext)
+            .ok_or_else(|| AppError::Attachment(format!("Nepodporovaný typ obrázku: .{ext}")))?;
 
-        let dest = self.dir.join(format!("{}.{}", Uuid::new_v4(), ext.to_lowercase()));
+        let dest = self
+            .dir
+            .join(format!("{}.{}", Uuid::new_v4(), ext.to_lowercase()));
 
         tokio::fs::copy(source, &dest)
             .await
