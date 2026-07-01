@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { notify } from "$lib/services/notify";
 
 export interface LocalModel {
   id: string;
@@ -89,6 +90,7 @@ function createModelsStore() {
           download = null;
           unlisten();
           void this.load();
+          void notify("Model stažen", `${modelId} je připraven k použití.`);
         } else if (ev.type === "error") {
           error = ev.message ?? "Stahování selhalo";
           download = null;

@@ -13,6 +13,7 @@ const DEFAULT_COMFYUI_URL = "http://localhost:8188";
 const LLM_BACKEND_KEY = "llm.backend";
 const LLM_LOCAL_URL_KEY = "llm.local_url";
 const DEFAULT_LOCAL_URL = "http://localhost:8080";
+const NOTIFICATIONS_KEY = "notifications.enabled";
 
 export type LlmBackend = "mistral" | "local";
 type ConnStatus = "unknown" | "testing" | "connected" | "disconnected";
@@ -32,6 +33,8 @@ function createSettingsStore() {
   let llmBackend = $state<LlmBackend>("mistral");
   let localUrl = $state(DEFAULT_LOCAL_URL);
   let localStatus = $state<ConnStatus>("unknown");
+
+  let notificationsEnabled = $state(true);
 
   async function refreshKey(service: ApiServiceId) {
     const hasKey = await invoke<boolean>("get_api_key_status", { service });
@@ -60,6 +63,9 @@ function createSettingsStore() {
     get localStatus() {
       return localStatus;
     },
+    get notificationsEnabled() {
+      return notificationsEnabled;
+    },
 
     async load() {
       await Promise.all(SERVICES.map(refreshKey));
@@ -69,6 +75,13 @@ function createSettingsStore() {
       llmBackend = backend === "local" ? "local" : "mistral";
       const lurl = await invoke<string | null>("get_app_setting", { key: LLM_LOCAL_URL_KEY });
       localUrl = lurl ?? DEFAULT_LOCAL_URL;
+      const notif = await invoke<string | null>("get_app_setting", { key: NOTIFICATIONS_KEY });
+      notificationsEnabled = notif !== "false"; // výchozí zapnuto
+    },
+
+    async setNotifications(enabled: boolean) {
+      notificationsEnabled = enabled;
+      await invoke("set_app_setting", { key: NOTIFICATIONS_KEY, value: String(enabled) });
     },
 
     async setBackend(backend: LlmBackend) {

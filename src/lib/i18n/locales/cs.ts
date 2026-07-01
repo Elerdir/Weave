@@ -88,6 +88,12 @@ const cs = {
       connected: "Připojeno",
       disconnected: "Nepřipojeno",
     },
+    notifications: {
+      label: "Systémová oznámení",
+      hint: "Upozornění na dokončení stahování modelu a indexování složky.",
+      enabled: "Zapnuto",
+      disabled: "Vypnuto",
+    },
     theme: {
       label: "Téma",
       light: "Světlé",

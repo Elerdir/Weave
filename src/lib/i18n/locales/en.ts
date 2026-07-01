@@ -90,6 +90,12 @@ const en: Messages = {
       connected: "Connected",
       disconnected: "Disconnected",
     },
+    notifications: {
+      label: "System notifications",
+      hint: "Alerts when model download and folder indexing finish.",
+      enabled: "On",
+      disabled: "Off",
+    },
     theme: {
       label: "Theme",
       light: "Light",
