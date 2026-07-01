@@ -88,6 +88,12 @@ const cs = {
       test: "Test připojení",
       connected: "Připojeno",
       disconnected: "Nepřipojeno",
+      embedded: "Vestavěná GPU inference",
+      embeddedHint: "Model se načte přímo do Weave a běží na GPU (CUDA/Metal/Vulkan) bez externího serveru.",
+      modelPath: "Soubor modelu (.gguf)",
+      modelPathPlaceholder: "Nevybráno — vyber .gguf soubor",
+      browse: "Vybrat soubor",
+      gpuLayers: "Počet vrstev na GPU (999 = vše)",
     },
     notifications: {
       label: "Systémová oznámení",

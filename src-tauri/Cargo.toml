@@ -11,6 +11,13 @@ description = "Weave — Tauri kompoziční kořen a entry point"
 name = "weave_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Vestavěná GPU inference (llama.cpp). Zapíná se při buildu:
+#   cargo tauri dev --features llm-cuda   (viz run-dev.bat)
+llm-cuda = ["weave-shell/llm-cuda"]
+llm-metal = ["weave-shell/llm-metal"]
+llm-vulkan = ["weave-shell/llm-vulkan"]
+
 [build-dependencies]
 tauri-build = { workspace = true, features = [] }
 

@@ -7,6 +7,14 @@ license.workspace = true
 rust-version.workspace = true
 description = "Weave infrastructure layer — SQLite, keychain, HTTP adaptery pro LLM a ComfyUI."
 
+[features]
+# Vestavěná inference přes llama.cpp (llama-cpp-2). CPU základ + GPU akcelerace
+# přes feature flagy. NEbuildí se v CI (potřebuje CMake/CUDA toolchain).
+llm-embedded = ["dep:llama-cpp-2", "dep:encoding_rs"]
+llm-cuda = ["llm-embedded", "llama-cpp-2/cuda"]
+llm-metal = ["llm-embedded", "llama-cpp-2/metal"]
+llm-vulkan = ["llm-embedded", "llama-cpp-2/vulkan"]
+
 [dependencies]
 weave-domain = { path = "../weave-domain" }
 weave-application = { path = "../weave-application" }
@@ -26,6 +34,10 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 genpdf = "0.2"
+llama-cpp-2 = { version = "0.1.150", optional = true, default-features = false, features = [
+    "sampler",
+] }
+encoding_rs = { version = "0.8", optional = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }

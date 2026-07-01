@@ -18,6 +18,31 @@ pnpm install
 pnpm tauri dev
 ```
 
+### Vestavěná GPU inference (volitelné)
+
+Weave umí i vestavěnou inferenci přes llama.cpp (`llama-cpp-2`) s CUDA/Metal/Vulkan
+akcelerací — model se pak nahraje přímo do procesu, bez externího serveru.
+Vyžaduje CMake + odpovídající GPU toolchain a zkompiluje se jen s feature flagem:
+
+```bash
+# Windows + NVIDIA CUDA
+pnpm tauri dev --features llm-cuda
+
+# macOS (Apple Silicon / Metal)
+pnpm tauri dev --features llm-metal
+
+# Vulkan (AMD/Intel/cross-platform)
+pnpm tauri dev --features llm-vulkan
+```
+
+Na Windows viz `run-dev.bat` — nastavuje `CMAKE_CUDA_ARCHITECTURES` (uprav podle
+GPU: RTX 30xx=86, RTX 40xx=89, RTX 20xx=75) a vybírá funkční CUDA verzi (CUDA 13.x
+pro novější MSVC/Visual Studio — CUDA 12.x starší VS odmítá).
+
+Model (`.gguf`) a počet GPU vrstev se nastaví v aplikaci: **Nastavení → AI model →
+Vestavěná GPU inference**. Bez feature flagu appka normálně staví a běží (fallback
+na Mistral API / HTTP local server) — CI ho nikdy nesestavuje.
+
 ## Testování
 
 ```bash
