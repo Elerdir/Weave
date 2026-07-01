@@ -1,3 +1,4 @@
+pub mod comfy_installer;
 pub mod conversation;
 pub mod message;
 pub mod models;

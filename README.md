@@ -39,9 +39,21 @@ Na Windows viz `run-dev.bat` — nastavuje `CMAKE_CUDA_ARCHITECTURES` (uprav pod
 GPU: RTX 30xx=86, RTX 40xx=89, RTX 20xx=75) a vybírá funkční CUDA verzi (CUDA 13.x
 pro novější MSVC/Visual Studio — CUDA 12.x starší VS odmítá).
 
-Model (`.gguf`) a počet GPU vrstev se nastaví v aplikaci: **Nastavení → AI model →
-Vestavěná GPU inference**. Bez feature flagu appka normálně staví a běží (fallback
-na Mistral API / HTTP local server) — CI ho nikdy nesestavuje.
+Model (`.gguf`) se nastaví v aplikaci: **Nastavení → AI model → Vestavěná GPU
+inference** → vyber doporučený model a klikni Stáhnout (appka po dokončení
+automaticky nastaví backend i cestu — vlastní `.gguf` soubor jde přidat přes
+„Pokročilé"). Bez feature flagu appka normálně staví a běží (fallback na
+Mistral API / HTTP local server) — CI ho nikdy nesestavuje.
+
+### ComfyUI — automatická instalace (volitelné)
+
+Appka umí ComfyUI + PuLID (reference obrázky) nainstalovat sama, jedním
+tlačítkem: **Nastavení → ComfyUI → Nainstalovat ComfyUI + PuLID**. Vyžaduje
+Python 3 a Git na stroji; zbytek (git clone ComfyUI, venv, PyTorch — CUDA
+build pokud je NVIDIA GPU, PuLID custom node + jeho závislosti) se stáhne a
+nainstaluje automaticky. Trvá řádově minuty až desítky minut podle rychlosti
+připojení. Ověřeno end-to-end (viz `tests/comfy_install_smoke.rs`, `#[ignore]`,
+nikdy neběží v CI).
 
 ## Testování
 

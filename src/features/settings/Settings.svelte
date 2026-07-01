@@ -5,9 +5,12 @@
   import { themeStore } from "$lib/theme/index.svelte";
   import type { Theme } from "$lib/theme/index.svelte";
   import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
+  import { open as openUrl } from "@tauri-apps/plugin-shell";
   import { settingsStore } from "$lib/stores/settings.svelte";
   import type { ApiServiceId } from "$lib/stores/settings.svelte";
   import { modelsStore, formatBytes } from "$lib/stores/models.svelte";
+  import { comfyInstallStore } from "$lib/stores/comfy-install.svelte";
+  import { TOKEN_URLS } from "$lib/token-urls";
 
   async function pickModelFile() {
     const path = await openFilePicker({
@@ -17,6 +20,14 @@
     if (typeof path === "string") {
       settingsStore.setModelPath(path);
       await settingsStore.saveModelPath();
+    }
+  }
+
+  async function openTokenPage(service: ApiServiceId) {
+    try {
+      await openUrl(TOKEN_URLS[service]);
+    } catch (e) {
+      console.warn("Nepodařilo se otevřít odkaz:", e);
     }
   }
 
@@ -56,6 +67,7 @@
   onMount(() => {
     settingsStore.load().catch((e) => console.warn("settings load selhal:", e));
     modelsStore.load().catch((e) => console.warn("models load selhal:", e));
+    comfyInstallStore.load().catch((e) => console.warn("comfy status load selhal:", e));
   });
 
   async function startDownload() {
@@ -156,7 +168,16 @@
               {@const state = settingsStore.apiKeys[svc.id]}
               <div class="key-row">
                 <div class="key-head">
-                  <span class="key-name">{svc.label}</span>
+                  <span class="key-name">
+                    {svc.label}
+                    <button
+                      type="button"
+                      class="link-btn"
+                      onclick={() => openTokenPage(svc.id)}
+                      title={i18n.m.wizard.steps.apiKeys.howToGet}
+                      aria-label={i18n.m.wizard.steps.apiKeys.howToGet}
+                    >🌐</button>
+                  </span>
                   {#if state.hasKey}
                     <span class="key-status set">{state.masked ?? i18n.m.settings.apiKeys.stored}</span>
                   {:else}
@@ -211,31 +232,110 @@
 
           {#if settingsStore.llmBackend === "embedded"}
             <p class="hint" style="margin-top:1rem">{i18n.m.settings.llm.embeddedHint}</p>
-            <label class="field-label" for="model-path">{i18n.m.settings.llm.modelPath}</label>
-            <div class="comfyui-row">
-              <input
-                id="model-path"
-                type="text"
-                readonly
-                value={settingsStore.modelPath}
-                placeholder={i18n.m.settings.llm.modelPathPlaceholder}
-              />
-              <button class="btn-sm primary" onclick={pickModelFile}>
-                {i18n.m.settings.llm.browse}
-              </button>
+
+            {#if settingsStore.modelPath}
+              <div class="active-model">
+                <span class="active-model-label">{i18n.m.settings.llm.activeModel}</span>
+                <span class="active-model-path">{settingsStore.modelPath.split(/[\\/]/).pop()}</span>
+              </div>
+            {/if}
+
+            <h4 class="sub-heading">{i18n.m.settings.llm.recommendedTitle}</h4>
+            <div class="recommended-list">
+              {#each modelsStore.recommended as rec (rec.id)}
+                {@const downloaded = modelsStore.isDownloaded(rec.id)}
+                {@const isActive = settingsStore.modelPath.endsWith(`${rec.id}.gguf`)}
+                <div class="recommended-item" class:active={isActive}>
+                  <div class="recommended-meta">
+                    <div class="recommended-name">
+                      {rec.name}
+                      {#if isActive}<span class="active-badge">{i18n.m.settings.llm.inUse}</span>{/if}
+                    </div>
+                    <div class="recommended-desc">{rec.description}</div>
+                    <div class="recommended-size">{formatBytes(rec.size_bytes)}</div>
+                  </div>
+                  {#if downloaded}
+                    <button
+                      class="btn-sm"
+                      class:primary={!isActive}
+                      disabled={isActive}
+                      onclick={() => {
+                        settingsStore.setModelPath(modelsStore.models.find((m) => m.id === rec.id)?.path ?? "");
+                        settingsStore.saveModelPath();
+                      }}
+                    >
+                      {isActive ? i18n.m.settings.llm.inUse : i18n.m.settings.llm.activate}
+                    </button>
+                  {:else if modelsStore.download?.modelId === rec.id}
+                    <span class="dl-inline">
+                      {Math.round(((modelsStore.download.downloaded) / (modelsStore.download.total || 1)) * 100)}%
+                    </span>
+                  {:else}
+                    <button
+                      class="btn-sm primary"
+                      disabled={!!modelsStore.download}
+                      onclick={() => modelsStore.downloadRecommended(rec.id)}
+                    >
+                      {i18n.m.settings.llm.download}
+                    </button>
+                  {/if}
+                </div>
+              {/each}
             </div>
-            <label class="field-label" for="gpu-layers" style="margin-top:0.75rem">
-              {i18n.m.settings.llm.gpuLayers}
-            </label>
-            <input
-              id="gpu-layers"
-              class="gpu-layers-input"
-              type="number"
-              min="0"
-              value={settingsStore.gpuLayers}
-              oninput={(e) => settingsStore.setGpuLayers((e.target as HTMLInputElement).value)}
-              onblur={() => settingsStore.saveGpuLayers()}
-            />
+
+            {#if modelsStore.download}
+              <div class="dl-progress" style="margin-top:0.75rem">
+                <div class="dl-head">
+                  <span>{modelsStore.download.modelId}</span>
+                  <span>
+                    {#if modelsStore.download.phase === "verifying"}
+                      {i18n.m.common.loading}
+                    {:else}
+                      {formatBytes(modelsStore.download.downloaded)} / {formatBytes(modelsStore.download.total)}
+                    {/if}
+                  </span>
+                </div>
+                <div class="dl-bar">
+                  <div
+                    class="dl-fill"
+                    style="width: {Math.round((modelsStore.download.downloaded / (modelsStore.download.total || 1)) * 100)}%"
+                  ></div>
+                </div>
+              </div>
+            {/if}
+
+            {#if modelsStore.error}
+              <span class="conn-status disconnected">{modelsStore.error}</span>
+            {/if}
+
+            <details class="advanced-details">
+              <summary>{i18n.m.settings.llm.advanced}</summary>
+              <label class="field-label" for="model-path">{i18n.m.settings.llm.modelPath}</label>
+              <div class="comfyui-row">
+                <input
+                  id="model-path"
+                  type="text"
+                  readonly
+                  value={settingsStore.modelPath}
+                  placeholder={i18n.m.settings.llm.modelPathPlaceholder}
+                />
+                <button class="btn-sm primary" onclick={pickModelFile}>
+                  {i18n.m.settings.llm.browse}
+                </button>
+              </div>
+              <label class="field-label" for="gpu-layers" style="margin-top:0.75rem">
+                {i18n.m.settings.llm.gpuLayers}
+              </label>
+              <input
+                id="gpu-layers"
+                class="gpu-layers-input"
+                type="number"
+                min="0"
+                value={settingsStore.gpuLayers}
+                oninput={(e) => settingsStore.setGpuLayers((e.target as HTMLInputElement).value)}
+                onblur={() => settingsStore.saveGpuLayers()}
+              />
+            </details>
           {/if}
 
           {#if settingsStore.llmBackend === "local"}
@@ -283,6 +383,45 @@
             <span class="conn-status disconnected">● {i18n.m.settings.comfyui.disconnected}</span>
           {:else if settingsStore.comfyuiStatus === "testing"}
             <span class="conn-status testing">{i18n.m.common.loading}</span>
+          {/if}
+
+          <h4 class="sub-heading">{i18n.m.settings.comfyui.localTitle}</h4>
+          <p class="hint">{i18n.m.settings.comfyui.localHint}</p>
+
+          {#if comfyInstallStore.status === "NotInstalled" && !comfyInstallStore.installing}
+            <button class="btn-sm primary" onclick={() => comfyInstallStore.install()}>
+              {i18n.m.settings.comfyui.installButton}
+            </button>
+          {:else if comfyInstallStore.installing}
+            <div class="install-progress">
+              <div class="install-step">
+                <span class="spinner"></span>
+                {comfyInstallStore.currentStep || i18n.m.common.loading}
+              </div>
+              <pre class="install-log">{comfyInstallStore.log.join("\n")}</pre>
+            </div>
+          {:else if comfyInstallStore.status === "Installed"}
+            <div class="comfy-status-row">
+              <span class="conn-status connected">● {i18n.m.settings.comfyui.installedLabel}</span>
+              <button
+                class="btn-sm primary"
+                disabled={comfyInstallStore.starting}
+                onclick={() => comfyInstallStore.startServer()}
+              >
+                {comfyInstallStore.starting ? i18n.m.common.loading : i18n.m.settings.comfyui.startServer}
+              </button>
+            </div>
+          {:else if comfyInstallStore.status === "Running"}
+            <div class="comfy-status-row">
+              <span class="conn-status connected">● {i18n.m.settings.comfyui.runningLabel}</span>
+              <button class="btn-sm danger" onclick={() => comfyInstallStore.stopServer()}>
+                {i18n.m.settings.comfyui.stopServer}
+              </button>
+            </div>
+          {/if}
+
+          {#if comfyInstallStore.error}
+            <span class="conn-status disconnected">{comfyInstallStore.error}</span>
           {/if}
         {:else if section === "models"}
           <h3>{i18n.m.settings.models.title}</h3>
@@ -531,6 +670,24 @@
   .key-name {
     font-weight: 600;
     font-size: 0.875rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .link-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 0.85rem;
+    padding: 0.1rem 0.25rem;
+    border-radius: 5px;
+    opacity: 0.7;
+    transition: opacity 0.15s, background 0.15s;
+  }
+  .link-btn:hover {
+    opacity: 1;
+    background: var(--color-surface-2);
   }
 
   .key-status {
@@ -618,6 +775,155 @@
   }
   .gpu-layers-input:focus {
     border-color: var(--color-accent);
+  }
+
+  .active-model {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-accent);
+    border-radius: 8px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.82rem;
+    margin: 0.75rem 0;
+  }
+  .active-model-label {
+    color: var(--color-text-muted);
+  }
+  .active-model-path {
+    font-family: monospace;
+    font-weight: 600;
+  }
+
+  .sub-heading {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin: 1rem 0 0.5rem;
+  }
+
+  .recommended-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .recommended-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.65rem 0.85rem;
+  }
+  .recommended-item.active {
+    border-color: var(--color-accent);
+  }
+
+  .recommended-name {
+    font-size: 0.875rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .active-badge {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--color-accent);
+    background: var(--color-user-bubble);
+    border-radius: 4px;
+    padding: 0.05rem 0.4rem;
+  }
+  .recommended-desc {
+    font-size: 0.78rem;
+    color: var(--color-text-muted);
+    margin-top: 0.15rem;
+    max-width: 32rem;
+  }
+  .recommended-size {
+    font-size: 0.72rem;
+    color: var(--color-text-muted);
+    margin-top: 0.25rem;
+  }
+
+  .dl-inline {
+    font-size: 0.8rem;
+    color: var(--color-accent);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .advanced-details {
+    margin-top: 1.25rem;
+    border-top: 1px solid var(--color-border);
+    padding-top: 0.75rem;
+  }
+  .advanced-details summary {
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+  }
+  .advanced-details summary:hover {
+    color: var(--color-text);
+  }
+  .advanced-details .field-label {
+    margin-top: 0.75rem;
+  }
+
+  .comfy-status-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+  }
+
+  .install-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+
+  .install-step {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--color-border);
+    border-top-color: var(--color-accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .install-log {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.6rem 0.75rem;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+    max-height: 220px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
   }
 
   .conn-status {

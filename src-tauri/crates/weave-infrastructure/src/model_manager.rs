@@ -19,20 +19,34 @@ impl LocalModelManager {
             http: reqwest::Client::new(),
         }
     }
+
+    fn manifest_path(&self) -> std::path::PathBuf {
+        self.models_dir.join("manifest.json")
+    }
+
+    fn read_manifest(&self) -> AppResult<Vec<LocalModel>> {
+        let path = self.manifest_path();
+        if !path.exists() {
+            return Ok(vec![]);
+        }
+        let data =
+            std::fs::read_to_string(&path).map_err(|e| AppError::Repository(e.to_string()))?;
+        serde_json::from_str(&data).map_err(|e| AppError::Repository(e.to_string()))
+    }
+
+    fn write_manifest(&self, models: &[LocalModel]) -> AppResult<()> {
+        std::fs::create_dir_all(&self.models_dir)
+            .map_err(|e| AppError::Repository(e.to_string()))?;
+        let data = serde_json::to_string_pretty(models)
+            .map_err(|e| AppError::Repository(e.to_string()))?;
+        std::fs::write(self.manifest_path(), data).map_err(|e| AppError::Repository(e.to_string()))
+    }
 }
 
 #[async_trait]
 impl ModelManagerPort for LocalModelManager {
     async fn list_local(&self) -> AppResult<Vec<LocalModel>> {
-        let manifest_path = self.models_dir.join("manifest.json");
-        if !manifest_path.exists() {
-            return Ok(vec![]);
-        }
-        let data = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| AppError::Repository(e.to_string()))?;
-        let models: Vec<LocalModel> =
-            serde_json::from_str(&data).map_err(|e| AppError::Repository(e.to_string()))?;
-        Ok(models)
+        self.read_manifest()
     }
 
     async fn download(
@@ -89,6 +103,14 @@ impl ModelManagerPort for LocalModelManager {
             path: dest.to_string_lossy().into_owned(),
             checksum: String::new(),
         };
+
+        // Zapsat do manifestu, jinak by list_local model po restartu neviděl
+        // (bug: download stahoval soubor, ale manifest.json se nikdy neaktualizoval).
+        let mut models = self.read_manifest().unwrap_or_default();
+        models.retain(|m| m.id != model.id);
+        models.push(model.clone());
+        self.write_manifest(&models)?;
+
         let _ = tx.send(DownloadProgress::Done { model }).await;
         Ok(())
     }
@@ -98,6 +120,10 @@ impl ModelManagerPort for LocalModelManager {
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| AppError::Repository(e.to_string()))?;
         }
+
+        let mut models = self.read_manifest().unwrap_or_default();
+        models.retain(|m| m.id != model_id);
+        self.write_manifest(&models)?;
         Ok(())
     }
 
@@ -143,5 +169,65 @@ impl ModelManagerPort for LocalModelManager {
     async fn check_for_updates(&self) -> AppResult<Vec<String>> {
         // Placeholder — produkčně dotaz na HuggingFace API
         Ok(vec![])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_manager() -> (LocalModelManager, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("weave_model_mgr_{}", uuid::Uuid::new_v4()));
+        (LocalModelManager::new(dir.clone()), dir)
+    }
+
+    #[tokio::test]
+    async fn list_local_is_empty_without_manifest() {
+        let (mgr, dir) = tmp_manager();
+        assert!(mgr.list_local().await.unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn write_then_read_manifest_roundtrips() {
+        let (mgr, dir) = tmp_manager();
+
+        // Regrese: download() dřív nikdy nezapisoval manifest.json, takže
+        // list_local() po restartu appky staženého modelu neviděl.
+        let model = LocalModel {
+            id: "test-model".into(),
+            name: "test-model".into(),
+            version: "latest".into(),
+            size_bytes: 1234,
+            path: dir.join("test-model.gguf").to_string_lossy().into_owned(),
+            checksum: String::new(),
+        };
+        mgr.write_manifest(std::slice::from_ref(&model)).unwrap();
+
+        let loaded = mgr.list_local().await.unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "test-model");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn delete_removes_from_manifest() {
+        let (mgr, dir) = tmp_manager();
+        let model = LocalModel {
+            id: "to-delete".into(),
+            name: "to-delete".into(),
+            version: "latest".into(),
+            size_bytes: 1,
+            path: dir.join("to-delete.gguf").to_string_lossy().into_owned(),
+            checksum: String::new(),
+        };
+        mgr.write_manifest(&[model]).unwrap();
+        assert_eq!(mgr.list_local().await.unwrap().len(), 1);
+
+        mgr.delete("to-delete").await.unwrap();
+        assert!(mgr.list_local().await.unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
