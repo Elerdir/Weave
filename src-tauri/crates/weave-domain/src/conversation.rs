@@ -63,7 +63,7 @@ pub struct Conversation {
     pub title: ConversationTitle,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub persona_id: Option<Uuid>,
+    pub persona_id: Option<String>,
     pub pinned: bool,
 }
 
@@ -82,6 +82,11 @@ impl Conversation {
 
     pub fn rename(&mut self, title: ConversationTitle) {
         self.title = title;
+        self.updated_at = Utc::now();
+    }
+
+    pub fn set_persona(&mut self, persona_id: Option<String>) {
+        self.persona_id = persona_id;
         self.updated_at = Utc::now();
     }
 

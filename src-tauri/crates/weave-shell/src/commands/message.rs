@@ -40,6 +40,7 @@ pub async fn send_message(
     use weave_infrastructure::{
         db::{
             conversation_repo::SqliteConversationRepository, message_repo::SqliteMessageRepository,
+            persona_repo::SqlitePersonaRepository,
         },
         workspace::workspace_repo::SqliteWorkspaceRepository,
     };
@@ -50,6 +51,7 @@ pub async fn send_message(
     let conv_repo = Arc::new(SqliteConversationRepository::new(state.pool.clone()));
     let msg_repo = Arc::new(SqliteMessageRepository::new(state.pool.clone()));
     let workspace_repo = Arc::new(SqliteWorkspaceRepository::new(state.pool.clone()));
+    let persona_repo = Arc::new(SqlitePersonaRepository::new(state.pool.clone()));
 
     let (tx, mut rx) = mpsc::channel::<StreamChunk>(128);
 
@@ -59,6 +61,7 @@ pub async fn send_message(
         state.llm.clone(),
         state.image_gen.clone(),
         workspace_repo,
+        persona_repo,
     );
 
     let window_clone = window.clone();

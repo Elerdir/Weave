@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO personas (id, name, icon, system_prompt, created_at)\n             VALUES (?, ?, ?, ?, ?)\n             ON CONFLICT(id) DO UPDATE SET\n                name = excluded.name,\n                icon = excluded.icon,\n                system_prompt = excluded.system_prompt",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "8d5b63cee3b1873e952a1b22d8feaf8d09c7d51a76a1928bbe1885b2d253a0d0"
+}

@@ -1,5 +1,6 @@
 pub mod conversation;
 pub mod message;
 pub mod models;
+pub mod personas;
 pub mod settings;
 pub mod workspace;

@@ -71,6 +71,14 @@ function createConversationStore() {
       messages = await invoke<Message[]>("list_messages", { conversationId: id });
     },
 
+    async setActivePersona(personaId: string | null) {
+      if (!activeId) return;
+      await invoke("set_conversation_persona", { conversationId: activeId, personaId });
+      conversations = conversations.map((c) =>
+        c.id === activeId ? { ...c, persona_id: personaId } : c
+      );
+    },
+
     async delete(id: string) {
       await invoke("delete_conversation", { id });
       conversations = conversations.filter(c => c.id !== id);
