@@ -168,9 +168,17 @@ fn run_inference(
     let start = std::time::Instant::now();
     let mut n_cur = batch.n_tokens();
     let mut completion_tokens = 0u32;
-    let max_tokens = req.request.max_tokens as i32;
+    let max_tokens = req.request.max_tokens;
+    let n_ctx_limit = n_ctx as i32;
 
-    while completion_tokens < max_tokens as u32 {
+    loop {
+        // Zastavíme se jen na přirozeném konci (EOG token, viz níže), na
+        // volitelném stropu z požadavku, nebo na skutečné technické hranici
+        // — zaplněném kontextovém okně. Bez umělého omezení navíc.
+        if should_stop_generating(completion_tokens, max_tokens, n_cur, n_ctx_limit) {
+            break;
+        }
+
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         sampler.accept(token);
 
@@ -209,4 +217,39 @@ fn run_inference(
         backend: ACTIVE_BACKEND,
     }));
     Ok(())
+}
+
+/// Rozhoduje, kdy generační smyčka skončí — na volitelném stropu z požadavku
+/// (pokud je nastaven), nebo na skutečné technické hranici (zaplněné
+/// kontextové okno). Bez zadaného stropu pokračuje, dokud model sám
+/// nenarazí na EOG token nebo dokud se nezaplní kontext.
+fn should_stop_generating(
+    completion_tokens: u32,
+    max_tokens: Option<u32>,
+    n_cur: i32,
+    n_ctx_limit: i32,
+) -> bool {
+    max_tokens.is_some_and(|max| completion_tokens >= max) || n_cur >= n_ctx_limit
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn continues_without_cap_until_context_window_fills() {
+        assert!(!should_stop_generating(10_000, None, 100, 4096));
+        assert!(should_stop_generating(10_000, None, 4096, 4096));
+    }
+
+    #[test]
+    fn stops_at_explicit_cap_before_context_limit() {
+        assert!(!should_stop_generating(31, Some(32), 100, 4096));
+        assert!(should_stop_generating(32, Some(32), 100, 4096));
+    }
+
+    #[test]
+    fn stops_at_context_limit_even_under_explicit_cap() {
+        assert!(should_stop_generating(5, Some(1000), 4096, 4096));
+    }
 }
