@@ -90,6 +90,29 @@ function createConversationStore() {
       }
     },
 
+    async rename(id: string, title: string) {
+      const trimmed = title.trim();
+      if (!trimmed) return;
+      await invoke("rename_conversation", { id, title: trimmed });
+      conversations = conversations.map((c) =>
+        c.id === id ? { ...c, title: trimmed } : c
+      );
+    },
+
+    async togglePin(id: string) {
+      const conv = conversations.find((c) => c.id === id);
+      if (!conv) return;
+      const pinned = !conv.pinned;
+      await invoke("set_conversation_pinned", { id, pinned });
+      // Aktualizuj + přeřaď: připnuté nahoře, pak dle updated_at
+      conversations = conversations
+        .map((c) => (c.id === id ? { ...c, pinned } : c))
+        .sort((a, b) => {
+          if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+          return b.updated_at.localeCompare(a.updated_at);
+        });
+    },
+
     appendStreamToken(token: string) {
       streamingContent = (streamingContent ?? "") + token;
     },

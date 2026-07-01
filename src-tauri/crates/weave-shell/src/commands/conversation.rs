@@ -47,6 +47,52 @@ pub async fn delete_conversation(id: String, state: State<'_, AppState>) -> Resu
     repo.delete(&conv_id).await.map_err(|e| e.to_string())
 }
 
+/// Přejmenuje konverzaci (název je validován doménou).
+#[tauri::command]
+pub async fn rename_conversation(
+    id: String,
+    title: String,
+    state: State<'_, AppState>,
+) -> Result<Conversation, String> {
+    use weave_domain::conversation::ConversationTitle;
+
+    let repo = SqliteConversationRepository::new(state.pool.clone());
+    let conv_id = parse_conv_id(&id)?;
+    let mut conversation = repo
+        .find_by_id(&conv_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Konverzace neexistuje".to_string())?;
+
+    let new_title = ConversationTitle::new(title).map_err(|e| e.to_string())?;
+    conversation.rename(new_title);
+    repo.save(&conversation).await.map_err(|e| e.to_string())?;
+    Ok(conversation)
+}
+
+/// Připne / odepne konverzaci.
+#[tauri::command]
+pub async fn set_conversation_pinned(
+    id: String,
+    pinned: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let repo = SqliteConversationRepository::new(state.pool.clone());
+    let conv_id = parse_conv_id(&id)?;
+    let mut conversation = repo
+        .find_by_id(&conv_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Konverzace neexistuje".to_string())?;
+
+    if pinned {
+        conversation.pin();
+    } else {
+        conversation.unpin();
+    }
+    repo.save(&conversation).await.map_err(|e| e.to_string())
+}
+
 /// Navrhne název souboru pro export (bezpečný, s příponou).
 #[tauri::command]
 pub async fn suggest_export_filename(
