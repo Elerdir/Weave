@@ -136,4 +136,24 @@ mod tests {
         assert_eq!(conv.title.as_str(), "Nový");
         assert!(conv.updated_at >= before);
     }
+
+    #[test]
+    fn pin_and_unpin_toggle_flag() {
+        let mut conv = Conversation::new(ConversationTitle::new("Test").unwrap());
+        assert!(!conv.pinned);
+        conv.pin();
+        assert!(conv.pinned);
+        conv.unpin();
+        assert!(!conv.pinned);
+    }
+
+    #[test]
+    fn set_persona_updates_id_and_timestamp() {
+        let mut conv = Conversation::new(ConversationTitle::new("Test").unwrap());
+        assert!(conv.persona_id.is_none());
+        conv.set_persona(Some("builtin:coder".into()));
+        assert_eq!(conv.persona_id.as_deref(), Some("builtin:coder"));
+        conv.set_persona(None);
+        assert!(conv.persona_id.is_none());
+    }
 }
