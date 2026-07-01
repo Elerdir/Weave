@@ -165,7 +165,10 @@ pub async fn download_file(
             .map_err(|e| AppError::ComfyUi(e.to_string()))?;
         downloaded += bytes.len() as u64;
 
-        if let Some(pct) = downloaded.checked_mul(100).and_then(|n| n.checked_div(total)) {
+        if let Some(pct) = downloaded
+            .checked_mul(100)
+            .and_then(|n| n.checked_div(total))
+        {
             let bucket = pct / 5;
             if bucket != last_reported_bucket {
                 last_reported_bucket = bucket;
@@ -219,7 +222,10 @@ mod tests {
     }
 
     fn unique_temp_dir(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("weave_process_test_{name}_{}", uuid::Uuid::new_v4()))
+        std::env::temp_dir().join(format!(
+            "weave_process_test_{name}_{}",
+            uuid::Uuid::new_v4()
+        ))
     }
 
     fn drain_channel(mut rx: mpsc::Receiver<InstallProgress>) {
@@ -241,9 +247,15 @@ mod tests {
         let (tx, rx) = mpsc::channel(16);
         drain_channel(rx);
 
-        download_file(&reqwest::Client::new(), &server.uri(), &dest, "test soubor", &tx)
-            .await
-            .unwrap();
+        download_file(
+            &reqwest::Client::new(),
+            &server.uri(),
+            &dest,
+            "test soubor",
+            &tx,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(std::fs::read(&dest).unwrap(), b"hello world");
         assert!(!dest.with_extension("part").exists());
@@ -288,8 +300,14 @@ mod tests {
         let (tx, rx) = mpsc::channel(16);
         drain_channel(rx);
 
-        let result =
-            download_file(&reqwest::Client::new(), &server.uri(), &dest, "test soubor", &tx).await;
+        let result = download_file(
+            &reqwest::Client::new(),
+            &server.uri(),
+            &dest,
+            "test soubor",
+            &tx,
+        )
+        .await;
 
         assert!(result.is_err());
         assert!(!dest.exists());
@@ -305,8 +323,8 @@ mod tests {
 
         let file = std::fs::File::create(&zip_path).unwrap();
         let mut writer = zip::ZipWriter::new(file);
-        let options =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         writer
             .start_file("antelopev2/glintr100.onnx", options)
             .unwrap();

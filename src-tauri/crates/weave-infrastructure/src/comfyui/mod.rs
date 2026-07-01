@@ -55,7 +55,8 @@ impl ComfyUiClient {
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("");
-        let mime = crate::attachment_store::mime_for_extension(ext).unwrap_or("application/octet-stream");
+        let mime =
+            crate::attachment_store::mime_for_extension(ext).unwrap_or("application/octet-stream");
 
         let part = reqwest::multipart::Part::bytes(bytes)
             .file_name(filename)
@@ -379,8 +380,14 @@ mod tests {
         let req = sample_request();
         let workflow = build_basic_workflow(&req, None);
 
-        assert_eq!(workflow["1"]["inputs"]["ckpt_name"], "flux1-dev.safetensors");
-        assert_eq!(workflow["5"]["inputs"]["model"], serde_json::json!(["1", 0]));
+        assert_eq!(
+            workflow["1"]["inputs"]["ckpt_name"],
+            "flux1-dev.safetensors"
+        );
+        assert_eq!(
+            workflow["5"]["inputs"]["model"],
+            serde_json::json!(["1", 0])
+        );
         assert_eq!(workflow.as_object().unwrap().len(), 7);
 
         // Žádná PuLID/SDXL větev nesmí být přítomná, dokud není referenční obrázek
@@ -445,7 +452,10 @@ mod tests {
         assert_eq!(apply_pulid["class_type"], "ApplyPulid");
         assert_eq!(apply_pulid["inputs"]["model"], serde_json::json!(["1", 0]));
         assert_eq!(apply_pulid["inputs"]["pulid"], serde_json::json!(["9", 0]));
-        assert_eq!(apply_pulid["inputs"]["eva_clip"], serde_json::json!(["11", 0]));
+        assert_eq!(
+            apply_pulid["inputs"]["eva_clip"],
+            serde_json::json!(["11", 0])
+        );
         assert_eq!(
             apply_pulid["inputs"]["face_analysis"],
             serde_json::json!(["10", 0])

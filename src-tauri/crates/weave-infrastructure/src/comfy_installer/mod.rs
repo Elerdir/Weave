@@ -12,8 +12,7 @@ use weave_application::{
 };
 
 use process::{
-    download_file, extract_zip, find_system_python, has_nvidia_gpu, run_streamed,
-    venv_python_path,
+    download_file, extract_zip, find_system_python, has_nvidia_gpu, run_streamed, venv_python_path,
 };
 
 const COMFYUI_REPO: &str = "https://github.com/comfyanonymous/ComfyUI.git";
