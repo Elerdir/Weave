@@ -22,7 +22,7 @@ impl ConversationRepository for SqliteConversationRepository {
     async fn save(&self, c: &Conversation) -> AppResult<()> {
         let id = c.id.as_uuid().to_string();
         let title = c.title.as_str();
-        let persona_id = c.persona_id.map(|u| u.to_string());
+        let persona_id = c.persona_id.clone();
         let created_at = c.created_at.to_rfc3339();
         let updated_at = c.updated_at.to_rfc3339();
 
@@ -62,7 +62,7 @@ impl ConversationRepository for SqliteConversationRepository {
         Ok(row.map(|r| Conversation {
             id: ConversationId::from_uuid(Uuid::parse_str(&r.id).unwrap()),
             title: ConversationTitle::new(r.title).unwrap(),
-            persona_id: r.persona_id.and_then(|s| Uuid::parse_str(&s).ok()),
+            persona_id: r.persona_id,
             pinned: r.pinned != 0,
             created_at: r.created_at.parse().unwrap(),
             updated_at: r.updated_at.parse().unwrap(),
@@ -82,7 +82,7 @@ impl ConversationRepository for SqliteConversationRepository {
             .map(|r| Conversation {
                 id: ConversationId::from_uuid(Uuid::parse_str(&r.id).unwrap()),
                 title: ConversationTitle::new(r.title).unwrap(),
-                persona_id: r.persona_id.and_then(|s| Uuid::parse_str(&s).ok()),
+                persona_id: r.persona_id,
                 pinned: r.pinned != 0,
                 created_at: r.created_at.parse().unwrap(),
                 updated_at: r.updated_at.parse().unwrap(),
@@ -119,7 +119,7 @@ impl ConversationRepository for SqliteConversationRepository {
             .map(|r| Conversation {
                 id: ConversationId::from_uuid(Uuid::parse_str(&r.id).unwrap()),
                 title: ConversationTitle::new(r.title).unwrap(),
-                persona_id: r.persona_id.and_then(|s| Uuid::parse_str(&s).ok()),
+                persona_id: r.persona_id,
                 pinned: r.pinned != 0,
                 created_at: r.created_at.parse().unwrap(),
                 updated_at: r.updated_at.parse().unwrap(),

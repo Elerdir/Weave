@@ -8,6 +8,7 @@
   import type { MentionMatch } from "$lib/mentions";
   import type { IndexedFile } from "$lib/stores/workspace.svelte";
   import MessageBubble from "./MessageBubble.svelte";
+  import PersonaPicker from "./PersonaPicker.svelte";
 
   interface Mention {
     path: string;
@@ -122,9 +123,12 @@
 
 <div class="chat-view">
   <header class="chat-header">
-    <span class="conv-title">
-      {conversationStore.activeConversation?.title ?? ""}
-    </span>
+    <div class="header-left">
+      <span class="conv-title">
+        {conversationStore.activeConversation?.title ?? ""}
+      </span>
+      <PersonaPicker />
+    </div>
     {#if conversationStore.currentStats}
       <span class="tps-badge">
         {i18n.t("chat.tokensPerSecond", {
@@ -220,6 +224,12 @@
     border-bottom: 1px solid var(--color-border);
     background: var(--color-surface);
     min-height: 48px;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
   }
 
   .conv-title {

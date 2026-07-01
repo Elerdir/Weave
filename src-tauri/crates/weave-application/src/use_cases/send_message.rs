@@ -9,6 +9,7 @@ use crate::{
         conversation_repository::{ConversationRepository, MessageRepository},
         image_gen_port::{ImageGenPort, ImageProgress, ImageRequest, StylePreset},
         llm_port::{ChatRequest, LlmPort, StreamChunk},
+        persona_repository::PersonaRepository,
         workspace_port::WorkspaceRepository,
     },
 };
@@ -19,6 +20,7 @@ pub struct SendMessageUseCase {
     llm: Arc<dyn LlmPort>,
     image_gen: Arc<dyn ImageGenPort>,
     workspace_repo: Arc<dyn WorkspaceRepository>,
+    persona_repo: Arc<dyn PersonaRepository>,
 }
 
 impl SendMessageUseCase {
@@ -28,6 +30,7 @@ impl SendMessageUseCase {
         llm: Arc<dyn LlmPort>,
         image_gen: Arc<dyn ImageGenPort>,
         workspace_repo: Arc<dyn WorkspaceRepository>,
+        persona_repo: Arc<dyn PersonaRepository>,
     ) -> Self {
         Self {
             conv_repo,
@@ -35,6 +38,7 @@ impl SendMessageUseCase {
             llm,
             image_gen,
             workspace_repo,
+            persona_repo,
         }
     }
 
@@ -45,8 +49,9 @@ impl SendMessageUseCase {
         file_refs: Vec<String>,
         stream_tx: mpsc::Sender<StreamChunk>,
     ) -> AppResult<()> {
-        // Ověříme že konverzace existuje
-        self.conv_repo
+        // Ověříme že konverzace existuje a získáme její personu
+        let conversation = self
+            .conv_repo
             .find_by_id(&conversation_id)
             .await?
             .ok_or_else(|| {
@@ -73,6 +78,14 @@ impl SendMessageUseCase {
                     history.insert(0, Message::system(conversation_id.clone(), context));
                 }
 
+                // Persona konverzace → system prompt úplně na začátek
+                if let Some(prompt) = self
+                    .resolve_persona_prompt(&conversation.persona_id)
+                    .await?
+                {
+                    history.insert(0, Message::system(conversation_id.clone(), prompt));
+                }
+
                 let model_id = Self::model_for_intent(&intent);
                 let request = ChatRequest {
                     messages: history,
@@ -84,6 +97,29 @@ impl SendMessageUseCase {
                 self.llm.chat_stream(request, stream_tx).await
             }
         }
+    }
+
+    /// Vyřeší system prompt persony konverzace (vestavěná z domény, vlastní z repo).
+    async fn resolve_persona_prompt(
+        &self,
+        persona_id: &Option<String>,
+    ) -> AppResult<Option<String>> {
+        let Some(id) = persona_id else {
+            return Ok(None);
+        };
+
+        if weave_domain::persona::Persona::is_builtin(id) {
+            return Ok(weave_domain::persona::builtin_personas()
+                .into_iter()
+                .find(|p| &p.id == id)
+                .map(|p| p.system_prompt));
+        }
+
+        Ok(self
+            .persona_repo
+            .find_by_id(id)
+            .await?
+            .map(|p| p.system_prompt))
     }
 
     /// Sestaví system kontext z obsahu @souborů (z workspace indexu).
@@ -170,6 +206,7 @@ mod tests {
         conversation_repository::{MockConversationRepository, MockMessageRepository},
         image_gen_port::MockImageGenPort,
         llm_port::MockLlmPort,
+        persona_repository::MockPersonaRepository,
         workspace_port::MockWorkspaceRepository,
     };
     use weave_domain::workspace::IndexedFile;
@@ -181,6 +218,7 @@ mod tests {
             Arc::new(MockLlmPort::new()),
             Arc::new(MockImageGenPort::new()),
             Arc::new(ws),
+            Arc::new(MockPersonaRepository::new()),
         )
     }
 
