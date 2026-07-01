@@ -114,6 +114,87 @@ pub fn has_nvidia_gpu() -> bool {
         .unwrap_or(false)
 }
 
+/// Stáhne soubor s progress reportingem po ~5% krocích do `InstallProgress::Output`
+/// (stejný stream+write vzor jako `model_manager.rs`, ale napojený na instalační log
+/// místo vlastního progress kanálu). Idempotentní — pokud `dest` už existuje, nic nedělá.
+/// Stahuje do `.part` a až po úspěšném dokončení přejmenuje, aby napůl stažený soubor
+/// nevypadal jako hotový při přerušené instalaci.
+pub async fn download_file(
+    http: &reqwest::Client,
+    url: &str,
+    dest: &std::path::Path,
+    label: &str,
+    tx: &mpsc::Sender<InstallProgress>,
+) -> AppResult<()> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+
+    if dest.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    }
+
+    let response = http
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| AppError::ComfyUi(format!("Stažení {label} selhalo: {e}")))?;
+
+    if !response.status().is_success() {
+        return Err(AppError::ComfyUi(format!(
+            "Stažení {label} selhalo: server vrátil {}",
+            response.status()
+        )));
+    }
+
+    let total = response.content_length().unwrap_or(0);
+    let tmp_dest = dest.with_extension("part");
+    let mut file =
+        std::fs::File::create(&tmp_dest).map_err(|e| AppError::ComfyUi(e.to_string()))?;
+
+    let mut downloaded = 0u64;
+    let mut last_reported_bucket = u64::MAX;
+    let mut stream = response.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let bytes =
+            chunk.map_err(|e| AppError::ComfyUi(format!("Stažení {label} selhalo: {e}")))?;
+        file.write_all(&bytes)
+            .map_err(|e| AppError::ComfyUi(e.to_string()))?;
+        downloaded += bytes.len() as u64;
+
+        if let Some(pct) = downloaded.checked_mul(100).and_then(|n| n.checked_div(total)) {
+            let bucket = pct / 5;
+            if bucket != last_reported_bucket {
+                last_reported_bucket = bucket;
+                let _ = tx
+                    .send(InstallProgress::Output(format!(
+                        "{label}: {pct}% ({:.1}/{:.1} GB)",
+                        downloaded as f64 / 1e9,
+                        total as f64 / 1e9
+                    )))
+                    .await;
+            }
+        }
+    }
+    drop(file);
+
+    std::fs::rename(&tmp_dest, dest).map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    Ok(())
+}
+
+/// Rozbalí .zip do cílové složky — na rozdíl od PyTorch/PuLID (pip/git) se
+/// InsightFace AntelopeV2 distribuuje jen jako zip archiv.
+pub fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> AppResult<()> {
+    let file = std::fs::File::open(zip_path).map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    archive
+        .extract(dest_dir)
+        .map_err(|e| AppError::ComfyUi(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +216,108 @@ mod tests {
         } else {
             assert!(path.ends_with("bin/python"));
         }
+    }
+
+    fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("weave_process_test_{name}_{}", uuid::Uuid::new_v4()))
+    }
+
+    fn drain_channel(mut rx: mpsc::Receiver<InstallProgress>) {
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+    }
+
+    #[tokio::test]
+    async fn download_file_writes_response_body_to_dest() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"hello world".to_vec()))
+            .mount(&server)
+            .await;
+
+        let dest = unique_temp_dir("download_ok").join("file.bin");
+        let (tx, rx) = mpsc::channel(16);
+        drain_channel(rx);
+
+        download_file(&reqwest::Client::new(), &server.uri(), &dest, "test soubor", &tx)
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"hello world");
+        assert!(!dest.with_extension("part").exists());
+    }
+
+    #[tokio::test]
+    async fn download_file_skips_when_dest_already_exists() {
+        let dest = unique_temp_dir("download_skip").join("file.bin");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(&dest, b"already here").unwrap();
+
+        let (tx, rx) = mpsc::channel(16);
+        drain_channel(rx);
+
+        // Neexistující port — pokud by funkce (chybně) zkusila stahovat i přes
+        // existující cíl, spojení by selhalo a test by spadl na chybě, ne na assertu.
+        download_file(
+            &reqwest::Client::new(),
+            "http://127.0.0.1:1/unreachable",
+            &dest,
+            "test soubor",
+            &tx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"already here");
+    }
+
+    #[tokio::test]
+    async fn download_file_propagates_http_error_status() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let dest = unique_temp_dir("download_404").join("file.bin");
+        let (tx, rx) = mpsc::channel(16);
+        drain_channel(rx);
+
+        let result =
+            download_file(&reqwest::Client::new(), &server.uri(), &dest, "test soubor", &tx).await;
+
+        assert!(result.is_err());
+        assert!(!dest.exists());
+    }
+
+    #[test]
+    fn extract_zip_preserves_nested_directory_structure() {
+        use std::io::Write;
+
+        let src_dir = unique_temp_dir("zip_src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let zip_path = src_dir.join("archive.zip");
+
+        let file = std::fs::File::create(&zip_path).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer
+            .start_file("antelopev2/glintr100.onnx", options)
+            .unwrap();
+        writer.write_all(b"fake-onnx-bytes").unwrap();
+        writer.finish().unwrap();
+
+        let dest_dir = unique_temp_dir("zip_dest");
+        extract_zip(&zip_path, &dest_dir).unwrap();
+
+        let extracted = dest_dir.join("antelopev2").join("glintr100.onnx");
+        assert!(extracted.exists());
+        assert_eq!(std::fs::read(&extracted).unwrap(), b"fake-onnx-bytes");
     }
 }

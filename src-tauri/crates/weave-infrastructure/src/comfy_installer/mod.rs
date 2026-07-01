@@ -11,11 +11,36 @@ use weave_application::{
     ports::comfy_installer_port::{ComfyInstallerPort, ComfyStatus, InstallProgress},
 };
 
-use process::{find_system_python, has_nvidia_gpu, run_streamed, venv_python_path};
+use process::{
+    download_file, extract_zip, find_system_python, has_nvidia_gpu, run_streamed,
+    venv_python_path,
+};
 
 const COMFYUI_REPO: &str = "https://github.com/comfyanonymous/ComfyUI.git";
 const PULID_REPO: &str = "https://github.com/cubiq/PuLID_ComfyUI.git";
 pub const COMFYUI_DEFAULT_PORT: u16 = 8188;
+
+/// Základní checkpoint pro PuLID větev workflow. `cubiq/PuLID_ComfyUI` patchuje
+/// SDXL cross-attention, ne FLUX/DiT — FLUX by tu nešel použít, i kdyby byl
+/// stažitelný. SDXL base je navíc na HuggingFace veřejný bez přihlášení, což
+/// FLUX.1-dev/schnell nejsou (obě vrací 401 bez auth tokenu) — jednoklikový
+/// no-auth download stylem `recommended_models.rs` by u FLUX nešel udělat.
+/// Používá se jen když request nese `reference_image_path` — základní
+/// text-to-image větev (`build_basic_workflow`) checkpoint dál natvrdo
+/// očekává `flux1-dev.safetensors` a tady se nemění.
+pub const SDXL_CHECKPOINT_FILENAME: &str = "sd_xl_base_1.0.safetensors";
+const SDXL_CHECKPOINT_URL: &str = "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors";
+
+/// PuLID váhy pro `PulidModelLoader` — konverze do IPAdapter formátu od
+/// huchenlei, přesně ta, na kterou odkazuje README `cubiq/PuLID_ComfyUI`.
+pub const PULID_WEIGHTS_FILENAME: &str = "ip-adapter_pulid_sdxl_fp16.safetensors";
+const PULID_WEIGHTS_URL: &str = "https://huggingface.co/huchenlei/ipadapter_pulid/resolve/main/ip-adapter_pulid_sdxl_fp16.safetensors";
+
+/// InsightFace AntelopeV2 pro `PulidInsightFaceLoader` — bez něj PuLID nemá
+/// jak analyzovat obličej na referenčním obrázku. Archiv už obsahuje kořenovou
+/// složku `antelopev2/`, takže se rozbaluje přímo do `models/insightface/models/`.
+const ANTELOPEV2_ZIP_URL: &str =
+    "https://huggingface.co/MonsterMMORPG/tools/resolve/main/antelopev2.zip";
 
 pub struct LocalComfyInstaller {
     install_dir: PathBuf,
@@ -42,6 +67,24 @@ impl LocalComfyInstaller {
 
     fn pulid_dir(&self) -> PathBuf {
         self.custom_nodes_dir().join("PuLID_ComfyUI")
+    }
+
+    fn checkpoints_dir(&self) -> PathBuf {
+        self.install_dir.join("models").join("checkpoints")
+    }
+
+    /// Složka pro PuLID *váhy* (`models/pulid/`) — nezaměňovat s [`Self::pulid_dir`],
+    /// což je adresář se zdrojovým kódem custom node uzlu.
+    fn pulid_weights_dir(&self) -> PathBuf {
+        self.install_dir.join("models").join("pulid")
+    }
+
+    /// Rodič pro `antelopev2/` — samotná složka modelu vznikne rozbalením zipu.
+    fn insightface_models_dir(&self) -> PathBuf {
+        self.install_dir
+            .join("models")
+            .join("insightface")
+            .join("models")
     }
 
     async fn step(tx: &mpsc::Sender<InstallProgress>, name: &str) {
@@ -200,6 +243,44 @@ impl ComfyInstallerPort for LocalComfyInstaller {
                     )))
                     .await;
             }
+        }
+
+        // 8. SDXL checkpoint pro PuLID větev (viz komentář u konstanty výše)
+        let checkpoint_path = self.checkpoints_dir().join(SDXL_CHECKPOINT_FILENAME);
+        if !checkpoint_path.exists() {
+            Self::step(&tx, "Stahuji SDXL checkpoint pro PuLID (~6,5 GB)").await;
+            download_file(
+                &self.http,
+                SDXL_CHECKPOINT_URL,
+                &checkpoint_path,
+                "SDXL checkpoint",
+                &tx,
+            )
+            .await?;
+        }
+
+        // 9. PuLID váhy
+        let pulid_weights_path = self.pulid_weights_dir().join(PULID_WEIGHTS_FILENAME);
+        if !pulid_weights_path.exists() {
+            Self::step(&tx, "Stahuji PuLID váhy (~750 MB)").await;
+            download_file(
+                &self.http,
+                PULID_WEIGHTS_URL,
+                &pulid_weights_path,
+                "PuLID váhy",
+                &tx,
+            )
+            .await?;
+        }
+
+        // 10. InsightFace AntelopeV2 — detekce obličeje pro PulidInsightFaceLoader
+        let insightface_dir = self.insightface_models_dir();
+        if !insightface_dir.join("antelopev2").exists() {
+            Self::step(&tx, "Stahuji InsightFace AntelopeV2 (~340 MB)").await;
+            let zip_path = insightface_dir.join("antelopev2.zip");
+            download_file(&self.http, ANTELOPEV2_ZIP_URL, &zip_path, "AntelopeV2", &tx).await?;
+            extract_zip(&zip_path, &insightface_dir)?;
+            std::fs::remove_file(&zip_path).ok();
         }
 
         let _ = tx.send(InstallProgress::Done).await;
