@@ -1,10 +1,12 @@
 <script lang="ts">
   import type { Message } from "$lib/stores/conversations.svelte";
   import { i18n } from "$lib/i18n/index.svelte";
+  import { tts } from "$lib/services/tts.svelte";
 
   let { msg }: { msg: Message } = $props();
 
   const isUser = $derived(msg.role === "user");
+  const isSpeaking = $derived(tts.speakingId === msg.id);
 
   // Jednoduchý markdown renderer — inline kód + code bloky
   function renderContent(text: string): string {
@@ -37,6 +39,15 @@
 
   <div class="actions">
     <button class="action-btn" onclick={copyContent} title={i18n.m.chat.copy}>⎘</button>
+    {#if !isUser && tts.supported}
+      <button
+        class="action-btn"
+        class:speaking={isSpeaking}
+        onclick={() => tts.speak(msg.id, msg.content, i18n.locale)}
+        title={i18n.m.chat.speak}
+        aria-label={i18n.m.chat.speak}
+      >{isSpeaking ? "⏹" : "🔊"}</button>
+    {/if}
   </div>
 </div>
 
@@ -133,5 +144,10 @@
   .action-btn:hover {
     color: var(--color-text);
     background: var(--color-surface-2);
+  }
+
+  .action-btn.speaking {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
   }
 </style>
