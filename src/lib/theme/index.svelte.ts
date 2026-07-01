@@ -19,11 +19,18 @@ function createThemeStore() {
   let resolvedTheme = $state<ResolvedTheme>(theme === "system" ? getSystemTheme() : theme);
 
   $effect.root(() => {
-    const resolved = theme === "system" ? getSystemTheme() : theme;
-    resolvedTheme = resolved;
-    applyTheme(resolved);
+    // Vnořený $effect se znovu spustí při každé změně `theme` — přepnutí
+    // motivu v nastavení se tak reálně promítne (jinak by se aplikoval jen
+    // jednou při vzniku store).
+    $effect(() => {
+      const resolved = theme === "system" ? getSystemTheme() : theme;
+      resolvedTheme = resolved;
+      applyTheme(resolved);
+    });
 
-    if (theme === "system") {
+    // Sledování systémové preference jen v režimu "system".
+    $effect(() => {
+      if (theme !== "system") return;
       const mql = window.matchMedia("(prefers-color-scheme: dark)");
       const handler = (e: MediaQueryListEvent) => {
         resolvedTheme = e.matches ? "dark" : "light";
@@ -31,7 +38,7 @@ function createThemeStore() {
       };
       mql.addEventListener("change", handler);
       return () => mql.removeEventListener("change", handler);
-    }
+    });
   });
 
   return {
