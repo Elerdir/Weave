@@ -10,6 +10,12 @@ export interface ApiKeyState {
 
 const COMFYUI_URL_KEY = "comfyui.url";
 const DEFAULT_COMFYUI_URL = "http://localhost:8188";
+const LLM_BACKEND_KEY = "llm.backend";
+const LLM_LOCAL_URL_KEY = "llm.local_url";
+const DEFAULT_LOCAL_URL = "http://localhost:8080";
+
+export type LlmBackend = "mistral" | "local";
+type ConnStatus = "unknown" | "testing" | "connected" | "disconnected";
 
 const SERVICES: ApiServiceId[] = ["mistral", "civitai", "huggingface"];
 
@@ -21,7 +27,11 @@ function createSettingsStore() {
   });
 
   let comfyuiUrl = $state(DEFAULT_COMFYUI_URL);
-  let comfyuiStatus = $state<"unknown" | "testing" | "connected" | "disconnected">("unknown");
+  let comfyuiStatus = $state<ConnStatus>("unknown");
+
+  let llmBackend = $state<LlmBackend>("mistral");
+  let localUrl = $state(DEFAULT_LOCAL_URL);
+  let localStatus = $state<ConnStatus>("unknown");
 
   async function refreshKey(service: ApiServiceId) {
     const hasKey = await invoke<boolean>("get_api_key_status", { service });
@@ -41,11 +51,48 @@ function createSettingsStore() {
     get comfyuiStatus() {
       return comfyuiStatus;
     },
+    get llmBackend() {
+      return llmBackend;
+    },
+    get localUrl() {
+      return localUrl;
+    },
+    get localStatus() {
+      return localStatus;
+    },
 
     async load() {
       await Promise.all(SERVICES.map(refreshKey));
-      const stored = await invoke<string | null>("get_app_setting", { key: COMFYUI_URL_KEY });
-      comfyuiUrl = stored ?? DEFAULT_COMFYUI_URL;
+      const comfy = await invoke<string | null>("get_app_setting", { key: COMFYUI_URL_KEY });
+      comfyuiUrl = comfy ?? DEFAULT_COMFYUI_URL;
+      const backend = await invoke<string | null>("get_app_setting", { key: LLM_BACKEND_KEY });
+      llmBackend = backend === "local" ? "local" : "mistral";
+      const lurl = await invoke<string | null>("get_app_setting", { key: LLM_LOCAL_URL_KEY });
+      localUrl = lurl ?? DEFAULT_LOCAL_URL;
+    },
+
+    async setBackend(backend: LlmBackend) {
+      llmBackend = backend;
+      await invoke("set_app_setting", { key: LLM_BACKEND_KEY, value: backend });
+    },
+
+    setLocalUrl(url: string) {
+      localUrl = url;
+      localStatus = "unknown";
+    },
+
+    async saveLocalUrl() {
+      await invoke("set_app_setting", { key: LLM_LOCAL_URL_KEY, value: localUrl });
+    },
+
+    async testLocal() {
+      localStatus = "testing";
+      try {
+        const ok = await invoke<boolean>("test_local_llm_connection", { url: localUrl });
+        localStatus = ok ? "connected" : "disconnected";
+      } catch {
+        localStatus = "disconnected";
+      }
     },
 
     async saveKey(service: ApiServiceId, token: string) {
