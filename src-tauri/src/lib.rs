@@ -1,5 +1,48 @@
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager,
+};
 use tracing_subscriber::{fmt, EnvFilter};
 use weave_shell::{commands, setup_state};
+
+/// Zobrazí a zaostří hlavní okno.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Sestaví systray ikonu s menu (Zobrazit / Ukončit).
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "Zobrazit Weave", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Ukončit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    TrayIconBuilder::with_id("weave-tray")
+        .icon(app.default_window_icon().unwrap().clone())
+        .tooltip("Weave")
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
 
 pub fn run() {
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
@@ -18,6 +61,7 @@ pub fn run() {
                     .await
                     .expect("Chyba inicializace stavu");
             });
+            build_tray(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

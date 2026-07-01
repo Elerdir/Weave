@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { notify } from "$lib/services/notify";
 
 export interface WorkspaceEntry {
   path: string;
@@ -112,7 +113,14 @@ function createWorkspaceStore() {
 
       const unlisten = await listen<IndexProgress>("workspace-index-progress", (e) => {
         indexProgress = e.payload;
-        if (e.payload.type === "done" || e.payload.type === "error") {
+        if (e.payload.type === "done") {
+          indexing = false;
+          unlisten();
+          void notify(
+            "Indexování dokončeno",
+            `Zaindexováno ${e.payload.indexed ?? 0} souborů.`
+          );
+        } else if (e.payload.type === "error") {
           indexing = false;
           unlisten();
         }

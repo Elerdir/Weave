@@ -10,7 +10,7 @@
 
   let { onClose }: { onClose: () => void } = $props();
 
-  type Section = "appearance" | "language" | "apiKeys" | "llm" | "comfyui" | "models";
+  type Section = "appearance" | "language" | "apiKeys" | "llm" | "comfyui" | "models" | "notifications";
   let section = $state<Section>("appearance");
 
   let downloadUrl = $state("");
@@ -103,6 +103,9 @@
         </button>
         <button class:active={section === "models"} onclick={() => (section = "models")}>
           {i18n.m.settings.sections.models}
+        </button>
+        <button class:active={section === "notifications"} onclick={() => (section = "notifications")}>
+          {i18n.m.settings.sections.notifications}
         </button>
       </nav>
 
@@ -306,6 +309,25 @@
           {#if modelsStore.error}
             <span class="conn-status disconnected">{modelsStore.error}</span>
           {/if}
+        {:else if section === "notifications"}
+          <h3>{i18n.m.settings.notifications.label}</h3>
+          <p class="hint">{i18n.m.settings.notifications.hint}</p>
+          <div class="option-row">
+            <button
+              class="chip"
+              class:selected={settingsStore.notificationsEnabled}
+              onclick={() => settingsStore.setNotifications(true)}
+            >
+              {i18n.m.settings.notifications.enabled}
+            </button>
+            <button
+              class="chip"
+              class:selected={!settingsStore.notificationsEnabled}
+              onclick={() => settingsStore.setNotifications(false)}
+            >
+              {i18n.m.settings.notifications.disabled}
+            </button>
+          </div>
         {/if}
       </div>
     </div>
