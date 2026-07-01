@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+  import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { sendMessage } from "$lib/services/chat.service";
   import { i18n } from "$lib/i18n/index.svelte";
@@ -16,6 +17,13 @@
     name: string;
   }
 
+  interface RefImage {
+    path: string;
+    previewUrl: string;
+  }
+
+  const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif", "bmp"];
+
   let input = $state("");
   let messagesEl = $state<HTMLDivElement | null>(null);
   let inputEl = $state<HTMLTextAreaElement | null>(null);
@@ -26,6 +34,27 @@
   let activeMatch = $state<MentionMatch | null>(null);
   let highlighted = $state(0);
   let searchTimer: ReturnType<typeof setTimeout>;
+
+  // Referenční obrázky pro generování (náhled hned po výběru)
+  let refImages = $state<RefImage[]>([]);
+
+  async function pickReferenceImages() {
+    const picked = await openFilePicker({
+      multiple: true,
+      filters: [{ name: "Obrázky", extensions: IMAGE_EXTENSIONS }],
+    });
+    if (!picked) return;
+    const paths = Array.isArray(picked) ? picked : [picked];
+    for (const path of paths) {
+      if (!refImages.some((r) => r.path === path)) {
+        refImages = [...refImages, { path, previewUrl: convertFileSrc(path) }];
+      }
+    }
+  }
+
+  function removeRefImage(path: string) {
+    refImages = refImages.filter((r) => r.path !== path);
+  }
 
   $effect(() => {
     void conversationStore.messages.length;
@@ -86,10 +115,12 @@
     const content = input.trim();
     if (!content || conversationStore.loading || !conversationStore.activeId) return;
     const refs = mentions.map((m) => m.path);
+    const images = refImages.map((r) => r.path);
     input = "";
     mentions = [];
+    refImages = [];
     closeSuggestions();
-    await sendMessage(conversationStore.activeId, content, refs);
+    await sendMessage(conversationStore.activeId, content, refs, images);
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -164,6 +195,21 @@
   </div>
 
   <div class="input-area-wrap">
+    {#if refImages.length > 0}
+      <div class="ref-image-strip">
+        {#each refImages as img (img.path)}
+          <div class="ref-image-thumb">
+            <img src={img.previewUrl} alt="" />
+            <button
+              class="ref-image-remove"
+              onclick={() => removeRefImage(img.path)}
+              aria-label={i18n.m.chat.removeReferenceImage}
+            >×</button>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
     {#if mentions.length > 0}
       <div class="mention-chips">
         {#each mentions as m (m.path)}
@@ -191,6 +237,13 @@
     {/if}
 
     <div class="input-area">
+      <button
+        class="attach-btn"
+        onclick={pickReferenceImages}
+        disabled={conversationStore.loading}
+        title={i18n.m.chat.addReferenceImage}
+        aria-label={i18n.m.chat.addReferenceImage}
+      >🖼️</button>
       <textarea
         class="chat-input"
         bind:this={inputEl}
@@ -319,6 +372,62 @@
     border-top: 1px solid var(--color-border);
     background: var(--color-surface);
   }
+
+  .ref-image-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.75rem 1.25rem 0;
+  }
+
+  .ref-image-thumb {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--color-border);
+  }
+
+  .ref-image-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .ref-image-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 18px;
+    height: 18px;
+    line-height: 1;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 0.75rem;
+  }
+
+  .ref-image-remove:hover {
+    background: rgba(0, 0, 0, 0.85);
+  }
+
+  .attach-btn {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    padding: 0.5rem 0.65rem;
+    font-size: 1rem;
+    cursor: pointer;
+    align-self: flex-end;
+    transition: background 0.2s;
+  }
+
+  .attach-btn:hover:not(:disabled) { background: var(--color-surface-2); }
+  .attach-btn:disabled { opacity: 0.45; cursor: default; }
 
   .mention-chips {
     display: flex;

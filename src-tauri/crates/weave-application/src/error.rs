@@ -18,6 +18,9 @@ pub enum AppError {
     #[error("Chyba keychain: {0}")]
     Keychain(String),
 
+    #[error("Chyba přílohy: {0}")]
+    Attachment(String),
+
     #[error("Neočekávaná chyba: {0}")]
     Unexpected(#[from] anyhow::Error),
 }

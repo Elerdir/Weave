@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { GenerationStats } from "$lib/stores/conversations.svelte";
+import type { Attachment, GenerationStats } from "$lib/stores/conversations.svelte";
 import { conversationStore } from "$lib/stores/conversations.svelte";
 
 type StreamChunk =
@@ -11,9 +11,15 @@ type StreamChunk =
 export async function sendMessage(
   conversationId: string,
   content: string,
-  fileRefs: string[] = []
+  fileRefs: string[] = [],
+  referenceImages: string[] = []
 ): Promise<void> {
-  conversationStore.pushUserMessage(content);
+  const attachments: Attachment[] = referenceImages.map((path) => ({
+    type: "image",
+    path,
+    mime: "image/*",
+  }));
+  conversationStore.pushUserMessage(content, attachments);
   conversationStore.startLoading();
 
   const unlisten = await listen<StreamChunk>("stream-chunk", (event) => {
@@ -37,7 +43,7 @@ export async function sendMessage(
   });
 
   try {
-    await invoke("send_message", { conversationId, content, fileRefs });
+    await invoke("send_message", { conversationId, content, fileRefs, referenceImages });
   } catch (err) {
     unlisten();
     conversationStore.finalizeStream({

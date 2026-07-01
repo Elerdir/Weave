@@ -1,8 +1,9 @@
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use weave_application::ports::{
-    comfy_installer_port::ComfyInstallerPort, image_gen_port::ImageGenPort,
-    keychain_port::KeychainPort, llm_port::LlmPort, model_manager_port::ModelManagerPort,
+    attachment_store_port::AttachmentStorePort, comfy_installer_port::ComfyInstallerPort,
+    image_gen_port::ImageGenPort, keychain_port::KeychainPort, llm_port::LlmPort,
+    model_manager_port::ModelManagerPort,
 };
 
 pub struct AppState {
@@ -12,4 +13,5 @@ pub struct AppState {
     pub image_gen: Arc<dyn ImageGenPort>,
     pub model_manager: Arc<dyn ModelManagerPort>,
     pub comfy_installer: Arc<dyn ComfyInstallerPort>,
+    pub attachment_store: Arc<dyn AttachmentStorePort>,
 }

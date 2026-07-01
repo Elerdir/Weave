@@ -5,8 +5,9 @@ use std::sync::Arc;
 use tauri::Manager;
 use weave_application::ports::keychain_port::{ApiService, KeychainPort};
 use weave_infrastructure::{
-    comfy_installer::LocalComfyInstaller, comfyui::ComfyUiClient, db, keychain::OsKeychain,
-    llm::mistral_client::MistralClient, model_manager::LocalModelManager,
+    attachment_store::LocalAttachmentStore, comfy_installer::LocalComfyInstaller,
+    comfyui::ComfyUiClient, db, keychain::OsKeychain, llm::mistral_client::MistralClient,
+    model_manager::LocalModelManager,
 };
 
 use state::AppState;
@@ -33,6 +34,7 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
     let models_dir = data_dir.join("models");
     let comfyui_url = "http://localhost:8188".to_string();
     let comfyui_install_dir = data_dir.join("comfyui");
+    let reference_images_dir = data_dir.join("weave").join("reference-images");
 
     let state = AppState {
         pool,
@@ -41,6 +43,7 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
         image_gen: Arc::new(ComfyUiClient::new(comfyui_url)),
         model_manager: Arc::new(LocalModelManager::new(models_dir)),
         comfy_installer: Arc::new(LocalComfyInstaller::new(comfyui_install_dir)),
+        attachment_store: Arc::new(LocalAttachmentStore::new(reference_images_dir)),
     };
 
     app.manage(state);

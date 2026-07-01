@@ -24,7 +24,7 @@ tauri-build = { workspace = true, features = [] }
 [dependencies]
 weave-shell = { path = "crates/weave-shell" }
 
-tauri = { workspace = true, features = ["tray-icon"] }
+tauri = { workspace = true, features = ["tray-icon", "protocol-asset"] }
 serde_json = { workspace = true }
 tauri-plugin-stronghold = { workspace = true }
 tauri-plugin-notification = { workspace = true }
