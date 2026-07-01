@@ -1,8 +1,16 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { open as openUrl } from "@tauri-apps/plugin-shell";
   import { i18n } from "$lib/i18n/index.svelte";
 
   type Service = "mistral" | "civitai" | "huggingface";
+
+  // Stránky, kde si uživatel založí účet a vygeneruje API token.
+  const TOKEN_URLS: Record<Service, string> = {
+    mistral: "https://console.mistral.ai/api-keys",
+    civitai: "https://civitai.com/user/account",
+    huggingface: "https://huggingface.co/settings/tokens",
+  };
 
   interface KeyField {
     service: Service;
@@ -17,6 +25,14 @@
     { service: "civitai", label: "", value: "", saving: false, saved: false },
     { service: "huggingface", label: "", value: "", saving: false, saved: false },
   ]);
+
+  async function openTokenPage(service: Service) {
+    try {
+      await openUrl(TOKEN_URLS[service]);
+    } catch (e) {
+      console.warn("Nepodařilo se otevřít odkaz:", e);
+    }
+  }
 
   $effect(() => {
     fields[0].label = i18n.m.wizard.steps.apiKeys.mistral;
@@ -44,7 +60,16 @@
   <div class="fields">
     {#each fields as field}
       <div class="field">
-        <label for={field.service}>{field.label}</label>
+        <div class="label-row">
+          <label for={field.service}>{field.label}</label>
+          <button
+            type="button"
+            class="link-btn"
+            onclick={() => openTokenPage(field.service)}
+            title={i18n.m.wizard.steps.apiKeys.howToGet}
+            aria-label={i18n.m.wizard.steps.apiKeys.howToGet}
+          >🌐</button>
+        </div>
         <div class="input-row">
           <input
             id={field.service}
@@ -104,10 +129,31 @@
     gap: 0.35rem;
   }
 
+  .label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
   label {
     font-size: 0.82rem;
     font-weight: 500;
     color: var(--color-text-muted);
+  }
+
+  .link-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 0.9rem;
+    padding: 0.1rem 0.3rem;
+    border-radius: 5px;
+    opacity: 0.7;
+    transition: opacity 0.15s, background 0.15s;
+  }
+  .link-btn:hover {
+    opacity: 1;
+    background: var(--color-surface-2);
   }
 
   .input-row {
