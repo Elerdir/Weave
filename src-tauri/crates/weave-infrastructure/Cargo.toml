@@ -25,6 +25,7 @@ futures-util = "0.3"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
+genpdf = "0.2"
 
 [dev-dependencies]
 wiremock = { workspace = true }

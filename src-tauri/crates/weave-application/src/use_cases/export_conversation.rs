@@ -8,7 +8,10 @@ use weave_domain::{
 
 use crate::{
     error::{AppError, AppResult},
-    ports::conversation_repository::{ConversationRepository, MessageRepository},
+    ports::{
+        conversation_repository::{ConversationRepository, MessageRepository},
+        pdf_exporter::PdfExporter,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -16,6 +19,7 @@ use crate::{
 pub enum ExportFormat {
     Markdown,
     Html,
+    Pdf,
 }
 
 impl ExportFormat {
@@ -23,6 +27,7 @@ impl ExportFormat {
         match self {
             ExportFormat::Markdown => "md",
             ExportFormat::Html => "html",
+            ExportFormat::Pdf => "pdf",
         }
     }
 }
@@ -30,25 +35,28 @@ impl ExportFormat {
 pub struct ExportConversationUseCase {
     conv_repo: Arc<dyn ConversationRepository>,
     msg_repo: Arc<dyn MessageRepository>,
+    pdf: Arc<dyn PdfExporter>,
 }
 
 impl ExportConversationUseCase {
     pub fn new(
         conv_repo: Arc<dyn ConversationRepository>,
         msg_repo: Arc<dyn MessageRepository>,
+        pdf: Arc<dyn PdfExporter>,
     ) -> Self {
         Self {
             conv_repo,
             msg_repo,
+            pdf,
         }
     }
 
-    /// Vyrenderuje konverzaci do zvoleného formátu.
-    pub async fn render(
+    /// Vyrenderuje konverzaci do zvoleného formátu jako bajty (pro zápis do souboru).
+    pub async fn render_bytes(
         &self,
         conversation_id: &ConversationId,
         format: ExportFormat,
-    ) -> AppResult<String> {
+    ) -> AppResult<Vec<u8>> {
         let conversation = self
             .conv_repo
             .find_by_id(conversation_id)
@@ -57,8 +65,9 @@ impl ExportConversationUseCase {
         let messages = self.msg_repo.list_by_conversation(conversation_id).await?;
 
         Ok(match format {
-            ExportFormat::Markdown => render_markdown(&conversation, &messages),
-            ExportFormat::Html => render_html(&conversation, &messages),
+            ExportFormat::Markdown => render_markdown(&conversation, &messages).into_bytes(),
+            ExportFormat::Html => render_html(&conversation, &messages).into_bytes(),
+            ExportFormat::Pdf => self.pdf.render(&conversation, &messages)?,
         })
     }
 

@@ -6,11 +6,12 @@
   let open = $state(false);
   let busy = $state(false);
 
-  type Format = "markdown" | "html";
+  type Format = "markdown" | "html" | "pdf";
 
   const formats: { id: Format; label: string; ext: string }[] = [
     { id: "markdown", label: "Markdown", ext: "md" },
     { id: "html", label: "HTML", ext: "html" },
+    { id: "pdf", label: "PDF", ext: "pdf" },
   ];
 
   async function exportAs(format: Format, ext: string) {
