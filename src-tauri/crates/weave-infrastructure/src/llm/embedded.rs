@@ -126,6 +126,8 @@ fn drain_with_error(rx: Receiver<WorkerRequest>, msg: &str) {
     }
 }
 
+const N_BATCH: usize = 512;
+
 fn run_inference(
     backend: &LlamaBackend,
     model: &LlamaModel,
@@ -134,7 +136,7 @@ fn run_inference(
 ) -> AppResult<()> {
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(n_ctx.max(512)))
-        .with_n_batch(512);
+        .with_n_batch(N_BATCH as u32);
     let mut ctx = model
         .new_context(backend, ctx_params)
         .map_err(|e| AppError::Llm(format!("Kontext: {e}")))?;
@@ -144,15 +146,23 @@ fn run_inference(
         .str_to_token(&prompt, AddBos::Always)
         .map_err(|e| AppError::Llm(format!("Tokenizace: {e}")))?;
 
-    let mut batch = LlamaBatch::new(tokens.len().max(512), 1);
+    // Prompt musí jít do decode() po částech ≤ N_BATCH — llama.cpp jinak
+    // spadne na GGML_ASSERT(n_tokens_all <= cparams.n_batch). U delší
+    // historie konverzace (teď navíc bez umělého stropu na délku odpovědi)
+    // prompt běžně přesáhne 512 tokenů.
+    let mut batch = LlamaBatch::new(N_BATCH, 1);
     let last = tokens.len() - 1;
-    for (i, token) in tokens.iter().enumerate() {
-        batch
-            .add(*token, i as i32, &[0], i == last)
-            .map_err(|e| AppError::Llm(format!("Batch: {e}")))?;
+    for chunk_start in (0..tokens.len()).step_by(N_BATCH) {
+        let chunk_end = (chunk_start + N_BATCH).min(tokens.len());
+        batch.clear();
+        for (i, token) in tokens.iter().enumerate().take(chunk_end).skip(chunk_start) {
+            batch
+                .add(*token, i as i32, &[0], i == last)
+                .map_err(|e| AppError::Llm(format!("Batch: {e}")))?;
+        }
+        ctx.decode(&mut batch)
+            .map_err(|e| AppError::Llm(format!("Decode: {e}")))?;
     }
-    ctx.decode(&mut batch)
-        .map_err(|e| AppError::Llm(format!("Decode: {e}")))?;
 
     let mut sampler = LlamaSampler::chain_simple([
         LlamaSampler::top_k(40),
@@ -166,7 +176,8 @@ fn run_inference(
     let mut utf8_decoder = encoding_rs::UTF_8.new_decoder();
 
     let start = std::time::Instant::now();
-    let mut n_cur = batch.n_tokens();
+    // Ne batch.n_tokens() — po dekódování po částech odráží jen poslední kus.
+    let mut n_cur = tokens.len() as i32;
     let mut completion_tokens = 0u32;
     let max_tokens = req.request.max_tokens;
     let n_ctx_limit = n_ctx as i32;
