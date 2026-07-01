@@ -9,6 +9,7 @@
   import type { IndexedFile } from "$lib/stores/workspace.svelte";
   import MessageBubble from "./MessageBubble.svelte";
   import PersonaPicker from "./PersonaPicker.svelte";
+  import ExportMenu from "./ExportMenu.svelte";
 
   interface Mention {
     path: string;
@@ -129,13 +130,16 @@
       </span>
       <PersonaPicker />
     </div>
-    {#if conversationStore.currentStats}
-      <span class="tps-badge">
-        {i18n.t("chat.tokensPerSecond", {
-          tps: conversationStore.currentStats.tokens_per_second.toFixed(1)
-        })} · {conversationStore.currentStats.model_id}
-      </span>
-    {/if}
+    <div class="header-right">
+      {#if conversationStore.currentStats}
+        <span class="tps-badge">
+          {i18n.t("chat.tokensPerSecond", {
+            tps: conversationStore.currentStats.tokens_per_second.toFixed(1)
+          })} · {conversationStore.currentStats.model_id}
+        </span>
+      {/if}
+      <ExportMenu />
+    </div>
   </header>
 
   <div class="messages" bind:this={messagesEl}>
@@ -227,6 +231,12 @@
   }
 
   .header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .header-right {
     display: flex;
     align-items: center;
     gap: 0.75rem;

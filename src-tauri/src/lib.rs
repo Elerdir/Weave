@@ -24,6 +24,8 @@ pub fn run() {
             commands::conversation::list_conversations,
             commands::conversation::create_conversation,
             commands::conversation::delete_conversation,
+            commands::conversation::suggest_export_filename,
+            commands::conversation::export_conversation,
             commands::message::list_messages,
             commands::message::send_message,
             commands::settings::get_api_key_status,
