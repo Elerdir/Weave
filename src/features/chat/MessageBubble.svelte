@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { convertFileSrc } from "@tauri-apps/api/core";
   import type { Message } from "$lib/stores/conversations.svelte";
   import { i18n } from "$lib/i18n/index.svelte";
   import { tts } from "$lib/services/tts.svelte";
@@ -7,6 +8,7 @@
 
   const isUser = $derived(msg.role === "user");
   const isSpeaking = $derived(tts.speakingId === msg.id);
+  const imageAttachments = $derived(msg.attachments.filter((a) => a.type === "image"));
 
   // Jednoduchý markdown renderer — inline kód + code bloky
   function renderContent(text: string): string {
@@ -15,7 +17,11 @@
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="inline-image" />')
+      .replace(
+        /!\[([^\]]*)\]\(([^)]+)\)/g,
+        (_match, alt: string, path: string) =>
+          `<img src="${convertFileSrc(path)}" alt="${alt}" class="inline-image" />`
+      )
       .replace(/\n/g, "<br>");
   }
 
@@ -26,6 +32,14 @@
 
 <div class="bubble-wrap" class:user={isUser}>
   <div class="bubble" class:user={isUser} class:assistant={!isUser}>
+    {#if imageAttachments.length > 0}
+      <div class="attachment-thumbs">
+        {#each imageAttachments as att (att.path)}
+          <img src={convertFileSrc(att.path)} alt="" class="attachment-thumb" />
+        {/each}
+      </div>
+    {/if}
+
     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
     <div class="bubble-content">{@html renderContent(msg.content)}</div>
 
@@ -111,6 +125,21 @@
     max-width: 100%;
     border-radius: 8px;
     margin-top: 0.5rem;
+  }
+
+  .attachment-thumbs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .attachment-thumb {
+    width: 96px;
+    height: 96px;
+    object-fit: cover;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
   }
 
   .stats {

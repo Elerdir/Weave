@@ -60,6 +60,8 @@ const en: Messages = {
     thinking: "Thinking...",
     generating: "Generating image...",
     imageGenerated: "Image generated",
+    addReferenceImage: "Add reference image",
+    removeReferenceImage: "Remove image",
   },
   sidebar: {
     conversations: "Conversations",
