@@ -4,9 +4,21 @@
   import type { Locale } from "$lib/i18n/index.svelte";
   import { themeStore } from "$lib/theme/index.svelte";
   import type { Theme } from "$lib/theme/index.svelte";
+  import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
   import { settingsStore } from "$lib/stores/settings.svelte";
   import type { ApiServiceId } from "$lib/stores/settings.svelte";
   import { modelsStore, formatBytes } from "$lib/stores/models.svelte";
+
+  async function pickModelFile() {
+    const path = await openFilePicker({
+      multiple: false,
+      filters: [{ name: "GGUF model", extensions: ["gguf"] }],
+    });
+    if (typeof path === "string") {
+      settingsStore.setModelPath(path);
+      await settingsStore.saveModelPath();
+    }
+  }
 
   let { onClose }: { onClose: () => void } = $props();
 
@@ -188,7 +200,43 @@
             >
               {i18n.m.settings.llm.local}
             </button>
+            <button
+              class="chip"
+              class:selected={settingsStore.llmBackend === "embedded"}
+              onclick={() => settingsStore.setBackend("embedded")}
+            >
+              {i18n.m.settings.llm.embedded}
+            </button>
           </div>
+
+          {#if settingsStore.llmBackend === "embedded"}
+            <p class="hint" style="margin-top:1rem">{i18n.m.settings.llm.embeddedHint}</p>
+            <label class="field-label" for="model-path">{i18n.m.settings.llm.modelPath}</label>
+            <div class="comfyui-row">
+              <input
+                id="model-path"
+                type="text"
+                readonly
+                value={settingsStore.modelPath}
+                placeholder={i18n.m.settings.llm.modelPathPlaceholder}
+              />
+              <button class="btn-sm primary" onclick={pickModelFile}>
+                {i18n.m.settings.llm.browse}
+              </button>
+            </div>
+            <label class="field-label" for="gpu-layers" style="margin-top:0.75rem">
+              {i18n.m.settings.llm.gpuLayers}
+            </label>
+            <input
+              id="gpu-layers"
+              class="gpu-layers-input"
+              type="number"
+              min="0"
+              value={settingsStore.gpuLayers}
+              oninput={(e) => settingsStore.setGpuLayers((e.target as HTMLInputElement).value)}
+              onblur={() => settingsStore.saveGpuLayers()}
+            />
+          {/if}
 
           {#if settingsStore.llmBackend === "local"}
             <label class="field-label" for="local-url" style="margin-top:1rem">
@@ -556,6 +604,20 @@
   .comfyui-row {
     display: flex;
     gap: 0.5rem;
+  }
+
+  .gpu-layers-input {
+    width: 100px;
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    padding: 0.45rem 0.65rem;
+    font-size: 0.85rem;
+    outline: none;
+  }
+  .gpu-layers-input:focus {
+    border-color: var(--color-accent);
   }
 
   .conn-status {

@@ -90,6 +90,12 @@ const en: Messages = {
       test: "Test connection",
       connected: "Connected",
       disconnected: "Disconnected",
+      embedded: "Embedded GPU inference",
+      embeddedHint: "The model loads directly into Weave and runs on the GPU (CUDA/Metal/Vulkan) with no external server.",
+      modelPath: "Model file (.gguf)",
+      modelPathPlaceholder: "Not selected — pick a .gguf file",
+      browse: "Browse",
+      gpuLayers: "GPU layers (999 = all)",
     },
     notifications: {
       label: "System notifications",

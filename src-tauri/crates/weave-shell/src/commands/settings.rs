@@ -98,9 +98,11 @@ pub async fn test_local_llm_connection(url: String) -> Result<bool, String> {
 pub const LLM_BACKEND_KEY: &str = "llm.backend";
 pub const LLM_LOCAL_URL_KEY: &str = "llm.local_url";
 pub const DEFAULT_LOCAL_URL: &str = "http://localhost:8080";
+pub const LLM_MODEL_PATH_KEY: &str = "llm.model_path";
+pub const LLM_GPU_LAYERS_KEY: &str = "llm.gpu_layers";
 
 /// Sestaví aktivní LLM klienta podle uloženého nastavení
-/// (Mistral API vs. lokální llama.cpp server).
+/// (Mistral API / lokální llama.cpp server / vestavěná GPU inference).
 pub async fn resolve_llm(
     state: &AppState,
 ) -> std::sync::Arc<dyn weave_application::ports::llm_port::LlmPort> {
@@ -115,6 +117,28 @@ pub async fn resolve_llm(
         .ok()
         .flatten()
         .unwrap_or_else(|| "mistral".to_string());
+
+    // Vestavěná GPU inference (jen když je zkompilovaná feature llm-embedded).
+    #[cfg(feature = "llm-embedded")]
+    if backend == "embedded" {
+        use weave_infrastructure::llm::embedded::EmbeddedLlamaClient;
+
+        let path = app_config::get(&state.pool, LLM_MODEL_PATH_KEY)
+            .await
+            .ok()
+            .flatten();
+        if let Some(path) = path.filter(|p| !p.is_empty()) {
+            let layers = app_config::get(&state.pool, LLM_GPU_LAYERS_KEY)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(999);
+            tracing::info!(%path, layers, "Aktivuji vestavěnou GPU inferenci");
+            return Arc::new(EmbeddedLlamaClient::new(path.into(), layers, 4096));
+        }
+        tracing::warn!("backend=embedded, ale není nastavena cesta k modelu → fallback Mistral");
+    }
 
     if backend == "local" {
         let url = app_config::get(&state.pool, LLM_LOCAL_URL_KEY)

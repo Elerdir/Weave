@@ -52,8 +52,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      # Bez --all-features: GPU inference featury (llm-cuda/llm-metal/llm-vulkan)
+      # vyžadují CUDA/Metal/Vulkan toolchain, který CI runner nemá — testují se
+      # a buildí ručně (viz README, run-dev.bat), ne v CI.
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --workspace -- -D warnings
 
       - name: Tests
         run: cargo test --all

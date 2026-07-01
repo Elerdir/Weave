@@ -7,6 +7,12 @@ license.workspace = true
 rust-version.workspace = true
 description = "Weave shell — Tauri entry point a commands."
 
+[features]
+llm-embedded = ["weave-infrastructure/llm-embedded"]
+llm-cuda = ["weave-infrastructure/llm-cuda", "llm-embedded"]
+llm-metal = ["weave-infrastructure/llm-metal", "llm-embedded"]
+llm-vulkan = ["weave-infrastructure/llm-vulkan", "llm-embedded"]
+
 [dependencies]
 weave-domain = { path = "../weave-domain" }
 weave-application = { path = "../weave-application" }
