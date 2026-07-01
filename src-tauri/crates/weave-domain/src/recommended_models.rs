@@ -42,6 +42,48 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
             download_url: "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf".into(),
             recommended_gpu_layers: 999,
         },
+        RecommendedModel {
+            id: "tiger-gemma-12b-v3".into(),
+            name: "Tiger Gemma 12B v3".into(),
+            description: "Doladěný Gemma 3 12B — silná vícejazyčnost (i čeština), otevřenější \
+                i k citlivějším a dospělým tématům. Potřebuje ~9 GB VRAM."
+                .into(),
+            size_bytes: 7_867_145_696,
+            download_url: "https://huggingface.co/TheDrummer/Tiger-Gemma-12B-v3-GGUF/resolve/main/Tiger-Gemma-12B-v3b-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
+        RecommendedModel {
+            id: "magnum-v4-22b".into(),
+            name: "Magnum v4 22B".into(),
+            description: "Cílí na kvalitu prózy srovnatelnou s velkými cloudovými modely — \
+                tvůrčí psaní a delší příběhy včetně dospělého obsahu. Potřebuje ~14 GB VRAM."
+                .into(),
+            size_bytes: 13_341_241_824,
+            download_url: "https://huggingface.co/anthracite-org/magnum-v4-22b-gguf/resolve/main/magnum-v4-22b-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
+        RecommendedModel {
+            id: "cydonia-24b-v4.1".into(),
+            name: "Cydonia 24B v4.1".into(),
+            description: "Založeno na Mistral Small 24B — nejlepší kvalita a vícejazyčnost \
+                (i čeština) z nabídky, laděné na roleplay a tvůrčí psaní bez cenzurních \
+                omezení. Potřebuje ~16 GB VRAM."
+                .into(),
+            size_bytes: 14_333_910_048,
+            download_url: "https://huggingface.co/TheDrummer/Cydonia-24B-v4.1-GGUF/resolve/main/Cydonia-24B-v4j-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
+        RecommendedModel {
+            id: "dolphin3.0-mistral-24b".into(),
+            name: "Dolphin 3.0 Mistral 24B".into(),
+            description: "Založeno na Mistral Small 24B — všestranný model bez vestavěných \
+                odmítání, vhodný i pro dospělý obsah. Silná vícejazyčnost (i čeština). \
+                Potřebuje ~16 GB VRAM."
+                .into(),
+            size_bytes: 14_333_925_664,
+            download_url: "https://huggingface.co/bartowski/cognitivecomputations_Dolphin3.0-Mistral-24B-GGUF/resolve/main/cognitivecomputations_Dolphin3.0-Mistral-24B-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
     ]
 }
 
