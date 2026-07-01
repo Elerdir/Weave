@@ -1,19 +1,18 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { i18n } from "$lib/i18n/index.svelte";
+  import { modelsStore, formatBytes } from "$lib/stores/models.svelte";
 
-  // Doporučené modely k stažení — produkčně načíst z API
-  const recommended = {
-    id: "mistral-7b-instruct-v0.3",
-    name: "Mistral 7B Instruct v0.3",
-    size: "4.1 GB",
-    description: "Rychlý, kvalitní lokální model. Funguje bez internetu.",
-  };
-
-  let downloading = $state(false);
   let skipped = $state(false);
 
-  function skip() {
-    skipped = true;
+  onMount(() => {
+    modelsStore.load().catch((e) => console.warn("models load selhal:", e));
+  });
+
+  function downloadPercent(): number {
+    const d = modelsStore.download;
+    if (!d || d.total === 0) return 0;
+    return Math.round((d.downloaded / d.total) * 100);
   }
 </script>
 
@@ -22,29 +21,62 @@
   <p class="description">{i18n.m.wizard.steps.models.description}</p>
 
   {#if !skipped}
-    <div class="model-card">
-      <div class="model-info">
-        <div class="model-name">{recommended.name}</div>
-        <div class="model-desc">{recommended.description}</div>
+    {#if modelsStore.recommended.length === 0}
+      <p class="loading-hint">{i18n.m.common.loading}</p>
+    {:else}
+      <div class="model-list">
+        {#each modelsStore.recommended as rec (rec.id)}
+          {@const downloaded = modelsStore.isDownloaded(rec.id)}
+          <div class="model-card">
+            <div class="model-info">
+              <div class="model-name">
+                {rec.name}
+                {#if downloaded}<span class="done-badge">✓ {i18n.m.wizard.steps.models.ready}</span>{/if}
+              </div>
+              <div class="model-desc">{rec.description}</div>
+              <div class="model-size">{formatBytes(rec.size_bytes)}</div>
+            </div>
+
+            {#if downloaded}
+              <!-- Model už stažen, nic dalšího tu není potřeba dělat -->
+            {:else if modelsStore.download?.modelId === rec.id}
+              <div class="progress-bar">
+                <div class="progress-fill" style="width: {downloadPercent()}%"></div>
+              </div>
+              <span class="progress-text">
+                {#if modelsStore.download.phase === "verifying"}
+                  {i18n.m.common.loading}
+                {:else}
+                  {i18n.m.wizard.steps.models.downloading}
+                  {downloadPercent()}% ({formatBytes(modelsStore.download.downloaded)} / {formatBytes(modelsStore.download.total)})
+                {/if}
+              </span>
+            {:else}
+              <div class="model-actions">
+                <button
+                  class="btn-download"
+                  disabled={!!modelsStore.download}
+                  onclick={() => modelsStore.downloadRecommended(rec.id)}
+                >
+                  {i18n.t("wizard.steps.models.download", { size: formatBytes(rec.size_bytes) })}
+                </button>
+              </div>
+            {/if}
+          </div>
+        {/each}
       </div>
-      <div class="model-actions">
-        <button class="btn-download" onclick={() => downloading = true} disabled={downloading}>
-          {downloading
-            ? i18n.m.wizard.steps.models.downloading
-            : i18n.t("wizard.steps.models.download", { size: recommended.size })}
-        </button>
-        <button class="btn-skip" onclick={skip}>{i18n.m.wizard.steps.models.skip}</button>
-      </div>
-      {#if downloading}
-        <div class="progress-bar">
-          <div class="progress-fill" style="width: 35%"></div>
-        </div>
-        <span class="progress-text">Stahuji... 35%</span>
+
+      {#if modelsStore.error}
+        <p class="error-text">{modelsStore.error}</p>
       {/if}
-    </div>
+
+      <button class="btn-skip" onclick={() => (skipped = true)}>
+        {i18n.m.wizard.steps.models.skip}
+      </button>
+    {/if}
   {:else}
     <div class="skipped-note">
-      Lokální model přeskočen. Weave bude používat Mistral API. Modely lze stáhnout kdykoliv v nastavení.
+      {i18n.m.wizard.steps.models.skippedNote}
     </div>
   {/if}
 </div>
@@ -53,20 +85,40 @@
   .step { display: flex; flex-direction: column; gap: 1rem; }
   h2 { font-size: 1.25rem; font-weight: 600; }
   .description { color: var(--color-text-muted); line-height: 1.7; font-size: 0.875rem; }
+  .loading-hint { color: var(--color-text-muted); font-size: 0.875rem; }
+
+  .model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+    max-height: 280px;
+    overflow-y: auto;
+  }
 
   .model-card {
     background: var(--color-surface-2);
     border: 1px solid var(--color-border);
     border-radius: 12px;
-    padding: 1.25rem;
+    padding: 1rem 1.25rem;
     display: flex;
     flex-direction: column;
-    gap: 1rem;
-    margin-top: 0.5rem;
+    gap: 0.6rem;
   }
 
-  .model-name { font-weight: 600; margin-bottom: 0.25rem; }
+  .model-name {
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .done-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--color-success);
+  }
   .model-desc { font-size: 0.82rem; color: var(--color-text-muted); }
+  .model-size { font-size: 0.72rem; color: var(--color-text-muted); }
 
   .model-actions {
     display: flex;
@@ -83,10 +135,11 @@
     font-weight: 600;
     cursor: pointer;
     transition: background 0.2s;
+    align-self: flex-start;
   }
 
   .btn-download:hover:not(:disabled) { background: var(--color-accent-hover); }
-  .btn-download:disabled { opacity: 0.6; cursor: default; }
+  .btn-download:disabled { opacity: 0.5; cursor: default; }
 
   .btn-skip {
     background: transparent;
@@ -96,6 +149,7 @@
     padding: 0.5rem 1rem;
     font-size: 0.875rem;
     cursor: pointer;
+    align-self: flex-start;
   }
 
   .progress-bar {
@@ -115,6 +169,11 @@
   .progress-text {
     font-size: 0.8rem;
     color: var(--color-text-muted);
+  }
+
+  .error-text {
+    font-size: 0.8rem;
+    color: var(--color-error);
   }
 
   .skipped-note {

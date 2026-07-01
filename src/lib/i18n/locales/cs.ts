@@ -40,6 +40,8 @@ const cs = {
         download: "Stáhnout ({size})",
         skip: "Přeskočit",
         downloading: "Stahuji...",
+        ready: "staženo",
+        skippedNote: "Lokální model přeskočen. Weave bude používat Mistral API. Modely lze stáhnout kdykoliv v Nastavení.",
       },
     },
   },

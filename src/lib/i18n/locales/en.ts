@@ -42,6 +42,8 @@ const en: Messages = {
         download: "Download ({size})",
         skip: "Skip",
         downloading: "Downloading...",
+        ready: "downloaded",
+        skippedNote: "Local model skipped. Weave will use the Mistral API. You can download models anytime in Settings.",
       },
     },
   },
