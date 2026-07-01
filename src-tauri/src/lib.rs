@@ -35,6 +35,7 @@ pub fn run() {
             commands::settings::get_app_setting,
             commands::settings::set_app_setting,
             commands::settings::test_comfyui_connection,
+            commands::settings::test_local_llm_connection,
             commands::models::list_local_models,
             commands::models::detect_gpu,
             commands::models::download_model,

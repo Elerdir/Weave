@@ -53,12 +53,15 @@ pub async fn send_message(
     let workspace_repo = Arc::new(SqliteWorkspaceRepository::new(state.pool.clone()));
     let persona_repo = Arc::new(SqlitePersonaRepository::new(state.pool.clone()));
 
+    // Vybereme LLM backend podle nastavení (Mistral API / lokální llama.cpp server)
+    let llm = crate::commands::settings::resolve_llm(&state).await;
+
     let (tx, mut rx) = mpsc::channel::<StreamChunk>(128);
 
     let uc = SendMessageUseCase::new(
         conv_repo,
         msg_repo,
-        state.llm.clone(),
+        llm,
         state.image_gen.clone(),
         workspace_repo,
         persona_repo,

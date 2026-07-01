@@ -85,3 +85,53 @@ pub async fn test_comfyui_connection(url: String) -> Result<bool, String> {
     let client = ComfyUiClient::new(url);
     Ok(client.is_available().await)
 }
+
+/// Ověří dostupnost lokálního OpenAI-kompatibilního LLM serveru (llama.cpp).
+#[tauri::command]
+pub async fn test_local_llm_connection(url: String) -> Result<bool, String> {
+    use weave_infrastructure::llm::local_client::LocalLlmClient;
+
+    let client = LocalLlmClient::new(url);
+    Ok(client.is_available().await)
+}
+
+pub const LLM_BACKEND_KEY: &str = "llm.backend";
+pub const LLM_LOCAL_URL_KEY: &str = "llm.local_url";
+pub const DEFAULT_LOCAL_URL: &str = "http://localhost:8080";
+
+/// Sestaví aktivní LLM klienta podle uloženého nastavení
+/// (Mistral API vs. lokální llama.cpp server).
+pub async fn resolve_llm(
+    state: &AppState,
+) -> std::sync::Arc<dyn weave_application::ports::llm_port::LlmPort> {
+    use std::sync::Arc;
+    use weave_application::ports::keychain_port::ApiService;
+    use weave_infrastructure::{
+        db::app_config, llm::local_client::LocalLlmClient, llm::mistral_client::MistralClient,
+    };
+
+    let backend = app_config::get(&state.pool, LLM_BACKEND_KEY)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "mistral".to_string());
+
+    if backend == "local" {
+        let url = app_config::get(&state.pool, LLM_LOCAL_URL_KEY)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| DEFAULT_LOCAL_URL.to_string());
+        return Arc::new(LocalLlmClient::new(url));
+    }
+
+    // Výchozí: Mistral API (klíč z keychain)
+    let key = state
+        .keychain
+        .retrieve(&ApiService::Mistral)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    Arc::new(MistralClient::new(key))
+}

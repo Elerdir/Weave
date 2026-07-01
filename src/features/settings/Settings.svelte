@@ -10,7 +10,7 @@
 
   let { onClose }: { onClose: () => void } = $props();
 
-  type Section = "appearance" | "language" | "apiKeys" | "comfyui" | "models";
+  type Section = "appearance" | "language" | "apiKeys" | "llm" | "comfyui" | "models";
   let section = $state<Section>("appearance");
 
   let downloadUrl = $state("");
@@ -95,6 +95,9 @@
         <button class:active={section === "apiKeys"} onclick={() => (section = "apiKeys")}>
           {i18n.m.settings.sections.apiKeys}
         </button>
+        <button class:active={section === "llm"} onclick={() => (section = "llm")}>
+          {i18n.m.settings.sections.llm}
+        </button>
         <button class:active={section === "comfyui"} onclick={() => (section = "comfyui")}>
           {i18n.m.settings.sections.comfyui}
         </button>
@@ -164,6 +167,50 @@
               </div>
             {/each}
           </div>
+        {:else if section === "llm"}
+          <h3>{i18n.m.settings.llm.backend}</h3>
+          <p class="hint">{i18n.m.settings.llm.hint}</p>
+          <div class="option-row">
+            <button
+              class="chip"
+              class:selected={settingsStore.llmBackend === "mistral"}
+              onclick={() => settingsStore.setBackend("mistral")}
+            >
+              {i18n.m.settings.llm.mistral}
+            </button>
+            <button
+              class="chip"
+              class:selected={settingsStore.llmBackend === "local"}
+              onclick={() => settingsStore.setBackend("local")}
+            >
+              {i18n.m.settings.llm.local}
+            </button>
+          </div>
+
+          {#if settingsStore.llmBackend === "local"}
+            <label class="field-label" for="local-url" style="margin-top:1rem">
+              {i18n.m.settings.llm.localUrl}
+            </label>
+            <div class="comfyui-row">
+              <input
+                id="local-url"
+                type="text"
+                value={settingsStore.localUrl}
+                oninput={(e) => settingsStore.setLocalUrl((e.target as HTMLInputElement).value)}
+                onblur={() => settingsStore.saveLocalUrl()}
+              />
+              <button class="btn-sm primary" onclick={() => settingsStore.testLocal()}>
+                {i18n.m.settings.llm.test}
+              </button>
+            </div>
+            {#if settingsStore.localStatus === "connected"}
+              <span class="conn-status connected">● {i18n.m.settings.llm.connected}</span>
+            {:else if settingsStore.localStatus === "disconnected"}
+              <span class="conn-status disconnected">● {i18n.m.settings.llm.disconnected}</span>
+            {:else if settingsStore.localStatus === "testing"}
+              <span class="conn-status testing">{i18n.m.common.loading}</span>
+            {/if}
+          {/if}
         {:else if section === "comfyui"}
           <h3>{i18n.m.settings.sections.comfyui}</h3>
           <label class="field-label" for="comfyui-url">{i18n.m.settings.comfyui.url}</label>

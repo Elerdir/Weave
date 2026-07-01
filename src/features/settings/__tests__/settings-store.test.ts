@@ -53,4 +53,36 @@ describe("settingsStore", () => {
     await settingsStore.testComfyui();
     expect(settingsStore.comfyuiStatus).toBe("disconnected");
   });
+
+  it("load() načte LLM backend a lokální URL", async () => {
+    mockInvoke.mockImplementation(async (cmd: string, args?: any) => {
+      if (cmd === "get_api_key_status") return false;
+      if (cmd === "get_app_setting") {
+        if (args.key === "llm.backend") return "local";
+        if (args.key === "llm.local_url") return "http://localhost:1234";
+        return null;
+      }
+      return null;
+    });
+
+    await settingsStore.load();
+    expect(settingsStore.llmBackend).toBe("local");
+    expect(settingsStore.localUrl).toBe("http://localhost:1234");
+  });
+
+  it("setBackend() uloží volbu backendu", async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await settingsStore.setBackend("local");
+    expect(settingsStore.llmBackend).toBe("local");
+    expect(mockInvoke).toHaveBeenCalledWith("set_app_setting", {
+      key: "llm.backend",
+      value: "local",
+    });
+  });
+
+  it("testLocal() nastaví connected při úspěchu", async () => {
+    mockInvoke.mockResolvedValueOnce(true);
+    await settingsStore.testLocal();
+    expect(settingsStore.localStatus).toBe("connected");
+  });
 });
