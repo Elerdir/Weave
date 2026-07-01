@@ -35,7 +35,8 @@ struct ApiMessage {
 struct ChatCompletionRequest {
     model: String,
     messages: Vec<ApiMessage>,
-    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
     temperature: f32,
     stream: bool,
 }
@@ -176,5 +177,43 @@ impl LlmPort for MistralClient {
             .map_err(|e| AppError::Llm(e.to_string()))?;
 
         Ok(resp.data.into_iter().map(|m| m.id).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn max_tokens_none_is_omitted_from_request_body() {
+        let body = ChatCompletionRequest {
+            model: "mistral-small-latest".into(),
+            messages: vec![],
+            max_tokens: None,
+            temperature: 0.7,
+            stream: true,
+        };
+
+        let json = serde_json::to_string(&body).unwrap();
+
+        assert!(
+            !json.contains("max_tokens"),
+            "max_tokens: None se nesmí posílat — jinak Mistral aplikuje výchozí strop místo generování bez umělého omezení"
+        );
+    }
+
+    #[test]
+    fn max_tokens_some_is_included_in_request_body() {
+        let body = ChatCompletionRequest {
+            model: "mistral-small-latest".into(),
+            messages: vec![],
+            max_tokens: Some(256),
+            temperature: 0.7,
+            stream: true,
+        };
+
+        let json = serde_json::to_string(&body).unwrap();
+
+        assert!(json.contains("\"max_tokens\":256"));
     }
 }

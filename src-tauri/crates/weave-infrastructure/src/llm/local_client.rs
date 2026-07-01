@@ -45,7 +45,8 @@ struct ApiMessage {
 struct ChatCompletionRequest {
     model: String,
     messages: Vec<ApiMessage>,
-    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
     temperature: f32,
     stream: bool,
 }
@@ -198,7 +199,7 @@ mod tests {
         ChatRequest {
             messages: vec![Message::user(ConversationId::new(), "Ahoj")],
             model_id: "local-model".into(),
-            max_tokens: 128,
+            max_tokens: Some(128),
             temperature: 0.7,
             stream: true,
         }
@@ -250,6 +251,24 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let result = client.chat_stream(chat_request(), tx).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn max_tokens_none_is_omitted_from_request_body() {
+        let body = ChatCompletionRequest {
+            model: "local-model".into(),
+            messages: vec![],
+            max_tokens: None,
+            temperature: 0.7,
+            stream: true,
+        };
+
+        let json = serde_json::to_string(&body).unwrap();
+
+        assert!(
+            !json.contains("max_tokens"),
+            "max_tokens: None se nesmí posílat — server pak generuje bez umělého omezení"
+        );
     }
 
     #[tokio::test]

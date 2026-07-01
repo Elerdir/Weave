@@ -90,7 +90,7 @@ impl SendMessageUseCase {
                 let request = ChatRequest {
                     messages: history,
                     model_id,
-                    max_tokens: 2048,
+                    max_tokens: None,
                     temperature: 0.7,
                     stream: true,
                 };

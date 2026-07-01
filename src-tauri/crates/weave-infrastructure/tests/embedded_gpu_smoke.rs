@@ -26,7 +26,7 @@ async fn generates_real_tokens_on_gpu() {
             "Řekni jedno krátké české slovo.",
         )],
         model_id: "smoke-test".into(),
-        max_tokens: 32,
+        max_tokens: Some(32),
         temperature: 0.7,
         stream: true,
     };
