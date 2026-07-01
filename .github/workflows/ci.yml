@@ -108,6 +108,27 @@ jobs:
       - name: TypeScript check
         run: pnpm typecheck
 
+  storybook:
+    name: storybook
+    runs-on: ubuntu-latest
+    env:
+      STORYBOOK_DISABLE_TELEMETRY: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install deps
+        run: pnpm install
+
+      - name: Build Storybook
+        run: pnpm build-storybook
+
   e2e:
     name: e2e
     runs-on: ubuntu-latest
