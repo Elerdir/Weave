@@ -1,3 +1,4 @@
+pub mod attachment_store_port;
 pub mod comfy_installer_port;
 pub mod conversation_repository;
 pub mod image_gen_port;

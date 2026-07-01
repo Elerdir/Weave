@@ -61,4 +61,32 @@ describe("conversationStore rename/togglePin", () => {
     expect(conversationStore.conversations[0].id).toBe("a");
     expect(conversationStore.conversations[0].pinned).toBe(true);
   });
+
+  it("pushUserMessage() přidá zprávu bez příloh podle výchozí hodnoty", async () => {
+    await seed([conv("a")]);
+    mockInvoke.mockResolvedValueOnce([]);
+    await conversationStore.select("a");
+
+    conversationStore.pushUserMessage("ahoj");
+
+    const last = conversationStore.messages.at(-1);
+    expect(last?.role).toBe("user");
+    expect(last?.content).toBe("ahoj");
+    expect(last?.attachments).toEqual([]);
+  });
+
+  it("pushUserMessage() uloží obrázkové přílohy", async () => {
+    await seed([conv("a")]);
+    mockInvoke.mockResolvedValueOnce([]);
+    await conversationStore.select("a");
+
+    conversationStore.pushUserMessage("podívej se na tohle", [
+      { type: "image", path: "/tmp/ref.png", mime: "image/*" },
+    ]);
+
+    const last = conversationStore.messages.at(-1);
+    expect(last?.attachments).toEqual([
+      { type: "image", path: "/tmp/ref.png", mime: "image/*" },
+    ]);
+  });
 });

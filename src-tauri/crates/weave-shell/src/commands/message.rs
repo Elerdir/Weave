@@ -27,6 +27,7 @@ pub async fn send_message(
     conversation_id: String,
     content: String,
     file_refs: Option<Vec<String>>,
+    reference_images: Option<Vec<String>>,
     window: tauri::Window,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -65,6 +66,7 @@ pub async fn send_message(
         state.image_gen.clone(),
         workspace_repo,
         persona_repo,
+        state.attachment_store.clone(),
     );
 
     let window_clone = window.clone();
@@ -74,7 +76,13 @@ pub async fn send_message(
         }
     });
 
-    uc.execute(conv_id, content, file_refs.unwrap_or_default(), tx)
-        .await
-        .map_err(|e| e.to_string())
+    uc.execute(
+        conv_id,
+        content,
+        file_refs.unwrap_or_default(),
+        reference_images.unwrap_or_default(),
+        tx,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }

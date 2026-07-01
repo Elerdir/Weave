@@ -141,13 +141,13 @@ function createConversationStore() {
       currentStats = null;
     },
 
-    pushUserMessage(content: string) {
+    pushUserMessage(content: string, attachments: Attachment[] = []) {
       const msg: Message = {
         id: crypto.randomUUID(),
         conversation_id: activeId!,
         role: "user",
         content,
-        attachments: [],
+        attachments,
         stats: null,
         created_at: new Date().toISOString(),
       };

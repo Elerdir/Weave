@@ -58,6 +58,8 @@ const cs = {
     thinking: "Přemýšlím...",
     generating: "Generuji obrázek...",
     imageGenerated: "Obrázek vygenerován",
+    addReferenceImage: "Přidat referenční obrázek",
+    removeReferenceImage: "Odebrat obrázek",
   },
   sidebar: {
     conversations: "Konverzace",

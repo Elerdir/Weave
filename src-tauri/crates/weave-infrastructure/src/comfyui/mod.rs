@@ -54,7 +54,19 @@ impl ImageGenPort for ComfyUiClient {
             .json(&prompt_req)
             .send()
             .await
-            .map_err(|e| AppError::ComfyUi(e.to_string()))?
+            .map_err(|e| AppError::ComfyUi(e.to_string()))?;
+
+        // ComfyUI vrací u chybného workflow (např. chybějící checkpoint/uzel)
+        // 400 s JSON popisem chyby — bez této kontroly by se to ztratilo
+        // v nesrozumitelné serde chybě z parsování jako PromptResponse.
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::ComfyUi(format!(
+                "ComfyUI odmítl workflow: {body}"
+            )));
+        }
+
+        let resp = resp
             .json::<PromptResponse>()
             .await
             .map_err(|e| AppError::ComfyUi(e.to_string()))?;

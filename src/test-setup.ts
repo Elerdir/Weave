@@ -4,6 +4,7 @@ import { vi } from "vitest";
 // Mock Tauri API — v testech nevoláme skutečné Rust commands
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
+  convertFileSrc: vi.fn((path: string) => `asset://localhost/${path}`),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
