@@ -49,6 +49,7 @@ const cs = {
     stop: "Zastavit",
     regenerate: "Znovu vygenerovat",
     copy: "Kopírovat",
+    speak: "Přečíst nahlas",
     model: "Model",
     tokensPerSecond: "{tps} tok/s",
     newConversation: "Nová konverzace",

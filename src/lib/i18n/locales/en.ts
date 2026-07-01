@@ -51,6 +51,7 @@ const en: Messages = {
     stop: "Stop",
     regenerate: "Regenerate",
     copy: "Copy",
+    speak: "Read aloud",
     model: "Model",
     tokensPerSecond: "{tps} tok/s",
     newConversation: "New Conversation",
