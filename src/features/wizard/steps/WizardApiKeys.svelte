@@ -2,15 +2,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open as openUrl } from "@tauri-apps/plugin-shell";
   import { i18n } from "$lib/i18n/index.svelte";
-
-  type Service = "mistral" | "civitai" | "huggingface";
-
-  // Stránky, kde si uživatel založí účet a vygeneruje API token.
-  const TOKEN_URLS: Record<Service, string> = {
-    mistral: "https://console.mistral.ai/api-keys",
-    civitai: "https://civitai.com/user/account",
-    huggingface: "https://huggingface.co/settings/tokens",
-  };
+  import { TOKEN_URLS } from "$lib/token-urls";
+  import type { ApiServiceId as Service } from "$lib/token-urls";
 
   interface KeyField {
     service: Service;

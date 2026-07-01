@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ApiServiceId } from "$lib/token-urls";
 
-export type ApiServiceId = "mistral" | "civitai" | "huggingface";
+export type { ApiServiceId };
 
 export interface ApiKeyState {
   service: ApiServiceId;

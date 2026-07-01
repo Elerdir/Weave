@@ -1,3 +1,4 @@
+pub mod comfy_installer;
 pub mod comfyui;
 pub mod db;
 pub mod keychain;

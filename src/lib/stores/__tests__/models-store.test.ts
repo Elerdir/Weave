@@ -24,10 +24,12 @@ describe("modelsStore", () => {
     vi.clearAllMocks();
   });
 
-  it("load() načte modely a GPU", async () => {
+  it("load() načte modely, doporučené modely a GPU", async () => {
     mockInvoke.mockImplementation(async (cmd: string) => {
       if (cmd === "list_local_models")
         return [{ id: "m1", name: "Model 1", version: "v1", size_bytes: 1024, path: "/m1", checksum: "" }];
+      if (cmd === "list_recommended_models")
+        return [{ id: "qwen2.5-1.5b-instruct", name: "Qwen2.5 1.5B", description: "d", size_bytes: 1, download_url: "u", recommended_gpu_layers: 999 }];
       if (cmd === "detect_gpu")
         return { name: "RTX 4090", vram_mb: 24576, backend: "cuda" };
       return null;
@@ -37,7 +39,21 @@ describe("modelsStore", () => {
 
     expect(modelsStore.models).toHaveLength(1);
     expect(modelsStore.models[0].name).toBe("Model 1");
+    expect(modelsStore.recommended).toHaveLength(1);
     expect(modelsStore.gpu?.backend).toBe("cuda");
+  });
+
+  it("isDownloaded() reflektuje stažené modely", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_local_models")
+        return [{ id: "m1", name: "M1", version: "v", size_bytes: 1, path: "", checksum: "" }];
+      if (cmd === "list_recommended_models") return [];
+      if (cmd === "detect_gpu") return null;
+      return undefined;
+    });
+    await modelsStore.load();
+    expect(modelsStore.isDownloaded("m1")).toBe(true);
+    expect(modelsStore.isDownloaded("neexistuje")).toBe(false);
   });
 
   it("deleteModel() odebere model ze seznamu", async () => {
@@ -47,6 +63,7 @@ describe("modelsStore", () => {
           { id: "a", name: "A", version: "v", size_bytes: 1, path: "", checksum: "" },
           { id: "b", name: "B", version: "v", size_bytes: 1, path: "", checksum: "" },
         ];
+      if (cmd === "list_recommended_models") return [];
       if (cmd === "detect_gpu") return null;
       return undefined;
     });
@@ -58,5 +75,23 @@ describe("modelsStore", () => {
 
     expect(mockInvoke).toHaveBeenCalledWith("delete_model", { modelId: "a" });
     expect(modelsStore.models.map((m) => m.id)).toEqual(["b"]);
+  });
+
+  it("downloadRecommended() zavolá download_recommended_model a reloaduje settings", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "download_recommended_model") return undefined;
+      if (cmd === "list_local_models") return [];
+      if (cmd === "list_recommended_models") return [];
+      if (cmd === "detect_gpu") return null;
+      if (cmd === "get_api_key_status") return false;
+      if (cmd === "get_app_setting") return null;
+      return undefined;
+    });
+
+    await modelsStore.downloadRecommended("qwen2.5-1.5b-instruct");
+
+    expect(mockInvoke).toHaveBeenCalledWith("download_recommended_model", {
+      modelId: "qwen2.5-1.5b-instruct",
+    });
   });
 });
