@@ -21,7 +21,7 @@ impl LocalAttachmentStore {
     }
 }
 
-fn mime_for_extension(ext: &str) -> Option<&'static str> {
+pub(crate) fn mime_for_extension(ext: &str) -> Option<&'static str> {
     match ext.to_lowercase().as_str() {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),

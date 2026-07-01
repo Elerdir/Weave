@@ -32,6 +32,66 @@ struct PromptResponse {
     prompt_id: String,
 }
 
+#[derive(Deserialize)]
+struct UploadImageResponse {
+    name: String,
+    subfolder: String,
+}
+
+impl ComfyUiClient {
+    /// Nahraje referenční obrázek do ComfyUI přes `/upload/image` a vrátí název,
+    /// pod kterým ho pak vidí `LoadImage` uzel. Standardní `LoadImage` neumí přímou
+    /// filesystem cestu, jen soubory z vlastní `input/` složky — proto ten upload.
+    async fn upload_reference_image(&self, path: &str) -> AppResult<String> {
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|e| AppError::ComfyUi(format!("Čtení referenčního obrázku selhalo: {e}")))?;
+
+        let filename = std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "reference.png".to_string());
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let mime =
+            crate::attachment_store::mime_for_extension(ext).unwrap_or("application/octet-stream");
+
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(filename)
+            .mime_str(mime)
+            .map_err(|e| AppError::ComfyUi(e.to_string()))?;
+        let form = reqwest::multipart::Form::new().part("image", part);
+
+        let resp = self
+            .http
+            .post(format!("{}/upload/image", self.base_url))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| AppError::ComfyUi(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AppError::ComfyUi(format!(
+                "Upload referenčního obrázku do ComfyUI selhal: {body}"
+            )));
+        }
+
+        let uploaded = resp
+            .json::<UploadImageResponse>()
+            .await
+            .map_err(|e| AppError::ComfyUi(e.to_string()))?;
+
+        Ok(if uploaded.subfolder.is_empty() {
+            uploaded.name
+        } else {
+            format!("{}/{}", uploaded.subfolder, uploaded.name)
+        })
+    }
+}
+
 #[async_trait]
 impl ImageGenPort for ComfyUiClient {
     async fn generate(
@@ -39,8 +99,13 @@ impl ImageGenPort for ComfyUiClient {
         request: ImageRequest,
         tx: mpsc::Sender<ImageProgress>,
     ) -> AppResult<()> {
-        // Sestavíme základní txt2img workflow pro ComfyUI
-        let workflow = build_basic_workflow(&request);
+        // Referenční obrázek musí být nahraný do ComfyUI dřív, než na něj
+        // může workflow (LoadImage uzel) odkázat jménem.
+        let uploaded_reference = match &request.reference_image_path {
+            Some(path) => Some(self.upload_reference_image(path).await?),
+            None => None,
+        };
+        let workflow = build_basic_workflow(&request, uploaded_reference.as_deref());
         let client_id = uuid::Uuid::new_v4().to_string();
 
         let prompt_req = PromptRequest {
@@ -136,7 +201,23 @@ impl ImageGenPort for ComfyUiClient {
     }
 }
 
-fn build_basic_workflow(req: &ImageRequest) -> serde_json::Value {
+/// Sestaví workflow JSON pro ComfyUI `/prompt`. Čistá funkce (žádné I/O) —
+/// `uploaded_reference` je název souboru, který referenční obrázek dostal
+/// PO uploadu na ComfyUI server (viz `ComfyUiClient::upload_reference_image`),
+/// ne lokální filesystem cesta.
+///
+/// Bez referenčního obrázku jede běžná FLUX text-to-image větev beze změny.
+/// S referenčním obrázkem se checkpoint přepne na SDXL a zapojí se PuLID —
+/// `cubiq/PuLID_ComfyUI` patchuje SDXL cross-attention a na FLUX/DiT
+/// architekturu použít nejde.
+fn build_basic_workflow(req: &ImageRequest, uploaded_reference: Option<&str>) -> serde_json::Value {
+    match uploaded_reference {
+        Some(image) => build_pulid_workflow(req, image),
+        None => build_flux_workflow(req),
+    }
+}
+
+fn build_flux_workflow(req: &ImageRequest) -> serde_json::Value {
     serde_json::json!({
         "1": {
             "class_type": "CheckpointLoaderSimple",
@@ -183,6 +264,85 @@ fn build_basic_workflow(req: &ImageRequest) -> serde_json::Value {
     })
 }
 
+fn build_pulid_workflow(req: &ImageRequest, uploaded_image: &str) -> serde_json::Value {
+    serde_json::json!({
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": { "ckpt_name": crate::comfy_installer::SDXL_CHECKPOINT_FILENAME }
+        },
+        "2": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": req.prompt, "clip": ["1", 1] }
+        },
+        "3": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": req.negative_prompt.as_deref().unwrap_or(""),
+                "clip": ["1", 1]
+            }
+        },
+        "4": {
+            "class_type": "EmptyLatentImage",
+            "inputs": { "width": req.width, "height": req.height, "batch_size": 1 }
+        },
+        "5": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["12", 0],
+                "positive": ["2", 0],
+                "negative": ["3", 0],
+                "latent_image": ["4", 0],
+                "steps": req.steps,
+                "cfg": req.cfg_scale,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "denoise": 1.0,
+                "seed": req.seed.unwrap_or(42)
+            }
+        },
+        "6": {
+            "class_type": "VAEDecode",
+            "inputs": { "samples": ["5", 0], "vae": ["1", 2] }
+        },
+        "7": {
+            "class_type": "SaveImage",
+            "inputs": { "images": ["6", 0], "filename_prefix": "weave" }
+        },
+        "8": {
+            "class_type": "LoadImage",
+            "inputs": { "image": uploaded_image }
+        },
+        "9": {
+            "class_type": "PulidModelLoader",
+            "inputs": { "pulid_file": crate::comfy_installer::PULID_WEIGHTS_FILENAME }
+        },
+        "10": {
+            "class_type": "PulidInsightFaceLoader",
+            "inputs": { "provider": "CPU" }
+        },
+        "11": {
+            "class_type": "PulidEvaClipLoader",
+            "inputs": {}
+        },
+        // fidelity/1.0/celý rozsah start_at..end_at — stejné hodnoty jako
+        // v ukázkových workflow z cubiq/PuLID_ComfyUI (nejbližší podobnost referenci).
+        "12": {
+            "class_type": "ApplyPulid",
+            "inputs": {
+                "model": ["1", 0],
+                "pulid": ["9", 0],
+                "eva_clip": ["11", 0],
+                "face_analysis": ["10", 0],
+                "image": ["8", 0],
+                "method": "fidelity",
+                "weight": 1.0,
+                "start_at": 0.0,
+                "end_at": 1.0
+            }
+        }
+    })
+}
+
 fn extract_output_filename(outputs: &serde_json::Value) -> Option<String> {
     outputs.as_object()?.values().find_map(|node| {
         node.get("images")?
@@ -192,4 +352,210 @@ fn extract_output_filename(outputs: &serde_json::Value) -> Option<String> {
             .as_str()
             .map(|s| s.to_string())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use weave_application::ports::image_gen_port::StylePreset;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn sample_request() -> ImageRequest {
+        ImageRequest {
+            prompt: "kosmická loď nad planetou".into(),
+            negative_prompt: Some("rozmazané".into()),
+            width: 1024,
+            height: 768,
+            steps: 25,
+            cfg_scale: 6.5,
+            seed: Some(1234),
+            style_preset: StylePreset::Realistic,
+            reference_image_path: None,
+        }
+    }
+
+    #[test]
+    fn flux_workflow_used_without_reference_image() {
+        let req = sample_request();
+        let workflow = build_basic_workflow(&req, None);
+
+        assert_eq!(
+            workflow["1"]["inputs"]["ckpt_name"],
+            "flux1-dev.safetensors"
+        );
+        assert_eq!(
+            workflow["5"]["inputs"]["model"],
+            serde_json::json!(["1", 0])
+        );
+        assert_eq!(workflow.as_object().unwrap().len(), 7);
+
+        // Žádná PuLID/SDXL větev nesmí být přítomná, dokud není referenční obrázek
+        let json_text = workflow.to_string();
+        assert!(!json_text.contains("Pulid"));
+        assert!(!json_text.contains(crate::comfy_installer::SDXL_CHECKPOINT_FILENAME));
+    }
+
+    #[test]
+    fn flux_workflow_carries_over_request_fields() {
+        let req = sample_request();
+        let workflow = build_basic_workflow(&req, None);
+
+        assert_eq!(workflow["2"]["inputs"]["text"], "kosmická loď nad planetou");
+        assert_eq!(workflow["3"]["inputs"]["text"], "rozmazané");
+        assert_eq!(workflow["4"]["inputs"]["width"], 1024);
+        assert_eq!(workflow["4"]["inputs"]["height"], 768);
+        assert_eq!(workflow["5"]["inputs"]["steps"], 25);
+        assert_eq!(workflow["5"]["inputs"]["cfg"], 6.5);
+        assert_eq!(workflow["5"]["inputs"]["seed"], 1234);
+    }
+
+    #[test]
+    fn flux_workflow_defaults_missing_negative_prompt_and_seed() {
+        let mut req = sample_request();
+        req.negative_prompt = None;
+        req.seed = None;
+
+        let workflow = build_basic_workflow(&req, None);
+
+        assert_eq!(workflow["3"]["inputs"]["text"], "");
+        assert_eq!(workflow["5"]["inputs"]["seed"], 42);
+    }
+
+    #[test]
+    fn pulid_workflow_used_when_reference_image_present() {
+        let req = sample_request();
+        let workflow = build_basic_workflow(&req, Some("uploaded-ref.png"));
+
+        assert_eq!(
+            workflow["1"]["inputs"]["ckpt_name"],
+            crate::comfy_installer::SDXL_CHECKPOINT_FILENAME
+        );
+        assert_eq!(workflow["8"]["class_type"], "LoadImage");
+        assert_eq!(workflow["8"]["inputs"]["image"], "uploaded-ref.png");
+    }
+
+    #[test]
+    fn pulid_nodes_are_wired_together_correctly() {
+        let req = sample_request();
+        let workflow = build_basic_workflow(&req, Some("uploaded-ref.png"));
+
+        assert_eq!(workflow["9"]["class_type"], "PulidModelLoader");
+        assert_eq!(
+            workflow["9"]["inputs"]["pulid_file"],
+            crate::comfy_installer::PULID_WEIGHTS_FILENAME
+        );
+        assert_eq!(workflow["10"]["class_type"], "PulidInsightFaceLoader");
+        assert_eq!(workflow["11"]["class_type"], "PulidEvaClipLoader");
+
+        let apply_pulid = &workflow["12"];
+        assert_eq!(apply_pulid["class_type"], "ApplyPulid");
+        assert_eq!(apply_pulid["inputs"]["model"], serde_json::json!(["1", 0]));
+        assert_eq!(apply_pulid["inputs"]["pulid"], serde_json::json!(["9", 0]));
+        assert_eq!(
+            apply_pulid["inputs"]["eva_clip"],
+            serde_json::json!(["11", 0])
+        );
+        assert_eq!(
+            apply_pulid["inputs"]["face_analysis"],
+            serde_json::json!(["10", 0])
+        );
+        assert_eq!(apply_pulid["inputs"]["image"], serde_json::json!(["8", 0]));
+
+        // KSampler musí čerpat z PuLID-patchnutého modelu (uzel 12), ne přímo
+        // z checkpointu (uzel 1) — jinak by referenční obrázek nemělo na co vliv.
+        assert_eq!(
+            workflow["5"]["inputs"]["model"],
+            serde_json::json!(["12", 0])
+        );
+    }
+
+    #[test]
+    fn pulid_workflow_carries_over_request_fields() {
+        let req = sample_request();
+        let workflow = build_basic_workflow(&req, Some("uploaded-ref.png"));
+
+        assert_eq!(workflow["2"]["inputs"]["text"], "kosmická loď nad planetou");
+        assert_eq!(workflow["3"]["inputs"]["text"], "rozmazané");
+        assert_eq!(workflow["4"]["inputs"]["width"], 1024);
+        assert_eq!(workflow["4"]["inputs"]["height"], 768);
+        assert_eq!(workflow["5"]["inputs"]["steps"], 25);
+        assert_eq!(workflow["5"]["inputs"]["cfg"], 6.5);
+        assert_eq!(workflow["5"]["inputs"]["seed"], 1234);
+    }
+
+    async fn write_temp_file(name: &str, content: &[u8]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("weave_comfyui_test_{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join(name);
+        tokio::fs::write(&path, content).await.unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn upload_reference_image_returns_plain_filename() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/upload/image"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "abc123.png",
+                "subfolder": "",
+                "type": "input"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ComfyUiClient::new(server.uri());
+        let source = write_temp_file("photo.png", b"fake-png-bytes").await;
+
+        let uploaded = client
+            .upload_reference_image(source.to_str().unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(uploaded, "abc123.png");
+    }
+
+    #[tokio::test]
+    async fn upload_reference_image_joins_nonempty_subfolder() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/upload/image"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "abc123.png",
+                "subfolder": "clipspace",
+                "type": "input"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ComfyUiClient::new(server.uri());
+        let source = write_temp_file("photo.png", b"fake-png-bytes").await;
+
+        let uploaded = client
+            .upload_reference_image(source.to_str().unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(uploaded, "clipspace/abc123.png");
+    }
+
+    #[tokio::test]
+    async fn upload_reference_image_propagates_server_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/upload/image"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+
+        let client = ComfyUiClient::new(server.uri());
+        let source = write_temp_file("photo.png", b"fake-png-bytes").await;
+
+        let result = client
+            .upload_reference_image(source.to_str().unwrap())
+            .await;
+
+        assert!(result.is_err());
+    }
 }
