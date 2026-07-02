@@ -46,6 +46,7 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
         attachment_store: Arc::new(LocalAttachmentStore::new(reference_images_dir)),
         active_generation: std::sync::Mutex::new(None),
         embedded_llm: std::sync::Mutex::new(None),
+        log_dir: data_dir.join("logs"),
     };
 
     app.manage(state);

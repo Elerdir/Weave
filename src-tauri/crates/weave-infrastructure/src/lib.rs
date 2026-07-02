@@ -4,6 +4,7 @@ pub mod comfyui;
 pub mod db;
 pub mod keychain;
 pub mod llm;
+pub mod logs;
 pub mod model_manager;
 pub mod pdf;
 pub mod workspace;

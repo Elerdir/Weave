@@ -1,5 +1,6 @@
 pub mod comfy_installer;
 pub mod conversation;
+pub mod logs;
 pub mod message;
 pub mod models;
 pub mod personas;
