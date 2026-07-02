@@ -1,10 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Attachment, GenerationStats } from "$lib/stores/conversations.svelte";
+import type {
+  Attachment,
+  GenerationStats,
+  ImageStageInfo,
+} from "$lib/stores/conversations.svelte";
 import { conversationStore } from "$lib/stores/conversations.svelte";
 
 type StreamChunk =
   | { Token: string }
+  | { ImageStage: ImageStageInfo }
   | { Done: GenerationStats }
   | { Error: string };
 
@@ -22,6 +27,8 @@ async function listenForStream(): Promise<() => void> {
     const chunk = event.payload;
     if ("Token" in chunk) {
       conversationStore.appendStreamToken(chunk.Token);
+    } else if ("ImageStage" in chunk) {
+      conversationStore.setImageStage(chunk.ImageStage);
     } else if ("Done" in chunk) {
       conversationStore.finalizeStream(chunk.Done);
       unlisten();

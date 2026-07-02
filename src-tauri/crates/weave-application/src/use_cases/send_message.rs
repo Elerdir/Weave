@@ -11,6 +11,7 @@ use crate::{
     error::{AppError, AppResult},
     ports::{
         attachment_store_port::AttachmentStorePort,
+        comfy_installer_port::ComfyInstallerPort,
         conversation_repository::{ConversationRepository, MessageRepository},
         generation_settings_repository::GenerationSettingsRepository,
         image_gen_port::{ImageGenPort, ImageProgress, ImageRequest, StylePreset},
@@ -29,6 +30,7 @@ pub struct SendMessageUseCase {
     persona_repo: Arc<dyn PersonaRepository>,
     attachment_store: Arc<dyn AttachmentStorePort>,
     gen_settings_repo: Arc<dyn GenerationSettingsRepository>,
+    comfy_installer: Arc<dyn ComfyInstallerPort>,
 }
 
 impl SendMessageUseCase {
@@ -42,6 +44,7 @@ impl SendMessageUseCase {
         persona_repo: Arc<dyn PersonaRepository>,
         attachment_store: Arc<dyn AttachmentStorePort>,
         gen_settings_repo: Arc<dyn GenerationSettingsRepository>,
+        comfy_installer: Arc<dyn ComfyInstallerPort>,
     ) -> Self {
         Self {
             conv_repo,
@@ -52,6 +55,7 @@ impl SendMessageUseCase {
             persona_repo,
             attachment_store,
             gen_settings_repo,
+            comfy_installer,
         }
     }
 
@@ -181,7 +185,7 @@ impl SendMessageUseCase {
                 match &chunk {
                     StreamChunk::Token(t) => text.push_str(t),
                     StreamChunk::Done(s) => stats = Some(s.clone()),
-                    StreamChunk::Error(_) => {}
+                    StreamChunk::Error(_) | StreamChunk::ImageStage(_) => {}
                 }
                 if stream_tx.send(chunk).await.is_err() {
                     break; // příjemce zmizel (Zastavit) — částečný text přesto uložíme
@@ -287,12 +291,67 @@ impl SendMessageUseCase {
         Ok(if any { Some(context) } else { None })
     }
 
+    /// Kompletní pipeline generování obrázku: zkontroluje prostředí, případně
+    /// doinstaluje ComfyUI, stáhne model podle stylu promptu, spustí server,
+    /// vygeneruje, a nakonec server zastaví (uvolní VRAM — soubory modelů
+    /// zůstávají na disku pro příště). Průběh hlásí přes ImageStage chunky.
     async fn handle_image(
         &self,
         prompt: String,
         reference_image_path: Option<String>,
         stream_tx: mpsc::Sender<StreamChunk>,
     ) -> AppResult<()> {
+        use crate::ports::comfy_installer_port::ComfyStatus;
+        use crate::ports::llm_port::{ImageStage, ImageStageInfo};
+
+        let style = StylePreset::classify(&prompt);
+        let stage = |s: ImageStage| {
+            StreamChunk::ImageStage(ImageStageInfo {
+                stage: s,
+                detail: None,
+            })
+        };
+
+        // 1. Prostředí — je ComfyUI vůbec nainstalované?
+        let _ = stream_tx.send(stage(ImageStage::Checking)).await;
+        if self.comfy_installer.status().await? == ComfyStatus::NotInstalled {
+            let _ = stream_tx.send(stage(ImageStage::Installing)).await;
+            let (itx, irx) = mpsc::channel(64);
+            let fwd = tokio::spawn(forward_install_progress(
+                ImageStage::Installing,
+                irx,
+                stream_tx.clone(),
+            ));
+            let result = self.comfy_installer.install(itx).await;
+            let _ = fwd.await;
+            result?;
+        }
+
+        // 2. Model podle stylu promptu (stáhne se, jen když chybí)
+        {
+            let (itx, irx) = mpsc::channel(64);
+            let fwd = tokio::spawn(forward_install_progress(
+                ImageStage::DownloadingModel,
+                irx,
+                stream_tx.clone(),
+            ));
+            let result = self
+                .comfy_installer
+                .ensure_style_checkpoint(style, itx)
+                .await;
+            let _ = fwd.await;
+            result?;
+        }
+
+        // 3. Server
+        if self.comfy_installer.status().await? != ComfyStatus::Running {
+            let _ = stream_tx.send(stage(ImageStage::StartingServer)).await;
+            self.comfy_installer.start_server().await?;
+        }
+
+        // 4. Generování
+        let _ = stream_tx.send(stage(ImageStage::Generating)).await;
+
         let (img_tx, mut img_rx) = mpsc::channel(32);
         let request = ImageRequest {
             prompt,
@@ -302,15 +361,25 @@ impl SendMessageUseCase {
             steps: 20,
             cfg_scale: 7.0,
             seed: None,
-            style_preset: StylePreset::Realistic,
+            style_preset: style,
             reference_image_path,
         };
 
-        self.image_gen.generate(request, img_tx).await?;
+        let gen_result = self.image_gen.generate(request, img_tx).await;
+        if gen_result.is_err() {
+            // I po chybě uvolníme VRAM — server by jinak zůstal běžet naprázdno
+            let _ = self.comfy_installer.stop_server().await;
+        }
+        gen_result?;
 
         while let Some(progress) = img_rx.recv().await {
             match progress {
                 ImageProgress::Done { output_path } => {
+                    // 5. Uvolnit VRAM — soubory modelů zůstávají pro příště
+                    let _ = stream_tx.send(stage(ImageStage::Finishing)).await;
+                    if let Err(e) = self.comfy_installer.stop_server().await {
+                        tracing::warn!("Zastavení ComfyUI po generování selhalo: {e}");
+                    }
                     let _ = stream_tx
                         .send(StreamChunk::Token(format!("![obrázek]({output_path})")))
                         .await;
@@ -339,15 +408,44 @@ impl SendMessageUseCase {
     }
 }
 
+/// Přeposílá průběh instalace/stahování (InstallProgress) do chat streamu
+/// jako ImageStage chunky s detailem — uživatel vidí, co se právě děje.
+async fn forward_install_progress(
+    stage: crate::ports::llm_port::ImageStage,
+    mut rx: mpsc::Receiver<crate::ports::comfy_installer_port::InstallProgress>,
+    stream_tx: mpsc::Sender<StreamChunk>,
+) {
+    use crate::ports::comfy_installer_port::InstallProgress;
+    use crate::ports::llm_port::ImageStageInfo;
+
+    while let Some(progress) = rx.recv().await {
+        let detail = match progress {
+            InstallProgress::Step { name } => Some(name),
+            InstallProgress::Output(line) => Some(line),
+            InstallProgress::Error(e) => Some(e),
+            InstallProgress::Done => None,
+        };
+        if let Some(detail) = detail {
+            let _ = stream_tx
+                .send(StreamChunk::ImageStage(ImageStageInfo {
+                    stage,
+                    detail: Some(detail),
+                }))
+                .await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ports::{
         attachment_store_port::{MockAttachmentStorePort, StoredImage},
+        comfy_installer_port::{ComfyStatus, MockComfyInstallerPort},
         conversation_repository::{MockConversationRepository, MockMessageRepository},
         generation_settings_repository::MockGenerationSettingsRepository,
         image_gen_port::MockImageGenPort,
-        llm_port::MockLlmPort,
+        llm_port::{ImageStage, MockLlmPort},
         persona_repository::MockPersonaRepository,
         workspace_port::MockWorkspaceRepository,
     };
@@ -361,6 +459,19 @@ mod tests {
         m
     }
 
+    /// Mock ComfyUI installeru: „vše připraveno, server běží" — orchestrace
+    /// tak nic neinstaluje ani nespouští (výchozí pro testy mimo orchestraci).
+    fn default_comfy_installer() -> MockComfyInstallerPort {
+        let mut m = MockComfyInstallerPort::new();
+        m.expect_status()
+            .returning(|| Box::pin(async { Ok(ComfyStatus::Running) }));
+        m.expect_ensure_style_checkpoint()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        m.expect_stop_server()
+            .returning(|| Box::pin(async { Ok(()) }));
+        m
+    }
+
     fn make_uc(ws: MockWorkspaceRepository) -> SendMessageUseCase {
         SendMessageUseCase::new(
             Arc::new(MockConversationRepository::new()),
@@ -371,6 +482,7 @@ mod tests {
             Arc::new(MockPersonaRepository::new()),
             Arc::new(MockAttachmentStorePort::new()),
             Arc::new(default_gen_settings()),
+            Arc::new(default_comfy_installer()),
         )
     }
 
@@ -395,6 +507,7 @@ mod tests {
             Arc::new(MockPersonaRepository::new()),
             Arc::new(attachment_store),
             Arc::new(default_gen_settings()),
+            Arc::new(default_comfy_installer()),
         )
     }
 
@@ -736,6 +849,7 @@ mod tests {
             Arc::new(MockPersonaRepository::new()),
             Arc::new(MockAttachmentStorePort::new()),
             Arc::new(gen_repo),
+            Arc::new(default_comfy_installer()),
         );
         let (tx, _rx) = mpsc::channel(8);
 
@@ -748,5 +862,92 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn image_generation_orchestrates_environment_and_frees_vram() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        // Nainstalovano, ale server nebezi -> orchestrace ho musi spustit
+        // a po dokonceni zase zastavit (uvolneni VRAM).
+        let mut installer = MockComfyInstallerPort::new();
+        installer
+            .expect_status()
+            .returning(|| Box::pin(async { Ok(ComfyStatus::Installed) }));
+        installer
+            .expect_ensure_style_checkpoint()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        installer
+            .expect_start_server()
+            .times(1)
+            .returning(|| Box::pin(async { Ok(()) }));
+        installer
+            .expect_stop_server()
+            .times(1)
+            .returning(|| Box::pin(async { Ok(()) }));
+
+        let mut image_gen = MockImageGenPort::new();
+        image_gen.expect_generate().returning(|_, tx| {
+            Box::pin(async move {
+                let _ = tx
+                    .send(ImageProgress::Done {
+                        output_path: "/gallery/obrazek.png".into(),
+                    })
+                    .await;
+                Ok(())
+            })
+        });
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(MockLlmPort::new()),
+            Arc::new(image_gen),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(default_gen_settings()),
+            Arc::new(installer),
+        );
+
+        let (tx, mut rx) = mpsc::channel(64);
+        uc.execute(
+            ConversationId::new(),
+            "nakresli hrad na skale".into(),
+            vec![],
+            vec![],
+            tx,
+        )
+        .await
+        .unwrap();
+
+        // Posbirej stream a over faze + vysledny obrazek
+        let mut stages = Vec::new();
+        let mut got_image_token = false;
+        let mut got_done = false;
+        while let Some(chunk) = rx.recv().await {
+            match chunk {
+                StreamChunk::ImageStage(info) => stages.push(info.stage),
+                StreamChunk::Token(t) => got_image_token = t.contains("/gallery/obrazek.png"),
+                StreamChunk::Done(_) => got_done = true,
+                StreamChunk::Error(e) => panic!("necekana chyba: {e}"),
+            }
+        }
+
+        assert!(stages.contains(&ImageStage::Checking));
+        assert!(stages.contains(&ImageStage::StartingServer));
+        assert!(stages.contains(&ImageStage::Generating));
+        assert!(stages.contains(&ImageStage::Finishing));
+        assert!(got_image_token, "chybi markdown s cestou k obrazku");
+        assert!(got_done);
     }
 }

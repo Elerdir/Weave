@@ -34,6 +34,20 @@ export interface GenerationStats {
   backend: string;
 }
 
+/** Fáze přípravy/generování obrázku (viz ImageStage v Rust llm_port). */
+export type ImageStage =
+  | "checking"
+  | "installing"
+  | "downloading_model"
+  | "starting_server"
+  | "generating"
+  | "finishing";
+
+export interface ImageStageInfo {
+  stage: ImageStage;
+  detail: string | null;
+}
+
 function createConversationStore() {
   let conversations = $state<Conversation[]>([]);
   let activeId = $state<string | null>(null);
@@ -42,6 +56,7 @@ function createConversationStore() {
   let streamingContent = $state<string | null>(null);
   let currentStats = $state<GenerationStats | null>(null);
   let lastError = $state<string | null>(null);
+  let imageStage = $state<ImageStageInfo | null>(null);
 
   return {
     get conversations() { return conversations; },
@@ -51,6 +66,7 @@ function createConversationStore() {
     get streamingContent() { return streamingContent; },
     get currentStats() { return currentStats; },
     get lastError() { return lastError; },
+    get imageStage() { return imageStage; },
 
     get activeConversation() {
       return conversations.find(c => c.id === activeId) ?? null;
@@ -119,6 +135,10 @@ function createConversationStore() {
       streamingContent = (streamingContent ?? "") + token;
     },
 
+    setImageStage(info: ImageStageInfo | null) {
+      imageStage = info;
+    },
+
     finalizeStream(stats: GenerationStats) {
       if (streamingContent !== null) {
         const assistantMsg: Message = {
@@ -135,6 +155,7 @@ function createConversationStore() {
       streamingContent = null;
       currentStats = stats;
       loading = false;
+      imageStage = null;
     },
 
     startLoading() {
@@ -142,6 +163,7 @@ function createConversationStore() {
       streamingContent = null;
       currentStats = null;
       lastError = null;
+      imageStage = null;
     },
 
     setLastError(message: string | null) {

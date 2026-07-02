@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::error::AppResult;
+use crate::ports::image_gen_port::StylePreset;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InstallProgress {
@@ -33,4 +34,11 @@ pub trait ComfyInstallerPort: Send + Sync {
     async fn install(&self, tx: mpsc::Sender<InstallProgress>) -> AppResult<()>;
     async fn start_server(&self) -> AppResult<()>;
     async fn stop_server(&self) -> AppResult<()>;
+    /// Zajistí, že je stažený checkpoint pro daný styl obrázku — když chybí,
+    /// stáhne ho (s průběhem přes `tx`). Když už existuje, nedělá nic.
+    async fn ensure_style_checkpoint(
+        &self,
+        style: StylePreset,
+        tx: mpsc::Sender<InstallProgress>,
+    ) -> AppResult<()>;
 }

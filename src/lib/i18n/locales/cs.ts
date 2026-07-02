@@ -61,6 +61,14 @@ const cs = {
     addReferenceImage: "Přidat referenční obrázek",
     removeReferenceImage: "Odebrat obrázek",
     dropImagesHint: "Pusť obrázky sem — přiloží se jako reference",
+    imageStages: {
+      checking: "Kontroluji prostředí pro generování…",
+      installing: "Instaluji ComfyUI (poprvé to trvá desítky minut)…",
+      downloading_model: "Stahuji model pro zvolený styl…",
+      starting_server: "Spouštím generátor obrázků…",
+      generating: "Generuji obrázek…",
+      finishing: "Dokončuji a uvolňuji paměť GPU…",
+    },
     genSettings: {
       title: "Parametry generování",
       context: "Kontextové okno (tokeny)",

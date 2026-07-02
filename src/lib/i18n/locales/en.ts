@@ -63,6 +63,14 @@ const en: Messages = {
     addReferenceImage: "Add reference image",
     removeReferenceImage: "Remove image",
     dropImagesHint: "Drop images here — attached as references",
+    imageStages: {
+      checking: "Checking the image generation environment…",
+      installing: "Installing ComfyUI (first run takes tens of minutes)…",
+      downloading_model: "Downloading the model for the chosen style…",
+      starting_server: "Starting the image generator…",
+      generating: "Generating the image…",
+      finishing: "Finishing and freeing GPU memory…",
+    },
     genSettings: {
       title: "Generation parameters",
       context: "Context window (tokens)",

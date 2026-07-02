@@ -9,6 +9,7 @@ use tokio::sync::{mpsc, Mutex};
 use weave_application::{
     error::{AppError, AppResult},
     ports::comfy_installer_port::{ComfyInstallerPort, ComfyStatus, InstallProgress},
+    ports::image_gen_port::StylePreset,
 };
 
 use process::{
@@ -19,16 +20,34 @@ const COMFYUI_REPO: &str = "https://github.com/comfyanonymous/ComfyUI.git";
 const PULID_REPO: &str = "https://github.com/cubiq/PuLID_ComfyUI.git";
 pub const COMFYUI_DEFAULT_PORT: u16 = 8188;
 
-/// Základní checkpoint pro PuLID větev workflow. `cubiq/PuLID_ComfyUI` patchuje
-/// SDXL cross-attention, ne FLUX/DiT — FLUX by tu nešel použít, i kdyby byl
-/// stažitelný. SDXL base je navíc na HuggingFace veřejný bez přihlášení, což
-/// FLUX.1-dev/schnell nejsou (obě vrací 401 bez auth tokenu) — jednoklikový
-/// no-auth download stylem `recommended_models.rs` by u FLUX nešel udělat.
-/// Používá se jen když request nese `reference_image_path` — základní
-/// text-to-image větev (`build_basic_workflow`) checkpoint dál natvrdo
-/// očekává `flux1-dev.safetensors` a tady se nemění.
+/// Základní SDXL checkpoint — používá ho text-to-image i PuLID větev workflow.
+/// `cubiq/PuLID_ComfyUI` patchuje SDXL cross-attention, ne FLUX/DiT. SDXL base
+/// je navíc na HuggingFace veřejný bez přihlášení, což FLUX.1-dev/schnell
+/// nejsou (obě vrací 401 bez auth tokenu) — jednoklikový no-auth download
+/// stylem `recommended_models.rs` by u FLUX nešel udělat.
 pub const SDXL_CHECKPOINT_FILENAME: &str = "sd_xl_base_1.0.safetensors";
 const SDXL_CHECKPOINT_URL: &str = "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors";
+
+/// Anime checkpoint (SDXL architektura → funguje i s PuLID). Stahuje se až
+/// na vyžádání — když klasifikace promptu vyhodnotí anime styl.
+pub const ANIME_CHECKPOINT_FILENAME: &str = "animagine-xl-3.1.safetensors";
+const ANIME_CHECKPOINT_URL: &str = "https://huggingface.co/cagliostrolab/animagine-xl-3.1/resolve/main/animagine-xl-3.1.safetensors";
+
+/// Který checkpoint použít pro daný styl. Realistic/Artistic/ThreeD jede na
+/// SDXL base (styl se řídí promptem), Anime má vlastní doladěný checkpoint.
+pub fn checkpoint_filename_for_style(style: StylePreset) -> &'static str {
+    match style {
+        StylePreset::Anime => ANIME_CHECKPOINT_FILENAME,
+        _ => SDXL_CHECKPOINT_FILENAME,
+    }
+}
+
+fn checkpoint_url_for_style(style: StylePreset) -> &'static str {
+    match style {
+        StylePreset::Anime => ANIME_CHECKPOINT_URL,
+        _ => SDXL_CHECKPOINT_URL,
+    }
+}
 
 /// PuLID váhy pro `PulidModelLoader` — konverze do IPAdapter formátu od
 /// huchenlei, přesně ta, na kterou odkazuje README `cubiq/PuLID_ComfyUI`.
@@ -336,5 +355,26 @@ impl ComfyInstallerPort for LocalComfyInstaller {
             let _ = child.kill().await;
         }
         Ok(())
+    }
+
+    async fn ensure_style_checkpoint(
+        &self,
+        style: StylePreset,
+        tx: mpsc::Sender<InstallProgress>,
+    ) -> AppResult<()> {
+        let filename = checkpoint_filename_for_style(style);
+        let path = self.checkpoints_dir().join(filename);
+        if path.exists() {
+            return Ok(());
+        }
+        Self::step(&tx, &format!("Stahuji model pro zvolený styl: {filename}")).await;
+        download_file(
+            &self.http,
+            checkpoint_url_for_style(style),
+            &path,
+            filename,
+            &tx,
+        )
+        .await
     }
 }

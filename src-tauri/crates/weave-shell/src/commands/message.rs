@@ -135,6 +135,7 @@ async fn build_use_case(state: &State<'_, AppState>) -> SendMessageUseCase {
         Arc::new(SqlitePersonaRepository::new(state.pool.clone())),
         state.attachment_store.clone(),
         Arc::new(SqliteGenerationSettingsRepository::new(state.pool.clone())),
+        state.comfy_installer.clone(),
     )
 }
 

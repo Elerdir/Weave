@@ -22,8 +22,28 @@ pub struct ChatRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StreamChunk {
     Token(String),
+    /// Průběh přípravy/generování obrázku — frontend zobrazuje progress kartu.
+    ImageStage(ImageStageInfo),
     Done(GenerationStats),
     Error(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageStageInfo {
+    pub stage: ImageStage,
+    /// Doplňkový popis (řádek výstupu instalace, průběh stahování…).
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageStage {
+    Checking,
+    Installing,
+    DownloadingModel,
+    StartingServer,
+    Generating,
+    Finishing,
 }
 
 #[async_trait]
