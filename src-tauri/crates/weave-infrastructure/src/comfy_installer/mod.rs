@@ -30,24 +30,35 @@ pub const COMFYUI_DEFAULT_PORT: u16 = 8188;
 pub const SDXL_CHECKPOINT_FILENAME: &str = "sd_xl_base_1.0.safetensors";
 const SDXL_CHECKPOINT_URL: &str = "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors";
 
-/// Anime checkpoint (SDXL architektura → funguje i s PuLID). Stahuje se až
-/// na vyžádání — když klasifikace promptu vyhodnotí anime styl.
-pub const ANIME_CHECKPOINT_FILENAME: &str = "animagine-xl-3.1.safetensors";
-const ANIME_CHECKPOINT_URL: &str = "https://huggingface.co/cagliostrolab/animagine-xl-3.1/resolve/main/animagine-xl-3.1.safetensors";
+/// Realistický checkpoint — RealVisXL V5.0, jeden z nejlepších SDXL modelů
+/// na fotorealismus (obličeje, kůže, světlo). SDXL architektura → PuLID OK.
+pub const REALVIS_CHECKPOINT_FILENAME: &str = "RealVisXL_V5.0_fp16.safetensors";
+const REALVIS_CHECKPOINT_URL: &str =
+    "https://huggingface.co/SG161222/RealVisXL_V5.0/resolve/main/RealVisXL_V5.0_fp16.safetensors";
 
-/// Který checkpoint použít pro daný styl. Realistic/Artistic/ThreeD jede na
-/// SDXL base (styl se řídí promptem), Anime má vlastní doladěný checkpoint.
+/// Semi-real/anime checkpoint — Pony Diffusion V6 XL (SDXL architektura).
+/// Vyžaduje score tagy v promptu a clip skip -2 — obojí řeší workflow builder.
+/// Oficiální distribuce je na CivitAI za přihlášením; tohle je veřejné
+/// HF zrcadlo (ověřeno HEAD 200, 6 938 041 050 B).
+pub const PONY_CHECKPOINT_FILENAME: &str = "ponyDiffusionV6XL_v6StartWithThisOne.safetensors";
+const PONY_CHECKPOINT_URL: &str = "https://huggingface.co/LyliaEngine/Pony_Diffusion_V6_XL/resolve/main/ponyDiffusionV6XL_v6StartWithThisOne.safetensors";
+
+/// Který checkpoint použít pro daný styl: Realistic → RealVisXL,
+/// SemiRealistic/Anime → Pony V6, Artistic/ThreeD → SDXL base (styl se
+/// řídí promptem). Všechny jsou SDXL architektura → fungují s PuLID.
 pub fn checkpoint_filename_for_style(style: StylePreset) -> &'static str {
     match style {
-        StylePreset::Anime => ANIME_CHECKPOINT_FILENAME,
-        _ => SDXL_CHECKPOINT_FILENAME,
+        StylePreset::Realistic => REALVIS_CHECKPOINT_FILENAME,
+        StylePreset::SemiRealistic | StylePreset::Anime => PONY_CHECKPOINT_FILENAME,
+        StylePreset::Artistic | StylePreset::ThreeD => SDXL_CHECKPOINT_FILENAME,
     }
 }
 
 fn checkpoint_url_for_style(style: StylePreset) -> &'static str {
     match style {
-        StylePreset::Anime => ANIME_CHECKPOINT_URL,
-        _ => SDXL_CHECKPOINT_URL,
+        StylePreset::Realistic => REALVIS_CHECKPOINT_URL,
+        StylePreset::SemiRealistic | StylePreset::Anime => PONY_CHECKPOINT_URL,
+        StylePreset::Artistic | StylePreset::ThreeD => SDXL_CHECKPOINT_URL,
     }
 }
 

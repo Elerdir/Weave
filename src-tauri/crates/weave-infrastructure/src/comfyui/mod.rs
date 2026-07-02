@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use weave_application::{
     error::{AppError, AppResult},
-    ports::image_gen_port::{ImageGenPort, ImageProgress, ImageRequest},
+    ports::image_gen_port::{ImageGenPort, ImageProgress, ImageRequest, StylePreset},
 };
 
 pub struct ComfyUiClient {
@@ -226,8 +226,57 @@ fn build_basic_workflow(req: &ImageRequest, uploaded_references: &[String]) -> s
     }
 }
 
+/// Pony V6 checkpoint vyžaduje score tagy v promptu (bez nich generuje
+/// znatelně hůř). Vrací (prefix pozitivního, prefix negativního promptu).
+fn style_prompt_prefixes(style: StylePreset) -> (&'static str, &'static str) {
+    match style {
+        StylePreset::SemiRealistic => (
+            "score_9, score_8_up, score_7_up, realistic, ",
+            "score_6, score_5, score_4, ",
+        ),
+        StylePreset::Anime => (
+            "score_9, score_8_up, score_7_up, source_anime, ",
+            "score_6, score_5, score_4, ",
+        ),
+        _ => ("", ""),
+    }
+}
+
+/// Pony V6 se trénoval s clip skip 2 — bez CLIPSetLastLayer(-2) vychází
+/// obrázky rozbité.
+fn uses_clip_skip(style: StylePreset) -> bool {
+    matches!(style, StylePreset::SemiRealistic | StylePreset::Anime)
+}
+
+/// Doplní style-specifika do hotového workflow: prefixy promptů a případný
+/// CLIPSetLastLayer uzel (id 13), přes který pak jdou oba text encody.
+fn apply_style_tuning(workflow: &mut serde_json::Value, req: &ImageRequest) {
+    let (pos_prefix, neg_prefix) = style_prompt_prefixes(req.style_preset);
+    let map = workflow.as_object_mut().expect("workflow je JSON objekt");
+
+    if !pos_prefix.is_empty() {
+        map["2"]["inputs"]["text"] = serde_json::json!(format!("{pos_prefix}{}", req.prompt));
+        map["3"]["inputs"]["text"] = serde_json::json!(format!(
+            "{neg_prefix}{}",
+            req.negative_prompt.as_deref().unwrap_or("")
+        ));
+    }
+
+    if uses_clip_skip(req.style_preset) {
+        map.insert(
+            "13".into(),
+            serde_json::json!({
+                "class_type": "CLIPSetLastLayer",
+                "inputs": { "clip": ["1", 1], "stop_at_clip_layer": -2 }
+            }),
+        );
+        map["2"]["inputs"]["clip"] = serde_json::json!(["13", 0]);
+        map["3"]["inputs"]["clip"] = serde_json::json!(["13", 0]);
+    }
+}
+
 fn build_txt2img_workflow(req: &ImageRequest) -> serde_json::Value {
-    serde_json::json!({
+    let mut workflow = serde_json::json!({
         "1": {
             "class_type": "CheckpointLoaderSimple",
             "inputs": {
@@ -272,7 +321,9 @@ fn build_txt2img_workflow(req: &ImageRequest) -> serde_json::Value {
             "class_type": "SaveImage",
             "inputs": { "images": ["6", 0], "filename_prefix": "weave" }
         }
-    })
+    });
+    apply_style_tuning(&mut workflow, req);
+    workflow
 }
 
 /// PuLID workflow s podporou VÍCE referenčních obrázků: každý má vlastní
@@ -387,6 +438,7 @@ fn build_pulid_workflow(req: &ImageRequest, uploaded_images: &[String]) -> serde
     }
     map["12"]["inputs"]["image"] = last_ref;
 
+    apply_style_tuning(&mut workflow, req);
     workflow
 }
 
@@ -427,10 +479,10 @@ mod tests {
         let req = sample_request();
         let workflow = build_basic_workflow(&req, &[]);
 
-        // Realistický styl → SDXL base (stahuje se při instalaci ComfyUI)
+        // Realistický styl → RealVisXL (nejlepší fotorealismus)
         assert_eq!(
             workflow["1"]["inputs"]["ckpt_name"],
-            crate::comfy_installer::SDXL_CHECKPOINT_FILENAME
+            crate::comfy_installer::REALVIS_CHECKPOINT_FILENAME
         );
         assert_eq!(
             workflow["5"]["inputs"]["model"],
@@ -451,15 +503,53 @@ mod tests {
         let workflow = build_basic_workflow(&req, &[]);
         assert_eq!(
             workflow["1"]["inputs"]["ckpt_name"],
-            crate::comfy_installer::ANIME_CHECKPOINT_FILENAME
+            crate::comfy_installer::PONY_CHECKPOINT_FILENAME
         );
 
-        // Anime checkpoint je SDXL architektura → platí i pro PuLID větev
+        // Pony checkpoint je SDXL architektura → platí i pro PuLID větev
         let pulid = build_basic_workflow(&req, &["ref.png".into()]);
         assert_eq!(
             pulid["1"]["inputs"]["ckpt_name"],
-            crate::comfy_installer::ANIME_CHECKPOINT_FILENAME
+            crate::comfy_installer::PONY_CHECKPOINT_FILENAME
         );
+    }
+
+    #[test]
+    fn pony_styles_get_score_tags_and_clip_skip() {
+        let mut req = sample_request();
+        req.style_preset = StylePreset::Anime;
+
+        let workflow = build_basic_workflow(&req, &[]);
+        let positive = workflow["2"]["inputs"]["text"].as_str().unwrap();
+        let negative = workflow["3"]["inputs"]["text"].as_str().unwrap();
+        assert!(positive.starts_with("score_9, score_8_up, score_7_up, source_anime, "));
+        assert!(positive.ends_with("kosmická loď nad planetou"));
+        assert!(negative.starts_with("score_6, score_5, score_4, "));
+
+        // Clip skip -2 přes CLIPSetLastLayer, text encody vedou přes něj
+        assert_eq!(workflow["13"]["class_type"], "CLIPSetLastLayer");
+        assert_eq!(workflow["13"]["inputs"]["stop_at_clip_layer"], -2);
+        assert_eq!(
+            workflow["2"]["inputs"]["clip"],
+            serde_json::json!(["13", 0])
+        );
+
+        // Semi-real dostane realistic tag místo source_anime
+        req.style_preset = StylePreset::SemiRealistic;
+        let semi = build_basic_workflow(&req, &[]);
+        let semi_positive = semi["2"]["inputs"]["text"].as_str().unwrap();
+        assert!(semi_positive.contains("realistic, "));
+        assert!(!semi_positive.contains("source_anime"));
+    }
+
+    #[test]
+    fn realistic_style_has_no_score_tags_nor_clip_skip() {
+        let req = sample_request();
+        let workflow = build_basic_workflow(&req, &[]);
+
+        assert_eq!(workflow["2"]["inputs"]["text"], "kosmická loď nad planetou");
+        assert!(workflow.get("13").is_none());
+        assert_eq!(workflow["2"]["inputs"]["clip"], serde_json::json!(["1", 1]));
     }
 
     #[test]
@@ -495,7 +585,7 @@ mod tests {
 
         assert_eq!(
             workflow["1"]["inputs"]["ckpt_name"],
-            crate::comfy_installer::SDXL_CHECKPOINT_FILENAME
+            crate::comfy_installer::REALVIS_CHECKPOINT_FILENAME
         );
         assert_eq!(workflow["20"]["class_type"], "LoadImage");
         assert_eq!(workflow["20"]["inputs"]["image"], "uploaded-ref.png");
