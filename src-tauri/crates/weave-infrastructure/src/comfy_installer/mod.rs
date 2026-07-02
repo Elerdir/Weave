@@ -114,6 +114,98 @@ impl LocalComfyInstaller {
             })
             .await;
     }
+
+    /// Naklonuje PuLID custom node, pokud chybí. Vrací true, když klonoval
+    /// (nová instalace uzlu → je potřeba doinstalovat i jeho pip závislosti).
+    async fn ensure_pulid_custom_node(
+        &self,
+        tx: &mpsc::Sender<InstallProgress>,
+    ) -> AppResult<bool> {
+        let pulid_dir = self.pulid_dir();
+        if pulid_dir.exists() {
+            return Ok(false);
+        }
+        Self::step(tx, "Stahuji PuLID custom node").await;
+        std::fs::create_dir_all(self.custom_nodes_dir())
+            .map_err(|e| AppError::ComfyUi(e.to_string()))?;
+        run_streamed(
+            "git",
+            &["clone", PULID_REPO, &pulid_dir.to_string_lossy()],
+            None,
+            tx,
+        )
+        .await?;
+        Ok(true)
+    }
+
+    /// Pip závislosti PuLID (insightface aj.) — na Windows může vyžadovat
+    /// Visual C++ Build Tools; selhání hlásíme srozumitelně místo zahození
+    /// celé instalace ComfyUI samotného.
+    async fn install_pulid_python_deps(&self, tx: &mpsc::Sender<InstallProgress>) {
+        let pulid_requirements = self.pulid_dir().join("requirements.txt");
+        if !pulid_requirements.exists() {
+            return;
+        }
+        let venv_python = venv_python_path(&self.venv_dir());
+        if !venv_python.exists() {
+            return; // venv ještě není — závislosti doinstaluje plná instalace
+        }
+        Self::step(tx, "Instaluji závislosti PuLID (insightface aj.)").await;
+        if let Err(e) = run_streamed(
+            &venv_python.to_string_lossy(),
+            &[
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                &pulid_requirements.to_string_lossy(),
+            ],
+            None,
+            tx,
+        )
+        .await
+        {
+            let _ = tx
+                .send(InstallProgress::Output(format!(
+                    "Varování: instalace PuLID závislostí selhala ({e}). ComfyUI samotné je funkční, \
+                     ale PuLID reference obrázky nemusí fungovat. Na Windows bývá potřeba nainstalovat \
+                     'Visual C++ Build Tools' kvůli kompilaci insightface, pak zkus instalaci znovu."
+                )))
+                .await;
+        }
+    }
+
+    /// Stáhne PuLID váhy pro `PulidModelLoader`, pokud chybí.
+    async fn ensure_pulid_weights(&self, tx: &mpsc::Sender<InstallProgress>) -> AppResult<()> {
+        let pulid_weights_path = self.pulid_weights_dir().join(PULID_WEIGHTS_FILENAME);
+        if pulid_weights_path.exists() {
+            return Ok(());
+        }
+        Self::step(tx, "Stahuji PuLID váhy (~750 MB)").await;
+        download_file(
+            &self.http,
+            PULID_WEIGHTS_URL,
+            &pulid_weights_path,
+            "PuLID váhy",
+            tx,
+        )
+        .await
+    }
+
+    /// Stáhne a rozbalí InsightFace AntelopeV2 pro `PulidInsightFaceLoader`,
+    /// pokud chybí.
+    async fn ensure_antelopev2(&self, tx: &mpsc::Sender<InstallProgress>) -> AppResult<()> {
+        let insightface_dir = self.insightface_models_dir();
+        if insightface_dir.join("antelopev2").exists() {
+            return Ok(());
+        }
+        Self::step(tx, "Stahuji InsightFace AntelopeV2 (~340 MB)").await;
+        let zip_path = insightface_dir.join("antelopev2.zip");
+        download_file(&self.http, ANTELOPEV2_ZIP_URL, &zip_path, "AntelopeV2", tx).await?;
+        extract_zip(&zip_path, &insightface_dir)?;
+        std::fs::remove_file(&zip_path).ok();
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -220,50 +312,10 @@ impl ComfyInstallerPort for LocalComfyInstaller {
         )
         .await?;
 
-        // 6. PuLID custom node
-        let pulid_dir = self.pulid_dir();
-        if !pulid_dir.exists() {
-            Self::step(&tx, "Stahuji PuLID custom node").await;
-            std::fs::create_dir_all(self.custom_nodes_dir())
-                .map_err(|e| AppError::ComfyUi(e.to_string()))?;
-            run_streamed(
-                "git",
-                &["clone", PULID_REPO, &pulid_dir.to_string_lossy()],
-                None,
-                &tx,
-            )
-            .await?;
-        }
-
-        // 7. PuLID závislosti (insightface aj.) — na Windows může vyžadovat
-        // Visual C++ Build Tools; pokud selže, hlásíme srozumitelnou chybu
-        // místo zahození celé instalace ComfyUI samotného.
-        let pulid_requirements = pulid_dir.join("requirements.txt");
-        if pulid_requirements.exists() {
-            Self::step(&tx, "Instaluji závislosti PuLID (insightface aj.)").await;
-            if let Err(e) = run_streamed(
-                &venv_python,
-                &[
-                    "-m",
-                    "pip",
-                    "install",
-                    "-r",
-                    &pulid_requirements.to_string_lossy(),
-                ],
-                None,
-                &tx,
-            )
-            .await
-            {
-                let _ = tx
-                    .send(InstallProgress::Output(format!(
-                        "Varování: instalace PuLID závislostí selhala ({e}). ComfyUI samotné je funkční, \
-                         ale PuLID reference obrázky nemusí fungovat. Na Windows bývá potřeba nainstalovat \
-                         'Visual C++ Build Tools' kvůli kompilaci insightface, pak zkus instalaci znovu."
-                    )))
-                    .await;
-            }
-        }
+        // 6.+7. PuLID custom node + jeho pip závislosti (i pro existující
+        // klon — dřívější pokus o pip mohl selhat a re-instalace ho zopakuje)
+        self.ensure_pulid_custom_node(&tx).await?;
+        self.install_pulid_python_deps(&tx).await;
 
         // 8. SDXL checkpoint pro PuLID větev (viz komentář u konstanty výše)
         let checkpoint_path = self.checkpoints_dir().join(SDXL_CHECKPOINT_FILENAME);
@@ -279,32 +331,21 @@ impl ComfyInstallerPort for LocalComfyInstaller {
             .await?;
         }
 
-        // 9. PuLID váhy
-        let pulid_weights_path = self.pulid_weights_dir().join(PULID_WEIGHTS_FILENAME);
-        if !pulid_weights_path.exists() {
-            Self::step(&tx, "Stahuji PuLID váhy (~750 MB)").await;
-            download_file(
-                &self.http,
-                PULID_WEIGHTS_URL,
-                &pulid_weights_path,
-                "PuLID váhy",
-                &tx,
-            )
-            .await?;
-        }
-
-        // 10. InsightFace AntelopeV2 — detekce obličeje pro PulidInsightFaceLoader
-        let insightface_dir = self.insightface_models_dir();
-        if !insightface_dir.join("antelopev2").exists() {
-            Self::step(&tx, "Stahuji InsightFace AntelopeV2 (~340 MB)").await;
-            let zip_path = insightface_dir.join("antelopev2.zip");
-            download_file(&self.http, ANTELOPEV2_ZIP_URL, &zip_path, "AntelopeV2", &tx).await?;
-            extract_zip(&zip_path, &insightface_dir)?;
-            std::fs::remove_file(&zip_path).ok();
-        }
+        // 9. PuLID váhy + 10. InsightFace AntelopeV2
+        self.ensure_pulid_weights(&tx).await?;
+        self.ensure_antelopev2(&tx).await?;
 
         let _ = tx.send(InstallProgress::Done).await;
         Ok(())
+    }
+
+    async fn ensure_reference_assets(&self, tx: mpsc::Sender<InstallProgress>) -> AppResult<()> {
+        let cloned_now = self.ensure_pulid_custom_node(&tx).await?;
+        if cloned_now {
+            self.install_pulid_python_deps(&tx).await;
+        }
+        self.ensure_pulid_weights(&tx).await?;
+        self.ensure_antelopev2(&tx).await
     }
 
     async fn start_server(&self) -> AppResult<()> {
@@ -452,6 +493,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(installer.list_checkpoints().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ensure_reference_assets_is_noop_when_everything_exists() {
+        let installer = temp_installer();
+        // Připrav všechny PuLID assety „na disku" — nic se nesmí stahovat
+        // (žádný network krok by tady stejně neprošel).
+        std::fs::create_dir_all(installer.pulid_dir()).unwrap();
+        std::fs::create_dir_all(installer.pulid_weights_dir()).unwrap();
+        std::fs::write(
+            installer.pulid_weights_dir().join(PULID_WEIGHTS_FILENAME),
+            b"fake",
+        )
+        .unwrap();
+        std::fs::create_dir_all(installer.insightface_models_dir().join("antelopev2")).unwrap();
+
+        let (tx, mut rx) = mpsc::channel(8);
+        installer.ensure_reference_assets(tx).await.unwrap();
+
+        // Žádné kroky se nehlásily — vše už existovalo.
+        assert!(rx.recv().await.is_none());
     }
 
     #[tokio::test]
