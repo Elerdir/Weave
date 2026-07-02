@@ -23,6 +23,7 @@ pub struct ImageRequest {
 #[serde(rename_all = "snake_case")]
 pub enum StylePreset {
     Realistic,
+    SemiRealistic,
     Anime,
     Artistic,
     ThreeD,
@@ -33,6 +34,16 @@ impl StylePreset {
     /// Výchozí je realistický styl.
     pub fn classify(prompt: &str) -> Self {
         let lower = prompt.to_lowercase();
+        // SemiRealistic testujeme PŘED anime — „semi realistic anime girl"
+        // má být semi-real, ne anime.
+        const SEMI_REAL: &[&str] = &[
+            "semi real",
+            "semi-real",
+            "semireal",
+            "polorealist",
+            "stylizovan",
+            "stylized",
+        ];
         const ANIME: &[&str] = &["anime", "manga", "chibi", "waifu", "ghibli"];
         const THREE_D: &[&str] = &["3d", "render", "blender", "pixar", "low poly", "voxel"];
         const ARTISTIC: &[&str] = &[
@@ -49,7 +60,9 @@ impl StylePreset {
             "illustration",
         ];
 
-        if ANIME.iter().any(|k| lower.contains(k)) {
+        if SEMI_REAL.iter().any(|k| lower.contains(k)) {
+            StylePreset::SemiRealistic
+        } else if ANIME.iter().any(|k| lower.contains(k)) {
             StylePreset::Anime
         } else if THREE_D.iter().any(|k| lower.contains(k)) {
             StylePreset::ThreeD
@@ -105,6 +118,18 @@ mod tests {
         assert_eq!(
             StylePreset::classify("fotka kočky na zahradě"),
             StylePreset::Realistic
+        );
+    }
+
+    #[test]
+    fn classify_semi_realistic_beats_anime() {
+        assert_eq!(
+            StylePreset::classify("semi realistic anime girl"),
+            StylePreset::SemiRealistic
+        );
+        assert_eq!(
+            StylePreset::classify("polorealistický portrét dívky"),
+            StylePreset::SemiRealistic
         );
     }
 }
