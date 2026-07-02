@@ -24,6 +24,8 @@
     "@tauri-apps/plugin-process": "^2",
     "@tauri-apps/plugin-shell": "^2",
     "@tauri-apps/plugin-updater": "^2",
+    "dompurify": "^3.4.11",
+    "marked": "^18.0.5",
     "svelte": "^5.56.4"
   },
   "devDependencies": {
@@ -46,6 +48,8 @@
     "vitest": "^4.1.9"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
