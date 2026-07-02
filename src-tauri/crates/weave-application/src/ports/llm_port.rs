@@ -13,6 +13,9 @@ pub struct ChatRequest {
     /// (nebo dokud nenarazí na skutečný technický limit — kontextové okno).
     pub max_tokens: Option<u32>,
     pub temperature: f32,
+    /// Kontextové okno pro tuto konverzaci (jen vestavěná inference).
+    /// `None` = globální výchozí hodnota z nastavení.
+    pub context_length: Option<u32>,
     pub stream: bool,
 }
 

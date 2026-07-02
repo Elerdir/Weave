@@ -204,6 +204,7 @@ mod tests {
             messages: vec![Message::user(ConversationId::new(), "Ahoj")],
             model_id: "local-model".into(),
             max_tokens: Some(128),
+            context_length: None,
             temperature: 0.7,
             stream: true,
         }

@@ -76,6 +76,8 @@ pub fn run() {
             commands::message::send_message,
             commands::message::regenerate_response,
             commands::message::stop_generation,
+            commands::message::get_conversation_settings,
+            commands::message::set_conversation_settings,
             commands::settings::get_api_key_status,
             commands::settings::store_api_key,
             commands::settings::delete_api_key,
