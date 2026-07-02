@@ -41,6 +41,11 @@ pub trait ComfyInstallerPort: Send + Sync {
         style: StylePreset,
         tx: mpsc::Sender<InstallProgress>,
     ) -> AppResult<()>;
+    /// Zajistí assety pro generování s referenčním obrázkem (PuLID custom
+    /// node, PuLID váhy, InsightFace AntelopeV2) — instalace z dřívějších
+    /// verzí appky je mít nemusí. Co existuje, přeskočí; co chybí, stáhne
+    /// (s průběhem přes `tx`).
+    async fn ensure_reference_assets(&self, tx: mpsc::Sender<InstallProgress>) -> AppResult<()>;
     /// Vypíše stažené obrázkové checkpointy (models/checkpoints).
     async fn list_checkpoints(&self) -> AppResult<Vec<CheckpointInfo>>;
     /// Smaže stažený checkpoint podle názvu souboru.

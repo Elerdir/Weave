@@ -343,6 +343,21 @@ impl SendMessageUseCase {
             result?;
         }
 
+        // 2b. Assety pro referenční obrázek (PuLID node, váhy, InsightFace) —
+        // instalace z dřívějších verzí appky je mít nemusí, workflow by pak
+        // spadl na "pulid_file not in []".
+        if reference_image_path.is_some() {
+            let (itx, irx) = mpsc::channel(64);
+            let fwd = tokio::spawn(forward_install_progress(
+                ImageStage::DownloadingModel,
+                irx,
+                stream_tx.clone(),
+            ));
+            let result = self.comfy_installer.ensure_reference_assets(itx).await;
+            let _ = fwd.await;
+            result?;
+        }
+
         // 3. Server
         if self.comfy_installer.status().await? != ComfyStatus::Running {
             let _ = stream_tx.send(stage(ImageStage::StartingServer)).await;
@@ -467,6 +482,8 @@ mod tests {
             .returning(|| Box::pin(async { Ok(ComfyStatus::Running) }));
         m.expect_ensure_style_checkpoint()
             .returning(|_, _| Box::pin(async { Ok(()) }));
+        m.expect_ensure_reference_assets()
+            .returning(|_| Box::pin(async { Ok(()) }));
         m.expect_stop_server()
             .returning(|| Box::pin(async { Ok(()) }));
         m
@@ -886,6 +903,8 @@ mod tests {
             .expect_ensure_style_checkpoint()
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(()) }));
+        // Bez referenčního obrázku se PuLID assety nesmí řešit
+        installer.expect_ensure_reference_assets().never();
         installer
             .expect_start_server()
             .times(1)
@@ -949,5 +968,94 @@ mod tests {
         assert!(stages.contains(&ImageStage::Finishing));
         assert!(got_image_token, "chybi markdown s cestou k obrazku");
         assert!(got_done);
+    }
+
+    /// Regresní test na "pulid_file not in []" — generování s referenčním
+    /// obrázkem musí před spuštěním workflow zajistit PuLID assety (váhy,
+    /// InsightFace), protože instalace z dřívějších verzí appky je nemá.
+    #[tokio::test]
+    async fn reference_image_ensures_pulid_assets() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut attachment_store = MockAttachmentStorePort::new();
+        attachment_store
+            .expect_store_reference_image()
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(StoredImage {
+                        path: "/appdata/reference/ref.png".into(),
+                        mime: "image/png".into(),
+                    })
+                })
+            });
+
+        let mut installer = MockComfyInstallerPort::new();
+        installer
+            .expect_status()
+            .returning(|| Box::pin(async { Ok(ComfyStatus::Running) }));
+        installer
+            .expect_ensure_style_checkpoint()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        installer
+            .expect_ensure_reference_assets()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        installer
+            .expect_stop_server()
+            .returning(|| Box::pin(async { Ok(()) }));
+
+        let mut image_gen = MockImageGenPort::new();
+        image_gen.expect_generate().returning(|req, tx| {
+            assert_eq!(
+                req.reference_image_path.as_deref(),
+                Some("/appdata/reference/ref.png")
+            );
+            Box::pin(async move {
+                let _ = tx
+                    .send(ImageProgress::Done {
+                        output_path: "/gallery/portret.png".into(),
+                    })
+                    .await;
+                Ok(())
+            })
+        });
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(MockLlmPort::new()),
+            Arc::new(image_gen),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(attachment_store),
+            Arc::new(default_gen_settings()),
+            Arc::new(installer),
+        );
+
+        let (tx, mut rx) = mpsc::channel(64);
+        uc.execute(
+            ConversationId::new(),
+            "nakresli mě jako rytíře".into(),
+            vec![],
+            vec!["C:/fotky/ja.png".into()],
+            tx,
+        )
+        .await
+        .unwrap();
+
+        while let Some(chunk) = rx.recv().await {
+            if let StreamChunk::Error(e) = chunk {
+                panic!("necekana chyba: {e}");
+            }
+        }
     }
 }
