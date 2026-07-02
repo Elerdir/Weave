@@ -195,6 +195,30 @@ function createConversationStore() {
       messages = messages.slice(0, end);
     },
 
+    /** Znovu načte zprávy aktivní konverzace z DB (sladí lokální ID s backendem).
+     *  Defenzivně: mimo Tauri (e2e v prohlížeči) nechá lokální stav být. */
+    async reloadMessages() {
+      if (!activeId) return;
+      try {
+        const fresh = await invoke<Message[]>("list_messages", { conversationId: activeId });
+        if (Array.isArray(fresh)) messages = fresh;
+      } catch (err) {
+        console.warn("reloadMessages selhal:", err);
+      }
+    },
+
+    /** Lokálně odebere vše PO dané zprávě (znovuodeslání dotazu). */
+    truncateAfterLocal(messageId: string) {
+      const idx = messages.findIndex((m) => m.id === messageId);
+      if (idx >= 0) messages = messages.slice(0, idx + 1);
+    },
+
+    /** Lokálně odebere danou zprávu a vše po ní (editace dotazu). */
+    truncateFromLocal(messageId: string) {
+      const idx = messages.findIndex((m) => m.id === messageId);
+      if (idx >= 0) messages = messages.slice(0, idx);
+    },
+
     pushUserMessage(content: string, attachments: Attachment[] = []) {
       const msg: Message = {
         id: crypto.randomUUID(),

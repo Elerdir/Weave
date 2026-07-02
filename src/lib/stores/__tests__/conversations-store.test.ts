@@ -105,6 +105,53 @@ describe("conversationStore rename/togglePin", () => {
     expect(roles).toEqual(["user", "assistant", "user"]);
   });
 
+  it("truncateAfterLocal() nechá cílovou zprávu, truncateFromLocal() ji smaže taky", async () => {
+    await seed([conv("a")]);
+    mockInvoke.mockResolvedValueOnce([]);
+    await conversationStore.select("a");
+
+    conversationStore.pushUserMessage("první");
+    conversationStore.pushUserMessage("druhá");
+    conversationStore.pushUserMessage("třetí");
+    const secondId = conversationStore.messages[1].id;
+
+    conversationStore.truncateAfterLocal(secondId);
+    expect(conversationStore.messages.map((m) => m.content)).toEqual(["první", "druhá"]);
+
+    conversationStore.truncateFromLocal(secondId);
+    expect(conversationStore.messages.map((m) => m.content)).toEqual(["první"]);
+
+    // Neznámé ID nesmí nic smazat
+    conversationStore.truncateAfterLocal("neexistuje");
+    expect(conversationStore.messages).toHaveLength(1);
+  });
+
+  it("reloadMessages() nahradí zprávy daty z DB a přežije ne-pole", async () => {
+    await seed([conv("a")]);
+    mockInvoke.mockResolvedValueOnce([]);
+    await conversationStore.select("a");
+    conversationStore.pushUserMessage("lokální");
+
+    mockInvoke.mockResolvedValueOnce([
+      {
+        id: "db-1",
+        conversation_id: "a",
+        role: "user",
+        content: "z DB",
+        attachments: [],
+        stats: null,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    await conversationStore.reloadMessages();
+    expect(conversationStore.messages.map((m) => m.id)).toEqual(["db-1"]);
+
+    // Ne-pole (mimo Tauri) nechá stav být
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await conversationStore.reloadMessages();
+    expect(conversationStore.messages.map((m) => m.id)).toEqual(["db-1"]);
+  });
+
   it("pushUserMessage() uloží obrázkové přílohy", async () => {
     await seed([conv("a")]);
     mockInvoke.mockResolvedValueOnce([]);

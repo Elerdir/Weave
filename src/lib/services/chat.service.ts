@@ -51,6 +51,9 @@ async function runGeneration(
   const unlisten = await listenForStream();
   try {
     await invoke(command, args);
+    // Sladí lokální stav s DB — hlavně skutečná ID zpráv (potřebná pro
+    // resend/edit, lokálně vytvořené bubliny mají jen dočasná ID).
+    await conversationStore.reloadMessages();
   } catch (err) {
     unlisten();
     conversationStore.setLastError(String(err));
@@ -83,6 +86,28 @@ export async function sendMessage(
 export async function regenerateResponse(conversationId: string): Promise<void> {
   conversationStore.trimTrailingAssistantMessages();
   await runGeneration("regenerate_response", { conversationId });
+}
+
+/** „Poslat znovu": smaže vše po dané zprávě (dotazy i odpovědi) a vygeneruje
+ *  čerstvou odpověď na ni. */
+export async function resendMessage(
+  conversationId: string,
+  messageId: string
+): Promise<void> {
+  conversationStore.truncateAfterLocal(messageId);
+  await runGeneration("resend_message", { conversationId, messageId });
+}
+
+/** „Upravit a poslat": smaže původní zprávu a vše po ní, pak pošle novou verzi. */
+export async function sendEditedMessage(
+  conversationId: string,
+  messageId: string,
+  content: string,
+  referenceImages: string[] = []
+): Promise<void> {
+  conversationStore.truncateFromLocal(messageId);
+  await invoke("truncate_conversation_from", { conversationId, messageId });
+  await sendMessage(conversationId, content, [], referenceImages);
 }
 
 /** Zastaví právě běžící generování — částečná odpověď zůstane zachovaná. */

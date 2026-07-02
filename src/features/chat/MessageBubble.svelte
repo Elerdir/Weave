@@ -6,7 +6,11 @@
   import type { Message } from "$lib/stores/conversations.svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { referenceQueue } from "$lib/stores/reference-queue.svelte";
-  import { regenerateResponse, sendMessage } from "$lib/services/chat.service";
+  import {
+    regenerateResponse,
+    resendMessage,
+    sendEditedMessage,
+  } from "$lib/services/chat.service";
   import { extractLocalImagePaths, fileNameFromPath } from "$lib/generated-images";
   import { i18n } from "$lib/i18n/index.svelte";
   import { tts } from "$lib/services/tts.svelte";
@@ -57,17 +61,14 @@
     const content = editText.trim();
     if (!content || !conversationStore.activeId) return;
     editing = false;
-    await sendMessage(conversationStore.activeId, content, [], editImages);
+    // Původní zpráva a vše pod ní se smaže — novou verzi pošleme místo ní.
+    await sendEditedMessage(conversationStore.activeId, msg.id, content, editImages);
   }
 
   async function resend() {
     if (!conversationStore.activeId) return;
-    await sendMessage(
-      conversationStore.activeId,
-      msg.content,
-      [],
-      imageAttachments.map((a) => a.path)
-    );
+    // Vše pod tímto dotazem se smaže a vygeneruje se čerstvá odpověď.
+    await resendMessage(conversationStore.activeId, msg.id);
   }
 
   function onEditKeydown(e: KeyboardEvent) {

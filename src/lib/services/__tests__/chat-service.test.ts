@@ -111,9 +111,11 @@ describe("chat.service sendMessage", () => {
     expect(conversationStore.lastError).toContain("kontextového okna");
     expect(conversationStore.loading).toBe(false);
 
-    // Nové odeslání chybu vyčistí
+    // Nové odeslání chybu vyčistí (reset — jinak by i reload zpráv
+    // spadl do mockImplementation výše a vystřelil další Error chunk)
     mockListen.mockResolvedValue(() => {});
-    mockInvoke.mockResolvedValueOnce(undefined);
+    mockInvoke.mockReset();
+    mockInvoke.mockResolvedValue(undefined);
     await sendMessage("conv-1", "kratší zpráva");
     expect(conversationStore.lastError).toBeNull();
   });
@@ -164,8 +166,11 @@ describe("chat.service sendMessage", () => {
   });
 
   it("regenerateResponse() odebere poslední odpověď a zavolá backend", async () => {
-    // Historie: user zpráva + assistant odpověď (bez nového pushnutí user zprávy)
-    mockInvoke.mockResolvedValueOnce(undefined);
+    // Historie: user zpráva + assistant odpověď (bez nového pushnutí user zprávy).
+    // Reset kvůli implementacím z předchozích testů — reload zpráv volá
+    // invoke navíc a nesmí do nich spadnout.
+    mockInvoke.mockReset();
+    mockInvoke.mockResolvedValue(undefined);
     await sendMessage("conv-1", "otázka");
     conversationStore.finalizeStream({
       tokens_per_second: 1,
@@ -186,7 +191,7 @@ describe("chat.service sendMessage", () => {
     expect(conversationStore.messages.at(-1)?.role).toBe("assistant");
 
     mockInvoke.mockClear();
-    mockInvoke.mockResolvedValueOnce(undefined);
+    mockInvoke.mockResolvedValue(undefined);
     await regenerateResponse("conv-1");
 
     expect(mockInvoke).toHaveBeenCalledWith("regenerate_response", {
