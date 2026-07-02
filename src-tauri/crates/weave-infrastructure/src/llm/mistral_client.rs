@@ -146,7 +146,11 @@ impl LlmPort for MistralClient {
                     for choice in parsed.choices {
                         if let Some(content) = choice.delta.content {
                             completion_tokens += 1;
-                            let _ = tx.send(StreamChunk::Token(content)).await;
+                            if tx.send(StreamChunk::Token(content)).await.is_err() {
+                                // Příjemce zmizel (uživatel zastavil generování)
+                                // — ukončením se zavře i HTTP stream.
+                                return Ok(());
+                            }
                         }
                     }
                 }

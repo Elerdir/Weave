@@ -44,6 +44,7 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
         model_manager: Arc::new(LocalModelManager::new(models_dir)),
         comfy_installer: Arc::new(LocalComfyInstaller::new(comfyui_install_dir)),
         attachment_store: Arc::new(LocalAttachmentStore::new(reference_images_dir)),
+        active_generation: std::sync::Mutex::new(None),
     };
 
     app.manage(state);

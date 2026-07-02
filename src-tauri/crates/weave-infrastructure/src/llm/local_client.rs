@@ -155,7 +155,11 @@ impl LlmPort for LocalLlmClient {
                     for choice in parsed.choices {
                         if let Some(content) = choice.delta.content {
                             completion_tokens += 1;
-                            let _ = tx.send(StreamChunk::Token(content)).await;
+                            if tx.send(StreamChunk::Token(content)).await.is_err() {
+                                // Příjemce zmizel (uživatel zastavil generování)
+                                // — ukončením se zavře i HTTP stream.
+                                return Ok(());
+                            }
                         }
                     }
                 }
@@ -251,6 +255,26 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let result = client.chat_stream(chat_request(), tx).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn stops_cleanly_when_receiver_is_dropped() {
+        let server = MockServer::start().await;
+        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"Ahoj\"}}]}\n\
+                   data: {\"choices\":[{\"delta\":{\"content\":\" světe\"}}]}\n\
+                   data: [DONE]\n";
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(sse))
+            .mount(&server)
+            .await;
+
+        let client = LocalLlmClient::new(server.uri());
+        let (tx, rx) = mpsc::channel(16);
+        drop(rx); // uživatel zastavil generování — příjemce zmizel
+
+        // Nesmí to skončit chybou ani viset — jen tiše přestat streamovat.
+        client.chat_stream(chat_request(), tx).await.unwrap();
     }
 
     #[test]

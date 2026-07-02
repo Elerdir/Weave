@@ -69,10 +69,39 @@ pub async fn send_message(
         state.attachment_store.clone(),
     );
 
+    // Token pro zastavení tohoto generování (příkazem stop_generation).
+    // Případné předchozí generování zrušíme — běží vždy nejvýš jedno.
+    let cancel = tokio_util::sync::CancellationToken::new();
+    if let Some(old) = state
+        .active_generation
+        .lock()
+        .expect("active_generation mutex poisoned")
+        .replace(cancel.clone())
+    {
+        old.cancel();
+    }
+
     let window_clone = window.clone();
     tokio::spawn(async move {
-        while let Some(chunk) = rx.recv().await {
-            let _ = window_clone.emit("stream-chunk", &chunk);
+        loop {
+            tokio::select! {
+                maybe_chunk = rx.recv() => match maybe_chunk {
+                    Some(chunk) => {
+                        let _ = window_clone.emit("stream-chunk", &chunk);
+                    }
+                    None => break,
+                },
+                _ = cancel.cancelled() => {
+                    // Uzavřením rx přestanou klienti posílat tokeny a inference
+                    // skončí. Frontend dostane Done, aby rozepsanou odpověď
+                    // korektně uzavřel (částečný text zůstane zachovaný).
+                    let _ = window_clone.emit(
+                        "stream-chunk",
+                        &StreamChunk::Done(Default::default()),
+                    );
+                    break;
+                }
+            }
         }
     });
 
@@ -85,4 +114,17 @@ pub async fn send_message(
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Zastaví právě běžící generování odpovědi (pokud nějaké běží).
+#[tauri::command]
+pub fn stop_generation(state: State<'_, AppState>) {
+    if let Some(token) = state
+        .active_generation
+        .lock()
+        .expect("active_generation mutex poisoned")
+        .take()
+    {
+        token.cancel();
+    }
 }
