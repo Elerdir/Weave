@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tauri::{Emitter, State, Window};
 use tokio::sync::mpsc;
 use weave_application::ports::comfy_installer_port::{
-    ComfyInstallerPort, ComfyStatus, InstallProgress,
+    CheckpointInfo, ComfyInstallerPort, ComfyStatus, InstallProgress,
 };
 
 use crate::state::AppState;
@@ -61,4 +61,35 @@ pub async fn stop_comfyui_server(state: State<'_, AppState>) -> Result<(), Strin
         .stop_server()
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Vypíše stažené obrázkové checkpointy (models/checkpoints).
+#[tauri::command]
+pub async fn list_image_models(state: State<'_, AppState>) -> Result<Vec<CheckpointInfo>, String> {
+    make_installer(&state)
+        .list_checkpoints()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Smaže stažený obrázkový checkpoint podle názvu souboru.
+#[tauri::command]
+pub async fn delete_image_model(
+    file_name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    make_installer(&state)
+        .delete_checkpoint(&file_name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Zkopíruje soubor (typicky vygenerovaný obrázek) do cílové cesty vybrané
+/// uživatelem v save dialogu.
+#[tauri::command]
+pub async fn save_file_copy(source: String, dest: String) -> Result<(), String> {
+    tokio::fs::copy(&source, &dest)
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("Uložení souboru selhalo: {e}"))
 }

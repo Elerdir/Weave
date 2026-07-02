@@ -4,6 +4,11 @@ import { notify } from "$lib/services/notify";
 
 export type ComfyStatus = "NotInstalled" | "Installed" | "Running";
 
+export interface CheckpointInfo {
+  file_name: string;
+  size_bytes: number;
+}
+
 interface InstallEvent {
   type: "step" | "output" | "done" | "error";
   name?: string;
@@ -18,8 +23,12 @@ function createComfyInstallStore() {
   let log = $state<string[]>([]);
   let error = $state<string | null>(null);
   let starting = $state(false);
+  let checkpoints = $state<CheckpointInfo[]>([]);
 
   return {
+    get checkpoints() {
+      return checkpoints;
+    },
     get status() {
       return status;
     },
@@ -41,6 +50,12 @@ function createComfyInstallStore() {
 
     async load() {
       status = await invoke<ComfyStatus>("get_comfyui_status");
+      checkpoints = await invoke<CheckpointInfo[]>("list_image_models");
+    },
+
+    async deleteCheckpoint(fileName: string) {
+      await invoke("delete_image_model", { fileName });
+      checkpoints = checkpoints.filter((c) => c.file_name !== fileName);
     },
 
     async install() {

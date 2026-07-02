@@ -41,4 +41,14 @@ pub trait ComfyInstallerPort: Send + Sync {
         style: StylePreset,
         tx: mpsc::Sender<InstallProgress>,
     ) -> AppResult<()>;
+    /// Vypíše stažené obrázkové checkpointy (models/checkpoints).
+    async fn list_checkpoints(&self) -> AppResult<Vec<CheckpointInfo>>;
+    /// Smaže stažený checkpoint podle názvu souboru.
+    async fn delete_checkpoint(&self, file_name: &str) -> AppResult<()>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointInfo {
+    pub file_name: String,
+    pub size_bytes: u64,
 }

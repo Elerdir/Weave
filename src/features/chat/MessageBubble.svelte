@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { convertFileSrc } from "@tauri-apps/api/core";
+  import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+  import { save as saveDialog } from "@tauri-apps/plugin-dialog";
   import type { Message } from "$lib/stores/conversations.svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
+  import { referenceQueue } from "$lib/stores/reference-queue.svelte";
   import { regenerateResponse } from "$lib/services/chat.service";
+  import { extractLocalImagePaths, fileNameFromPath } from "$lib/generated-images";
   import { i18n } from "$lib/i18n/index.svelte";
   import { tts } from "$lib/services/tts.svelte";
 
@@ -14,9 +17,23 @@
   const canRegenerate = $derived(
     !isUser && isLast && !conversationStore.loading && conversationStore.activeId !== null
   );
+  /** Vygenerované obrázky v odpovědi asistenta (lokální cesty z markdownu). */
+  const generatedImages = $derived(isUser ? [] : extractLocalImagePaths(msg.content));
 
   function regenerate() {
     if (conversationStore.activeId) void regenerateResponse(conversationStore.activeId);
+  }
+
+  async function saveImage(source: string) {
+    const dest = await saveDialog({
+      defaultPath: fileNameFromPath(source),
+      filters: [{ name: "Obrázek", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (dest) await invoke("save_file_copy", { source, dest });
+  }
+
+  function useAsReference(path: string) {
+    referenceQueue.add(path);
   }
 
   // Jednoduchý markdown renderer — inline kód + code bloky
@@ -78,6 +95,20 @@
         title={i18n.m.chat.regenerate}
         aria-label={i18n.m.chat.regenerate}
       >↻</button>
+    {/if}
+    {#if generatedImages.length > 0}
+      <button
+        class="action-btn"
+        onclick={() => saveImage(generatedImages[0])}
+        title={i18n.m.chat.saveImage}
+        aria-label={i18n.m.chat.saveImage}
+      >💾</button>
+      <button
+        class="action-btn"
+        onclick={() => useAsReference(generatedImages[0])}
+        title={i18n.m.chat.useAsReference}
+        aria-label={i18n.m.chat.useAsReference}
+      >🖼️</button>
     {/if}
   </div>
 </div>

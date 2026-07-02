@@ -61,6 +61,8 @@ const cs = {
     addReferenceImage: "Přidat referenční obrázek",
     removeReferenceImage: "Odebrat obrázek",
     dropImagesHint: "Pusť obrázky sem — přiloží se jako reference",
+    saveImage: "Uložit obrázek",
+    useAsReference: "Použít jako referenci",
     imageStages: {
       checking: "Kontroluji prostředí pro generování…",
       installing: "Instaluji ComfyUI (poprvé to trvá desítky minut)…",
@@ -153,6 +155,7 @@ const cs = {
       runningLabel: "Server běží",
       startServer: "Spustit server",
       stopServer: "Zastavit server",
+      imageModelsTitle: "Stažené modely obrázků",
     },
     models: {
       title: "Místní modely",

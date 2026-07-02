@@ -63,6 +63,8 @@ const en: Messages = {
     addReferenceImage: "Add reference image",
     removeReferenceImage: "Remove image",
     dropImagesHint: "Drop images here — attached as references",
+    saveImage: "Save image",
+    useAsReference: "Use as reference",
     imageStages: {
       checking: "Checking the image generation environment…",
       installing: "Installing ComfyUI (first run takes tens of minutes)…",
@@ -155,6 +157,7 @@ const en: Messages = {
       runningLabel: "Server running",
       startServer: "Start server",
       stopServer: "Stop server",
+      imageModelsTitle: "Downloaded image models",
     },
     models: {
       title: "Local Models",
