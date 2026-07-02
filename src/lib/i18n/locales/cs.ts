@@ -60,6 +60,13 @@ const cs = {
     imageGenerated: "Obrázek vygenerován",
     addReferenceImage: "Přidat referenční obrázek",
     removeReferenceImage: "Odebrat obrázek",
+    genSettings: {
+      title: "Parametry generování",
+      context: "Kontextové okno (tokeny)",
+      temperature: "Teplota (kreativita)",
+      maxTokens: "Max. tokenů odpovědi",
+      unlimited: "Neomezeno",
+    },
   },
   sidebar: {
     conversations: "Konverzace",

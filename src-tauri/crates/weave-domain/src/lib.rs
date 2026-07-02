@@ -1,5 +1,6 @@
 pub mod conversation;
 pub mod error;
+pub mod generation_settings;
 pub mod message;
 pub mod model;
 pub mod persona;

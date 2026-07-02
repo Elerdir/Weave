@@ -12,6 +12,7 @@ use crate::{
     ports::{
         attachment_store_port::AttachmentStorePort,
         conversation_repository::{ConversationRepository, MessageRepository},
+        generation_settings_repository::GenerationSettingsRepository,
         image_gen_port::{ImageGenPort, ImageProgress, ImageRequest, StylePreset},
         llm_port::{ChatRequest, LlmPort, StreamChunk},
         persona_repository::PersonaRepository,
@@ -27,6 +28,7 @@ pub struct SendMessageUseCase {
     workspace_repo: Arc<dyn WorkspaceRepository>,
     persona_repo: Arc<dyn PersonaRepository>,
     attachment_store: Arc<dyn AttachmentStorePort>,
+    gen_settings_repo: Arc<dyn GenerationSettingsRepository>,
 }
 
 impl SendMessageUseCase {
@@ -39,6 +41,7 @@ impl SendMessageUseCase {
         workspace_repo: Arc<dyn WorkspaceRepository>,
         persona_repo: Arc<dyn PersonaRepository>,
         attachment_store: Arc<dyn AttachmentStorePort>,
+        gen_settings_repo: Arc<dyn GenerationSettingsRepository>,
     ) -> Self {
         Self {
             conv_repo,
@@ -48,6 +51,7 @@ impl SendMessageUseCase {
             workspace_repo,
             persona_repo,
             attachment_store,
+            gen_settings_repo,
         }
     }
 
@@ -212,12 +216,16 @@ impl SendMessageUseCase {
                     history.insert(0, Message::system(conversation_id.clone(), prompt));
                 }
 
+                // Per-konverzační parametry (posuvníky v chatu)
+                let gen = self.gen_settings_repo.get(&conversation_id).await?;
+
                 let model_id = Self::model_for_intent(&intent);
                 let request = ChatRequest {
                     messages: history,
                     model_id,
-                    max_tokens: None,
-                    temperature: 0.7,
+                    max_tokens: gen.max_tokens,
+                    temperature: gen.temperature_or_default(),
+                    context_length: gen.context_length,
                     stream: true,
                 };
                 self.llm.chat_stream(request, tee_tx).await
@@ -337,12 +345,21 @@ mod tests {
     use crate::ports::{
         attachment_store_port::{MockAttachmentStorePort, StoredImage},
         conversation_repository::{MockConversationRepository, MockMessageRepository},
+        generation_settings_repository::MockGenerationSettingsRepository,
         image_gen_port::MockImageGenPort,
         llm_port::MockLlmPort,
         persona_repository::MockPersonaRepository,
         workspace_port::MockWorkspaceRepository,
     };
     use weave_domain::{conversation::Conversation, workspace::IndexedFile};
+
+    /// Mock parametrů generování vracející výchozí (prázdné) hodnoty.
+    fn default_gen_settings() -> MockGenerationSettingsRepository {
+        let mut m = MockGenerationSettingsRepository::new();
+        m.expect_get()
+            .returning(|_| Box::pin(async { Ok(Default::default()) }));
+        m
+    }
 
     fn make_uc(ws: MockWorkspaceRepository) -> SendMessageUseCase {
         SendMessageUseCase::new(
@@ -353,6 +370,7 @@ mod tests {
             Arc::new(ws),
             Arc::new(MockPersonaRepository::new()),
             Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(default_gen_settings()),
         )
     }
 
@@ -376,6 +394,7 @@ mod tests {
             Arc::new(MockWorkspaceRepository::new()),
             Arc::new(MockPersonaRepository::new()),
             Arc::new(attachment_store),
+            Arc::new(default_gen_settings()),
         )
     }
 
@@ -668,5 +687,66 @@ mod tests {
         let (tx, _rx) = mpsc::channel(4);
 
         assert!(uc.regenerate(ConversationId::new(), tx).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn execute_applies_per_conversation_generation_settings() {
+        use weave_domain::generation_settings::GenerationSettings;
+
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        msg_repo
+            .expect_list_by_conversation()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+
+        let mut gen_repo = MockGenerationSettingsRepository::new();
+        gen_repo.expect_get().returning(|_| {
+            Box::pin(async {
+                Ok(GenerationSettings {
+                    context_length: Some(16384),
+                    temperature: Some(1.4),
+                    max_tokens: Some(512),
+                })
+            })
+        });
+
+        let mut llm = MockLlmPort::new();
+        llm.expect_chat_stream()
+            .withf(|req: &ChatRequest, _tx| {
+                req.temperature == 1.4
+                    && req.max_tokens == Some(512)
+                    && req.context_length == Some(16384)
+            })
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(llm),
+            Arc::new(MockImageGenPort::new()),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(gen_repo),
+        );
+        let (tx, _rx) = mpsc::channel(8);
+
+        uc.execute(
+            ConversationId::new(),
+            "jak se máš?".into(),
+            vec![],
+            vec![],
+            tx,
+        )
+        .await
+        .unwrap();
     }
 }

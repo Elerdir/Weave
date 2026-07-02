@@ -150,8 +150,10 @@ fn run_inference(
     n_ctx: u32,
     req: &WorkerRequest,
 ) -> AppResult<()> {
-    // Kontext držíme v mezích toho, na co byl model trénovaný.
-    let n_ctx_eff = n_ctx.max(512).min(model.n_ctx_train());
+    // Per-konverzační kontext má přednost před globálním nastavením;
+    // obojí držíme v mezích toho, na co byl model trénovaný.
+    let n_ctx_requested = req.request.context_length.unwrap_or(n_ctx);
+    let n_ctx_eff = n_ctx_requested.max(512).min(model.n_ctx_train());
 
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(n_ctx_eff))

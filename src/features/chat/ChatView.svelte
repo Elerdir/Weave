@@ -3,6 +3,7 @@
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
   import { conversationStore } from "$lib/stores/conversations.svelte";
+  import { generationSettingsStore } from "$lib/stores/generation-settings.svelte";
   import { sendMessage, stopGeneration } from "$lib/services/chat.service";
   import { i18n } from "$lib/i18n/index.svelte";
   import { activeMention, removeMentionToken } from "$lib/mentions";
@@ -37,6 +38,17 @@
 
   // Referenční obrázky pro generování (náhled hned po výběru)
   let refImages = $state<RefImage[]>([]);
+
+  // Panel per-konverzačních parametrů generování (posuvníky)
+  let showGenSettings = $state(false);
+
+  $effect(() => {
+    const id = conversationStore.activeId;
+    if (id) {
+      showGenSettings = false;
+      void generationSettingsStore.load(id);
+    }
+  });
 
   async function pickReferenceImages() {
     const picked = await openFilePicker({
@@ -169,9 +181,78 @@
           })} · {conversationStore.currentStats.model_id}
         </span>
       {/if}
+      <button
+        class="gen-settings-btn"
+        class:active={showGenSettings}
+        onclick={() => (showGenSettings = !showGenSettings)}
+        title={i18n.m.chat.genSettings.title}
+        aria-label={i18n.m.chat.genSettings.title}
+      >⚙</button>
       <ExportMenu />
     </div>
   </header>
+
+  {#if showGenSettings}
+    <div class="gen-settings-panel">
+      <div class="gen-field">
+        <div class="gen-label-row">
+          <label for="gen-context">{i18n.m.chat.genSettings.context}</label>
+          <span class="gen-value">{generationSettingsStore.contextLength.toLocaleString()}</span>
+        </div>
+        <input
+          id="gen-context"
+          type="range"
+          min="2048"
+          max="32768"
+          step="1024"
+          value={generationSettingsStore.contextLength}
+          oninput={(e) =>
+            generationSettingsStore.setContextLength(Number((e.target as HTMLInputElement).value))}
+          onchange={() => generationSettingsStore.save()}
+        />
+      </div>
+
+      <div class="gen-field">
+        <div class="gen-label-row">
+          <label for="gen-temperature">{i18n.m.chat.genSettings.temperature}</label>
+          <span class="gen-value">{generationSettingsStore.temperature.toFixed(2)}</span>
+        </div>
+        <input
+          id="gen-temperature"
+          type="range"
+          min="0"
+          max="2"
+          step="0.05"
+          value={generationSettingsStore.temperature}
+          oninput={(e) =>
+            generationSettingsStore.setTemperature(Number((e.target as HTMLInputElement).value))}
+          onchange={() => generationSettingsStore.save()}
+        />
+      </div>
+
+      <div class="gen-field">
+        <div class="gen-label-row">
+          <label for="gen-max-tokens">{i18n.m.chat.genSettings.maxTokens}</label>
+          <span class="gen-value">
+            {generationSettingsStore.maxTokens > 0
+              ? generationSettingsStore.maxTokens.toLocaleString()
+              : i18n.m.chat.genSettings.unlimited}
+          </span>
+        </div>
+        <input
+          id="gen-max-tokens"
+          type="range"
+          min="0"
+          max="8192"
+          step="256"
+          value={generationSettingsStore.maxTokens}
+          oninput={(e) =>
+            generationSettingsStore.setMaxTokens(Number((e.target as HTMLInputElement).value))}
+          onchange={() => generationSettingsStore.save()}
+        />
+      </div>
+    </div>
+  {/if}
 
   <div class="messages" bind:this={messagesEl}>
     {#each conversationStore.messages as msg, i (msg.id)}
@@ -322,6 +403,63 @@
     font-size: 0.78rem;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
+  }
+
+  .gen-settings-btn {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    border-radius: 8px;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+  }
+  .gen-settings-btn:hover {
+    color: var(--color-text);
+    background: var(--color-surface-2);
+  }
+  .gen-settings-btn.active {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+
+  .gen-settings-panel {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem 2rem;
+    padding: 0.85rem 1.25rem;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface);
+  }
+
+  .gen-field {
+    flex: 1 1 220px;
+    min-width: 200px;
+  }
+
+  .gen-label-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.25rem;
+  }
+
+  .gen-label-row label {
+    font-size: 0.78rem;
+    color: var(--color-text-muted);
+  }
+
+  .gen-value {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-accent);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .gen-field input[type="range"] {
+    width: 100%;
+    accent-color: var(--color-accent);
   }
 
   .messages {

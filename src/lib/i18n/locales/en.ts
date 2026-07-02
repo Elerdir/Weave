@@ -62,6 +62,13 @@ const en: Messages = {
     imageGenerated: "Image generated",
     addReferenceImage: "Add reference image",
     removeReferenceImage: "Remove image",
+    genSettings: {
+      title: "Generation parameters",
+      context: "Context window (tokens)",
+      temperature: "Temperature (creativity)",
+      maxTokens: "Max response tokens",
+      unlimited: "Unlimited",
+    },
   },
   sidebar: {
     conversations: "Conversations",

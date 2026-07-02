@@ -1,5 +1,6 @@
 pub mod app_config;
 pub mod conversation_repo;
+pub mod generation_settings_repo;
 pub mod message_repo;
 pub mod persona_repo;
 pub mod workspace_config;

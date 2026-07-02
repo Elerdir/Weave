@@ -62,6 +62,39 @@ pub async fn regenerate_response(
     uc.regenerate(conv_id, tx).await.map_err(|e| e.to_string())
 }
 
+/// Vrátí per-konverzační parametry generování (posuvníky v chatu).
+#[tauri::command]
+pub async fn get_conversation_settings(
+    conversation_id: String,
+    state: State<'_, AppState>,
+) -> Result<weave_domain::generation_settings::GenerationSettings, String> {
+    use weave_application::ports::generation_settings_repository::GenerationSettingsRepository;
+    use weave_infrastructure::db::generation_settings_repo::SqliteGenerationSettingsRepository;
+
+    let conv_id = parse_conversation_id(&conversation_id)?;
+    SqliteGenerationSettingsRepository::new(state.pool.clone())
+        .get(&conv_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Uloží per-konverzační parametry generování.
+#[tauri::command]
+pub async fn set_conversation_settings(
+    conversation_id: String,
+    settings: weave_domain::generation_settings::GenerationSettings,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use weave_application::ports::generation_settings_repository::GenerationSettingsRepository;
+    use weave_infrastructure::db::generation_settings_repo::SqliteGenerationSettingsRepository;
+
+    let conv_id = parse_conversation_id(&conversation_id)?;
+    SqliteGenerationSettingsRepository::new(state.pool.clone())
+        .set(&conv_id, &settings)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Zastaví právě běžící generování odpovědi (pokud nějaké běží).
 #[tauri::command]
 pub fn stop_generation(state: State<'_, AppState>) {
@@ -84,8 +117,9 @@ fn parse_conversation_id(raw: &str) -> Result<ConversationId, String> {
 async fn build_use_case(state: &State<'_, AppState>) -> SendMessageUseCase {
     use weave_infrastructure::{
         db::{
-            conversation_repo::SqliteConversationRepository, message_repo::SqliteMessageRepository,
-            persona_repo::SqlitePersonaRepository,
+            conversation_repo::SqliteConversationRepository,
+            generation_settings_repo::SqliteGenerationSettingsRepository,
+            message_repo::SqliteMessageRepository, persona_repo::SqlitePersonaRepository,
         },
         workspace::workspace_repo::SqliteWorkspaceRepository,
     };
@@ -100,6 +134,7 @@ async fn build_use_case(state: &State<'_, AppState>) -> SendMessageUseCase {
         Arc::new(SqliteWorkspaceRepository::new(state.pool.clone())),
         Arc::new(SqlitePersonaRepository::new(state.pool.clone())),
         state.attachment_store.clone(),
+        Arc::new(SqliteGenerationSettingsRepository::new(state.pool.clone())),
     )
 }
 

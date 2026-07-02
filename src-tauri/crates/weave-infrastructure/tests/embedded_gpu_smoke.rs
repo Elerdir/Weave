@@ -33,6 +33,7 @@ async fn generates_real_tokens_on_gpu() {
         )],
         model_id: "smoke-test".into(),
         max_tokens: Some(32),
+        context_length: None,
         temperature: 0.7,
         stream: true,
     };
@@ -84,6 +85,7 @@ async fn handles_prompt_longer_than_n_batch() {
         messages,
         model_id: "smoke-test".into(),
         max_tokens: Some(16),
+        context_length: None,
         temperature: 0.7,
         stream: true,
     };
@@ -145,6 +147,7 @@ async fn trims_history_that_exceeds_context_window() {
         messages,
         model_id: "smoke-test".into(),
         max_tokens: Some(16),
+        context_length: None,
         temperature: 0.7,
         stream: true,
     };
