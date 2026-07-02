@@ -75,6 +75,36 @@ describe("conversationStore rename/togglePin", () => {
     expect(last?.attachments).toEqual([]);
   });
 
+  it("trimTrailingAssistantMessages() odebere jen koncové odpovědi asistenta", async () => {
+    await seed([conv("a")]);
+    mockInvoke.mockResolvedValueOnce([]);
+    await conversationStore.select("a");
+
+    conversationStore.pushUserMessage("první");
+    conversationStore.appendStreamToken("odpověď 1");
+    conversationStore.finalizeStream({
+      tokens_per_second: 1,
+      prompt_tokens: 1,
+      completion_tokens: 1,
+      model_id: "m",
+      backend: "b",
+    });
+    conversationStore.pushUserMessage("druhá");
+    conversationStore.appendStreamToken("odpověď 2");
+    conversationStore.finalizeStream({
+      tokens_per_second: 1,
+      prompt_tokens: 1,
+      completion_tokens: 1,
+      model_id: "m",
+      backend: "b",
+    });
+
+    conversationStore.trimTrailingAssistantMessages();
+
+    const roles = conversationStore.messages.map((m) => m.role);
+    expect(roles).toEqual(["user", "assistant", "user"]);
+  });
+
   it("pushUserMessage() uloží obrázkové přílohy", async () => {
     await seed([conv("a")]);
     mockInvoke.mockResolvedValueOnce([]);

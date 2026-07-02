@@ -1,5 +1,11 @@
+use std::sync::Arc;
+
 use tauri::{Emitter, State};
-use weave_domain::message::Message;
+use tokio::sync::mpsc;
+use weave_application::{
+    ports::llm_port::StreamChunk, use_cases::send_message::SendMessageUseCase,
+};
+use weave_domain::{conversation::ConversationId, message::Message};
 
 use crate::state::AppState;
 
@@ -8,15 +14,11 @@ pub async fn list_messages(
     conversation_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<Message>, String> {
-    use std::sync::Arc;
-    use uuid::Uuid;
     use weave_application::ports::conversation_repository::MessageRepository;
-    use weave_domain::conversation::ConversationId;
     use weave_infrastructure::db::message_repo::SqliteMessageRepository;
 
     let repo = Arc::new(SqliteMessageRepository::new(state.pool.clone()));
-    let uuid = Uuid::parse_str(&conversation_id).map_err(|e| e.to_string())?;
-    let conv_id = ConversationId::from_uuid(uuid);
+    let conv_id = parse_conversation_id(&conversation_id)?;
     repo.list_by_conversation(&conv_id)
         .await
         .map_err(|e| e.to_string())
@@ -31,79 +33,9 @@ pub async fn send_message(
     window: tauri::Window,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    use std::sync::Arc;
-    use tokio::sync::mpsc;
-    use uuid::Uuid;
-    use weave_application::{
-        ports::llm_port::StreamChunk, use_cases::send_message::SendMessageUseCase,
-    };
-    use weave_domain::conversation::ConversationId;
-    use weave_infrastructure::{
-        db::{
-            conversation_repo::SqliteConversationRepository, message_repo::SqliteMessageRepository,
-            persona_repo::SqlitePersonaRepository,
-        },
-        workspace::workspace_repo::SqliteWorkspaceRepository,
-    };
-
-    let uuid = Uuid::parse_str(&conversation_id).map_err(|e| e.to_string())?;
-    let conv_id = ConversationId::from_uuid(uuid);
-
-    let conv_repo = Arc::new(SqliteConversationRepository::new(state.pool.clone()));
-    let msg_repo = Arc::new(SqliteMessageRepository::new(state.pool.clone()));
-    let workspace_repo = Arc::new(SqliteWorkspaceRepository::new(state.pool.clone()));
-    let persona_repo = Arc::new(SqlitePersonaRepository::new(state.pool.clone()));
-
-    // Vybereme LLM backend podle nastavení (Mistral API / lokální llama.cpp server)
-    let llm = crate::commands::settings::resolve_llm(&state).await;
-
-    let (tx, mut rx) = mpsc::channel::<StreamChunk>(128);
-
-    let uc = SendMessageUseCase::new(
-        conv_repo,
-        msg_repo,
-        llm,
-        state.image_gen.clone(),
-        workspace_repo,
-        persona_repo,
-        state.attachment_store.clone(),
-    );
-
-    // Token pro zastavení tohoto generování (příkazem stop_generation).
-    // Případné předchozí generování zrušíme — běží vždy nejvýš jedno.
-    let cancel = tokio_util::sync::CancellationToken::new();
-    if let Some(old) = state
-        .active_generation
-        .lock()
-        .expect("active_generation mutex poisoned")
-        .replace(cancel.clone())
-    {
-        old.cancel();
-    }
-
-    let window_clone = window.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                maybe_chunk = rx.recv() => match maybe_chunk {
-                    Some(chunk) => {
-                        let _ = window_clone.emit("stream-chunk", &chunk);
-                    }
-                    None => break,
-                },
-                _ = cancel.cancelled() => {
-                    // Uzavřením rx přestanou klienti posílat tokeny a inference
-                    // skončí. Frontend dostane Done, aby rozepsanou odpověď
-                    // korektně uzavřel (částečný text zůstane zachovaný).
-                    let _ = window_clone.emit(
-                        "stream-chunk",
-                        &StreamChunk::Done(Default::default()),
-                    );
-                    break;
-                }
-            }
-        }
-    });
+    let conv_id = parse_conversation_id(&conversation_id)?;
+    let uc = build_use_case(&state).await;
+    let tx = spawn_stream_forwarder(window, &state);
 
     uc.execute(
         conv_id,
@@ -114,6 +46,20 @@ pub async fn send_message(
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Znovu vygeneruje poslední odpověď asistenta v konverzaci.
+#[tauri::command]
+pub async fn regenerate_response(
+    conversation_id: String,
+    window: tauri::Window,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conv_id = parse_conversation_id(&conversation_id)?;
+    let uc = build_use_case(&state).await;
+    let tx = spawn_stream_forwarder(window, &state);
+
+    uc.regenerate(conv_id, tx).await.map_err(|e| e.to_string())
 }
 
 /// Zastaví právě běžící generování odpovědi (pokud nějaké běží).
@@ -127,4 +73,75 @@ pub fn stop_generation(state: State<'_, AppState>) {
     {
         token.cancel();
     }
+}
+
+fn parse_conversation_id(raw: &str) -> Result<ConversationId, String> {
+    let uuid = uuid::Uuid::parse_str(raw).map_err(|e| e.to_string())?;
+    Ok(ConversationId::from_uuid(uuid))
+}
+
+/// Sestaví use case se všemi závislostmi (LLM backend dle aktuálního nastavení).
+async fn build_use_case(state: &State<'_, AppState>) -> SendMessageUseCase {
+    use weave_infrastructure::{
+        db::{
+            conversation_repo::SqliteConversationRepository, message_repo::SqliteMessageRepository,
+            persona_repo::SqlitePersonaRepository,
+        },
+        workspace::workspace_repo::SqliteWorkspaceRepository,
+    };
+
+    let llm = crate::commands::settings::resolve_llm(state).await;
+
+    SendMessageUseCase::new(
+        Arc::new(SqliteConversationRepository::new(state.pool.clone())),
+        Arc::new(SqliteMessageRepository::new(state.pool.clone())),
+        llm,
+        state.image_gen.clone(),
+        Arc::new(SqliteWorkspaceRepository::new(state.pool.clone())),
+        Arc::new(SqlitePersonaRepository::new(state.pool.clone())),
+        state.attachment_store.clone(),
+    )
+}
+
+/// Vytvoří kanál pro stream chunky, zaregistruje CancellationToken tohoto
+/// generování (příkaz stop_generation ho zruší) a spustí přeposílací smyčku
+/// do window eventů. Vrací odesílací konec pro use case.
+fn spawn_stream_forwarder(
+    window: tauri::Window,
+    state: &State<'_, AppState>,
+) -> mpsc::Sender<StreamChunk> {
+    let (tx, mut rx) = mpsc::channel::<StreamChunk>(128);
+
+    // Případné předchozí generování zrušíme — běží vždy nejvýš jedno.
+    let cancel = tokio_util::sync::CancellationToken::new();
+    if let Some(old) = state
+        .active_generation
+        .lock()
+        .expect("active_generation mutex poisoned")
+        .replace(cancel.clone())
+    {
+        old.cancel();
+    }
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                maybe_chunk = rx.recv() => match maybe_chunk {
+                    Some(chunk) => {
+                        let _ = window.emit("stream-chunk", &chunk);
+                    }
+                    None => break,
+                },
+                _ = cancel.cancelled() => {
+                    // Uzavřením rx přestanou klienti posílat tokeny a inference
+                    // skončí. Frontend dostane Done, aby rozepsanou odpověď
+                    // korektně uzavřel (částečný text zůstane zachovaný).
+                    let _ = window.emit("stream-chunk", &StreamChunk::Done(Default::default()));
+                    break;
+                }
+            }
+        }
+    });
+
+    tx
 }

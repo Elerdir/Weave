@@ -174,8 +174,8 @@
   </header>
 
   <div class="messages" bind:this={messagesEl}>
-    {#each conversationStore.messages as msg (msg.id)}
-      <MessageBubble {msg} />
+    {#each conversationStore.messages as msg, i (msg.id)}
+      <MessageBubble {msg} isLast={i === conversationStore.messages.length - 1} />
     {/each}
 
     {#if conversationStore.streamingContent !== null}
