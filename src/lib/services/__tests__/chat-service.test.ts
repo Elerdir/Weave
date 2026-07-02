@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { sendMessage } from "$lib/services/chat.service";
+import { sendMessage, stopGeneration } from "$lib/services/chat.service";
 import { conversationStore } from "$lib/stores/conversations.svelte";
 
 const mockInvoke = vi.mocked(invoke);
@@ -94,5 +94,13 @@ describe("chat.service sendMessage", () => {
 
     await expect(sendMessage("conv-1", "ahoj")).rejects.toThrow("síť nedostupná");
     expect(conversationStore.loading).toBe(false);
+  });
+
+  it("stopGeneration() zavolá backend command", async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+
+    await stopGeneration();
+
+    expect(mockInvoke).toHaveBeenCalledWith("stop_generation");
   });
 });

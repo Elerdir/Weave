@@ -56,3 +56,8 @@ export async function sendMessage(
     throw err;
   }
 }
+
+/** Zastaví právě běžící generování — částečná odpověď zůstane zachovaná. */
+export async function stopGeneration(): Promise<void> {
+  await invoke("stop_generation");
+}

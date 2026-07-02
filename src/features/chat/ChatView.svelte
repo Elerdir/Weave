@@ -3,7 +3,7 @@
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
   import { conversationStore } from "$lib/stores/conversations.svelte";
-  import { sendMessage } from "$lib/services/chat.service";
+  import { sendMessage, stopGeneration } from "$lib/services/chat.service";
   import { i18n } from "$lib/i18n/index.svelte";
   import { activeMention, removeMentionToken } from "$lib/mentions";
   import type { MentionMatch } from "$lib/mentions";
@@ -254,13 +254,19 @@
         disabled={conversationStore.loading}
         rows="1"
       ></textarea>
-      <button
-        class="send-btn"
-        onclick={submit}
-        disabled={!input.trim() || conversationStore.loading}
-      >
-        {i18n.m.chat.send}
-      </button>
+      {#if conversationStore.loading}
+        <button class="stop-btn" onclick={() => stopGeneration()}>
+          {i18n.m.chat.stop}
+        </button>
+      {:else}
+        <button
+          class="send-btn"
+          onclick={submit}
+          disabled={!input.trim()}
+        >
+          {i18n.m.chat.send}
+        </button>
+      {/if}
     </div>
   </div>
 </div>
@@ -546,4 +552,20 @@
 
   .send-btn:hover:not(:disabled) { background: var(--color-accent-hover); }
   .send-btn:disabled { opacity: 0.45; cursor: default; }
+
+  .stop-btn {
+    background: transparent;
+    color: var(--color-error, #e5484d);
+    border: 1px solid var(--color-error, #e5484d);
+    border-radius: 10px;
+    padding: 0.65rem 1.25rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    align-self: flex-end;
+    transition: background 0.2s;
+    white-space: nowrap;
+  }
+
+  .stop-btn:hover { background: color-mix(in srgb, var(--color-error, #e5484d) 12%, transparent); }
 </style>
