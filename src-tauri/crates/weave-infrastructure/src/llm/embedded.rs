@@ -109,11 +109,33 @@ fn drop_oldest_droppable(messages: &mut Vec<&Message>) -> bool {
     }
 }
 
+/// Inicializuje llama backend. `BackendAlreadyInitialized` znamená, že staré
+/// worker vlákno (výměna modelu) ještě dojíždí a backend drží — chvíli
+/// počkáme a zkusíme to znovu, místo abychom rovnou selhali.
+fn init_backend_with_retry() -> Result<LlamaBackend, String> {
+    const MAX_ATTEMPTS: u32 = 100;
+    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
+
+    for attempt in 0..MAX_ATTEMPTS {
+        match LlamaBackend::init() {
+            Ok(b) => return Ok(b),
+            Err(llama_cpp_2::LlamaCppError::BackendAlreadyInitialized) => {
+                if attempt == 0 {
+                    tracing::info!("Llama backend ještě drží předchozí worker, čekám na uvolnění");
+                }
+                std::thread::sleep(RETRY_DELAY);
+            }
+            Err(e) => return Err(format!("Llama backend selhal: {e}")),
+        }
+    }
+    Err("Llama backend se neuvolnil (předchozí worker stále běží)".into())
+}
+
 fn worker_loop(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32, rx: Receiver<WorkerRequest>) {
-    let backend = match LlamaBackend::init() {
+    let backend = match init_backend_with_retry() {
         Ok(b) => b,
         Err(e) => {
-            drain_with_error(rx, &format!("Llama backend selhal: {e}"));
+            drain_with_error(rx, &e);
             return;
         }
     };
