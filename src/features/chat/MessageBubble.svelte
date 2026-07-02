@@ -1,6 +1,8 @@
 <script lang="ts">
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+  import { open as openUrl } from "@tauri-apps/plugin-shell";
+  import { renderMarkdown } from "$lib/markdown";
   import type { Message } from "$lib/stores/conversations.svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { referenceQueue } from "$lib/stores/reference-queue.svelte";
@@ -36,23 +38,17 @@
     referenceQueue.add(path);
   }
 
-  // Jednoduchý markdown renderer — inline kód + code bloky
-  function renderContent(text: string): string {
-    return text
-      .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="lang-$1">$2</code></pre>')
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(
-        /!\[([^\]]*)\]\(([^)]+)\)/g,
-        (_match, alt: string, path: string) =>
-          `<img src="${convertFileSrc(path)}" alt="${alt}" class="inline-image" />`
-      )
-      .replace(/\n/g, "<br>");
-  }
-
   async function copyContent() {
     await navigator.clipboard.writeText(msg.content);
+  }
+
+  /** Odkazy z markdownu otevíráme v systémovém prohlížeči, ne v okně appky. */
+  function onContentClick(e: MouseEvent) {
+    const anchor = (e.target as HTMLElement).closest("a");
+    if (!anchor) return;
+    e.preventDefault();
+    const href = anchor.getAttribute("href") ?? "";
+    if (/^(https?:|mailto:)/.test(href)) void openUrl(href);
   }
 </script>
 
@@ -66,8 +62,11 @@
       </div>
     {/if}
 
+    <!-- Obsah je sanitizovaný přes DOMPurify v renderMarkdown -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-    <div class="bubble-content">{@html renderContent(msg.content)}</div>
+    <div class="bubble-content" onclick={onContentClick}>{@html renderMarkdown(msg.content)}</div>
 
     {#if msg.stats}
       <div class="stats">
@@ -173,6 +172,70 @@
     max-width: 100%;
     border-radius: 8px;
     margin-top: 0.5rem;
+  }
+
+  .bubble-content :global(p) { margin: 0.4rem 0; }
+  .bubble-content :global(p:first-child) { margin-top: 0; }
+  .bubble-content :global(p:last-child) { margin-bottom: 0; }
+
+  .bubble-content :global(h1),
+  .bubble-content :global(h2),
+  .bubble-content :global(h3),
+  .bubble-content :global(h4) {
+    font-weight: 700;
+    line-height: 1.35;
+    margin: 0.9rem 0 0.4rem;
+  }
+  .bubble-content :global(h1) { font-size: 1.25rem; }
+  .bubble-content :global(h2) { font-size: 1.12rem; }
+  .bubble-content :global(h3) { font-size: 1rem; }
+  .bubble-content :global(h4) { font-size: 0.92rem; }
+
+  .bubble-content :global(ul),
+  .bubble-content :global(ol) {
+    margin: 0.4rem 0;
+    padding-left: 1.4rem;
+  }
+  .bubble-content :global(ul) { list-style: disc; }
+  .bubble-content :global(ol) { list-style: decimal; }
+  .bubble-content :global(li) { margin: 0.15rem 0; }
+
+  .bubble-content :global(blockquote) {
+    border-left: 3px solid var(--color-accent);
+    margin: 0.5rem 0;
+    padding: 0.15rem 0 0.15rem 0.85rem;
+    color: var(--color-text-muted);
+  }
+
+  .bubble-content :global(table) {
+    border-collapse: collapse;
+    margin: 0.6rem 0;
+    font-size: 0.85rem;
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .bubble-content :global(th),
+  .bubble-content :global(td) {
+    border: 1px solid var(--color-border);
+    padding: 0.35rem 0.6rem;
+    text-align: left;
+  }
+  .bubble-content :global(th) {
+    background: var(--color-surface-2);
+    font-weight: 600;
+  }
+
+  .bubble-content :global(hr) {
+    border: none;
+    border-top: 1px solid var(--color-border);
+    margin: 0.8rem 0;
+  }
+
+  .bubble-content :global(.md-link) {
+    color: var(--color-accent);
+    text-decoration: underline;
+    cursor: pointer;
   }
 
   .attachment-thumbs {
