@@ -3,8 +3,42 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use weave_shell::{commands, setup_state};
+
+/// Musí odpovídat `identifier` v tauri.conf.json — logy míří do stejné app
+/// data složky, kterou pak čte log viewer přes `AppState.log_dir`.
+const APP_IDENTIFIER: &str = "dev.weave.app";
+
+/// Drží worker vlákno file appenderu naživu po celou dobu běhu procesu —
+/// bez toho by se logy do souboru nedopisovaly.
+static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
+    std::sync::OnceLock::new();
+
+/// Zapne logování: barevná konzole + soubor s denní rotací
+/// (`<app data>/logs/weave.log.YYYY-MM-DD`) pro log viewer v aplikaci.
+/// Výchozí úroveň INFO, přepsatelná přes RUST_LOG.
+fn init_logging() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let log_dir = dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(APP_IDENTIFIER)
+        .join("logs");
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "weave.log");
+    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+    let _ = LOG_GUARD.set(guard);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(file_writer),
+        )
+        .init();
+}
 
 /// Zobrazí a zaostří hlavní okno.
 fn show_main_window(app: &tauri::AppHandle) {
@@ -45,7 +79,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 pub fn run() {
-    fmt().with_env_filter(EnvFilter::from_default_env()).init();
+    init_logging();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -93,6 +127,7 @@ pub fn run() {
             commands::comfy_installer::delete_image_model,
             commands::comfy_installer::save_file_copy,
             commands::settings::test_local_llm_connection,
+            commands::logs::get_app_logs,
             commands::models::list_local_models,
             commands::models::list_recommended_models,
             commands::models::detect_gpu,

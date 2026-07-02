@@ -1,4 +1,5 @@
 use sqlx::SqlitePool;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 use weave_application::ports::{
@@ -26,4 +27,6 @@ pub struct AppState {
     /// mezi zprávami místo přenahrávání při každé z nich. Uvolní se při
     /// změně klíče nebo přepnutí na jiný backend.
     pub embedded_llm: Mutex<Option<(EmbeddedLlmKey, Arc<dyn LlmPort>)>>,
+    /// Složka se soubory aplikačních logů (denní rotace) — čte ji log viewer.
+    pub log_dir: PathBuf,
 }
