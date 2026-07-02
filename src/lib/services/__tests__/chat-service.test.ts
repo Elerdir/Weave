@@ -96,6 +96,28 @@ describe("chat.service sendMessage", () => {
     expect(conversationStore.loading).toBe(false);
   });
 
+  it("Error chunk nastaví viditelnou chybu a další odeslání ji smaže", async () => {
+    let handler: ((e: { payload: unknown }) => void) | null = null;
+    mockListen.mockImplementation(async (_event, cb) => {
+      handler = cb as (e: { payload: unknown }) => void;
+      return () => {};
+    });
+    mockInvoke.mockImplementation(async () => {
+      handler?.({ payload: { Error: "Zpráva se nevejde do kontextového okna" } });
+      return undefined;
+    });
+
+    await sendMessage("conv-1", "dlouhá zpráva");
+    expect(conversationStore.lastError).toContain("kontextového okna");
+    expect(conversationStore.loading).toBe(false);
+
+    // Nové odeslání chybu vyčistí
+    mockListen.mockResolvedValue(() => {});
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await sendMessage("conv-1", "kratší zpráva");
+    expect(conversationStore.lastError).toBeNull();
+  });
+
   it("stopGeneration() zavolá backend command", async () => {
     mockInvoke.mockResolvedValueOnce(undefined);
 

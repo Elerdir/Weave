@@ -100,6 +100,10 @@ pub const LLM_LOCAL_URL_KEY: &str = "llm.local_url";
 pub const DEFAULT_LOCAL_URL: &str = "http://localhost:8080";
 pub const LLM_MODEL_PATH_KEY: &str = "llm.model_path";
 pub const LLM_GPU_LAYERS_KEY: &str = "llm.gpu_layers";
+pub const LLM_CTX_KEY: &str = "llm.context_length";
+/// Výchozí kontextové okno vestavěné inference. Vyvažuje délku konverzace
+/// proti VRAM (KV cache roste s kontextem lineárně); v Nastavení jde změnit.
+pub const DEFAULT_LLM_CTX: u32 = 8192;
 
 /// Sestaví aktivní LLM klienta podle uloženého nastavení
 /// (Mistral API / lokální llama.cpp server / vestavěná GPU inference).
@@ -134,8 +138,14 @@ pub async fn resolve_llm(
                 .flatten()
                 .and_then(|s| s.parse::<u32>().ok())
                 .unwrap_or(999);
-            tracing::info!(%path, layers, "Aktivuji vestavěnou GPU inferenci");
-            return Arc::new(EmbeddedLlamaClient::new(path.into(), layers, 4096));
+            let n_ctx = app_config::get(&state.pool, LLM_CTX_KEY)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(DEFAULT_LLM_CTX);
+            tracing::info!(%path, layers, n_ctx, "Aktivuji vestavěnou GPU inferenci");
+            return Arc::new(EmbeddedLlamaClient::new(path.into(), layers, n_ctx));
         }
         tracing::warn!("backend=embedded, ale není nastavena cesta k modelu → fallback Mistral");
     }

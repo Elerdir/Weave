@@ -100,6 +100,7 @@ const en: Messages = {
       modelPathPlaceholder: "Not selected — pick a .gguf file",
       browse: "Choose another file",
       gpuLayers: "GPU layers (999 = all)",
+      contextLength: "Context window (tokens) — more = longer conversations and replies, but more VRAM",
       recommendedTitle: "Recommended models",
       download: "Download",
       activate: "Use",

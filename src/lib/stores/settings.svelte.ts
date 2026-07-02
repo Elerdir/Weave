@@ -17,6 +17,8 @@ const DEFAULT_LOCAL_URL = "http://localhost:8080";
 const LLM_MODEL_PATH_KEY = "llm.model_path";
 const LLM_GPU_LAYERS_KEY = "llm.gpu_layers";
 const DEFAULT_GPU_LAYERS = "999"; // "všechny vrstvy na GPU"
+const LLM_CTX_KEY = "llm.context_length";
+const DEFAULT_LLM_CTX = "8192"; // musí odpovídat DEFAULT_LLM_CTX v settings.rs
 const NOTIFICATIONS_KEY = "notifications.enabled";
 
 export type LlmBackend = "mistral" | "local" | "embedded";
@@ -39,6 +41,7 @@ function createSettingsStore() {
   let localStatus = $state<ConnStatus>("unknown");
   let modelPath = $state("");
   let gpuLayers = $state(DEFAULT_GPU_LAYERS);
+  let contextLength = $state(DEFAULT_LLM_CTX);
 
   let notificationsEnabled = $state(true);
 
@@ -75,6 +78,9 @@ function createSettingsStore() {
     get gpuLayers() {
       return gpuLayers;
     },
+    get contextLength() {
+      return contextLength;
+    },
     get notificationsEnabled() {
       return notificationsEnabled;
     },
@@ -92,6 +98,8 @@ function createSettingsStore() {
       modelPath = mpath ?? "";
       const layers = await invoke<string | null>("get_app_setting", { key: LLM_GPU_LAYERS_KEY });
       gpuLayers = layers ?? DEFAULT_GPU_LAYERS;
+      const ctx = await invoke<string | null>("get_app_setting", { key: LLM_CTX_KEY });
+      contextLength = ctx ?? DEFAULT_LLM_CTX;
       const notif = await invoke<string | null>("get_app_setting", { key: NOTIFICATIONS_KEY });
       notificationsEnabled = notif !== "false"; // výchozí zapnuto
     },
@@ -139,6 +147,14 @@ function createSettingsStore() {
 
     async saveGpuLayers() {
       await invoke("set_app_setting", { key: LLM_GPU_LAYERS_KEY, value: gpuLayers });
+    },
+
+    setContextLength(value: string) {
+      contextLength = value;
+    },
+
+    async saveContextLength() {
+      await invoke("set_app_setting", { key: LLM_CTX_KEY, value: contextLength });
     },
 
     async saveKey(service: ApiServiceId, token: string) {

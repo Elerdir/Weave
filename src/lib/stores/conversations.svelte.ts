@@ -41,6 +41,7 @@ function createConversationStore() {
   let loading = $state(false);
   let streamingContent = $state<string | null>(null);
   let currentStats = $state<GenerationStats | null>(null);
+  let lastError = $state<string | null>(null);
 
   return {
     get conversations() { return conversations; },
@@ -49,6 +50,7 @@ function createConversationStore() {
     get loading() { return loading; },
     get streamingContent() { return streamingContent; },
     get currentStats() { return currentStats; },
+    get lastError() { return lastError; },
 
     get activeConversation() {
       return conversations.find(c => c.id === activeId) ?? null;
@@ -139,6 +141,11 @@ function createConversationStore() {
       loading = true;
       streamingContent = null;
       currentStats = null;
+      lastError = null;
+    },
+
+    setLastError(message: string | null) {
+      lastError = message;
     },
 
     /** Odebere z lokálního stavu poslední odpovědi asistenta (před regenerací). */
