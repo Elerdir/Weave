@@ -7,9 +7,9 @@
 //!
 //! Testy spouštěj jednotlivě (--test-threads=1, nebo přes název testu), ne
 //! všechny najednou — llama.cpp backend jde inicializovat jen jednou za
-//! proces, druhý souběžný EmbeddedLlamaClient::new() spadne na
-//! BackendAlreadyInitialized. V reálné appce se volá jen jednou, takže to
-//! produkci neovlivňuje.
+//! proces a SOUBĚŽNÉ klienty retry v initu nevyřeší (čeká na uvolnění, které
+//! u stále živého klienta nepřijde). Sekvenční výměnu klientů (drop → new)
+//! naopak retry pokrývá — viz survives_model_swap.
 
 #![cfg(feature = "llm-embedded")]
 
@@ -117,6 +117,59 @@ async fn handles_prompt_longer_than_n_batch() {
         "test nesplnil předpoklad — prompt musí být > 512 tokenů"
     );
     assert!(stats.completion_tokens > 0);
+}
+
+/// Výměna modelu za běhu (Nastavení → jiný model): starý klient se dropne
+/// a hned se vytváří nový. Nový worker musí přečkat dobíhající úklid starého
+/// (BackendAlreadyInitialized → retry v init_backend_with_retry), jinak by
+/// všechna další generování skončila chybou.
+#[tokio::test]
+#[ignore = "vyžaduje GPU + stažený .gguf model, spouštět ručně"]
+async fn survives_model_swap() {
+    let model_path = std::env::var("WEAVE_SMOKE_MODEL")
+        .expect("nastav WEAVE_SMOKE_MODEL na cestu k .gguf souboru");
+
+    let make_request = || ChatRequest {
+        messages: vec![Message::user(
+            ConversationId::new(),
+            "Řekni jedno krátké české slovo.",
+        )],
+        model_id: "smoke-test".into(),
+        max_tokens: Some(16),
+        context_length: None,
+        temperature: 0.7,
+        stream: true,
+    };
+
+    async fn run(client: &EmbeddedLlamaClient, request: ChatRequest) -> String {
+        let (tx, mut rx) = mpsc::channel(64);
+        client
+            .chat_stream(request, tx)
+            .await
+            .expect("chat_stream selhal");
+        let mut output = String::new();
+        while let Some(chunk) = rx.recv().await {
+            match chunk {
+                StreamChunk::Token(t) => output.push_str(&t),
+                StreamChunk::Done(_) => {}
+                StreamChunk::Error(e) => panic!("inference selhala: {e}"),
+                StreamChunk::ImageStage(_) => {}
+            }
+        }
+        output
+    }
+
+    let first = EmbeddedLlamaClient::new(model_path.clone().into(), 999, 2048);
+    let out1 = run(&first, make_request()).await;
+    assert!(!out1.trim().is_empty(), "první klient nic nevygeneroval");
+
+    // Simulace výměny modelu: drop starého klienta a okamžitě nový.
+    drop(first);
+    let second = EmbeddedLlamaClient::new(model_path.into(), 999, 2048);
+    let out2 = run(&second, make_request()).await;
+    assert!(!out2.trim().is_empty(), "druhý klient nic nevygeneroval");
+
+    println!("--- výstup 1 ---\n{out1}\n--- výstup 2 ---\n{out2}\n----------------");
 }
 
 /// Regresní test na „decode: failed to find a memory slot" — historie delší

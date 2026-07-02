@@ -7,6 +7,10 @@ use weave_application::ports::{
     model_manager_port::ModelManagerPort,
 };
 
+/// Klíč kešované vestavěné inference: (cesta k modelu, GPU vrstvy, kontext).
+/// Při změně kterékoli hodnoty se model přenahraje.
+pub type EmbeddedLlmKey = (String, u32, u32);
+
 pub struct AppState {
     pub pool: SqlitePool,
     pub keychain: Arc<dyn KeychainPort>,
@@ -18,4 +22,8 @@ pub struct AppState {
     /// Token právě běžícího generování — příkaz `stop_generation` ho zruší.
     /// Appka má vždy nejvýš jedno aktivní generování (vstup je při běhu blokovaný).
     pub active_generation: Mutex<Option<CancellationToken>>,
+    /// Kešovaný klient vestavěné inference — model zůstává načtený ve VRAM
+    /// mezi zprávami místo přenahrávání při každé z nich. Uvolní se při
+    /// změně klíče nebo přepnutí na jiný backend.
+    pub embedded_llm: Mutex<Option<(EmbeddedLlmKey, Arc<dyn LlmPort>)>>,
 }

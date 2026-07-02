@@ -144,10 +144,37 @@ pub async fn resolve_llm(
                 .flatten()
                 .and_then(|s| s.parse::<u32>().ok())
                 .unwrap_or(DEFAULT_LLM_CTX);
+
+            // Model držíme načtený ve VRAM mezi zprávami — přenahrání
+            // vícegigového GGUF při každé zprávě trvá i desítky sekund.
+            let key = (path.clone(), layers, n_ctx);
+            let mut cache = state
+                .embedded_llm
+                .lock()
+                .expect("embedded_llm mutex poisoned");
+            if let Some((cached_key, client)) = cache.as_ref() {
+                if *cached_key == key {
+                    return client.clone();
+                }
+            }
             tracing::info!(%path, layers, n_ctx, "Aktivuji vestavěnou GPU inferenci");
-            return Arc::new(EmbeddedLlamaClient::new(path.into(), layers, n_ctx));
+            let client: Arc<dyn weave_application::ports::llm_port::LlmPort> =
+                Arc::new(EmbeddedLlamaClient::new(path.into(), layers, n_ctx));
+            *cache = Some((key, client.clone()));
+            return client;
         }
         tracing::warn!("backend=embedded, ale není nastavena cesta k modelu → fallback Mistral");
+    }
+
+    // Jiný backend → případný kešovaný vestavěný model uvolníme (VRAM).
+    if state
+        .embedded_llm
+        .lock()
+        .expect("embedded_llm mutex poisoned")
+        .take()
+        .is_some()
+    {
+        tracing::info!("Uvolňuji kešovaný vestavěný model (přepnuto na jiný backend)");
     }
 
     if backend == "local" {
