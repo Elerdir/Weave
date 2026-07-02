@@ -4,6 +4,7 @@
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
   import { filterNewImagePaths, IMAGE_EXTENSIONS } from "$lib/reference-images";
+  import { referenceQueue } from "$lib/stores/reference-queue.svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { generationSettingsStore } from "$lib/stores/generation-settings.svelte";
   import { sendMessage, stopGeneration } from "$lib/services/chat.service";
@@ -94,6 +95,13 @@
   function removeRefImage(path: string) {
     refImages = refImages.filter((r) => r.path !== path);
   }
+
+  // „Použít jako referenci“ z bubliny zprávy → přilož k dalšímu vstupu
+  $effect(() => {
+    if (referenceQueue.pending.length > 0) {
+      addReferenceImages(referenceQueue.drain());
+    }
+  });
 
   // Drag & drop obrázků kamkoliv do okna chatu → referenční obrázky
   let dragActive = $state(false);

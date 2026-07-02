@@ -255,17 +255,26 @@
                     <div class="recommended-size">{formatBytes(rec.size_bytes)}</div>
                   </div>
                   {#if downloaded}
-                    <button
-                      class="btn-sm"
-                      class:primary={!isActive}
-                      disabled={isActive}
-                      onclick={() => {
-                        settingsStore.setModelPath(modelsStore.models.find((m) => m.id === rec.id)?.path ?? "");
-                        settingsStore.saveModelPath();
-                      }}
-                    >
-                      {isActive ? i18n.m.settings.llm.inUse : i18n.m.settings.llm.activate}
-                    </button>
+                    <div class="recommended-actions">
+                      <button
+                        class="btn-sm"
+                        class:primary={!isActive}
+                        disabled={isActive}
+                        onclick={() => {
+                          settingsStore.setModelPath(modelsStore.models.find((m) => m.id === rec.id)?.path ?? "");
+                          settingsStore.saveModelPath();
+                        }}
+                      >
+                        {isActive ? i18n.m.settings.llm.inUse : i18n.m.settings.llm.activate}
+                      </button>
+                      <button
+                        class="btn-sm danger"
+                        disabled={isActive}
+                        title={i18n.m.settings.models.delete}
+                        aria-label={i18n.m.settings.models.delete}
+                        onclick={() => modelsStore.deleteModel(rec.id)}
+                      >🗑</button>
+                    </div>
                   {:else if modelsStore.download?.modelId === rec.id}
                     <span class="dl-inline">
                       {Math.round(((modelsStore.download.downloaded) / (modelsStore.download.total || 1)) * 100)}%
@@ -436,6 +445,26 @@
 
           {#if comfyInstallStore.error}
             <span class="conn-status disconnected">{comfyInstallStore.error}</span>
+          {/if}
+
+          {#if comfyInstallStore.checkpoints.length > 0}
+            <h4 class="sub-heading">{i18n.m.settings.comfyui.imageModelsTitle}</h4>
+            <div class="recommended-list">
+              {#each comfyInstallStore.checkpoints as ckpt (ckpt.file_name)}
+                <div class="recommended-item">
+                  <div class="recommended-meta">
+                    <div class="recommended-name">{ckpt.file_name}</div>
+                    <div class="recommended-size">{formatBytes(ckpt.size_bytes)}</div>
+                  </div>
+                  <button
+                    class="btn-sm danger"
+                    title={i18n.m.settings.models.delete}
+                    aria-label={i18n.m.settings.models.delete}
+                    onclick={() => comfyInstallStore.deleteCheckpoint(ckpt.file_name)}
+                  >🗑</button>
+                </div>
+              {/each}
+            </div>
           {/if}
         {:else if section === "models"}
           <h3>{i18n.m.settings.models.title}</h3>
@@ -756,6 +785,12 @@
     opacity: 0.45;
     cursor: default;
   }
+  .recommended-actions {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+  }
+
   .btn-sm.danger {
     background: transparent;
     color: var(--color-error);

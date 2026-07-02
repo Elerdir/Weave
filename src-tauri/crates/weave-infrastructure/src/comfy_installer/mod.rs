@@ -8,7 +8,9 @@ use tokio::process::Child;
 use tokio::sync::{mpsc, Mutex};
 use weave_application::{
     error::{AppError, AppResult},
-    ports::comfy_installer_port::{ComfyInstallerPort, ComfyStatus, InstallProgress},
+    ports::comfy_installer_port::{
+        CheckpointInfo, ComfyInstallerPort, ComfyStatus, InstallProgress,
+    },
     ports::image_gen_port::StylePreset,
 };
 
@@ -376,5 +378,92 @@ impl ComfyInstallerPort for LocalComfyInstaller {
             &tx,
         )
         .await
+    }
+
+    async fn list_checkpoints(&self) -> AppResult<Vec<CheckpointInfo>> {
+        let dir = self.checkpoints_dir();
+        let mut result = Vec::new();
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Ok(result); // složka ještě neexistuje = žádné modely
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_model = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                e.eq_ignore_ascii_case("safetensors") || e.eq_ignore_ascii_case("ckpt")
+            });
+            if !is_model {
+                continue;
+            }
+            if let (Some(name), Ok(meta)) = (path.file_name(), entry.metadata()) {
+                result.push(CheckpointInfo {
+                    file_name: name.to_string_lossy().into_owned(),
+                    size_bytes: meta.len(),
+                });
+            }
+        }
+        result.sort_by(|a, b| a.file_name.cmp(&b.file_name));
+        Ok(result)
+    }
+
+    async fn delete_checkpoint(&self, file_name: &str) -> AppResult<()> {
+        // Ochrana proti path traversal — jméno souboru nesmí obsahovat cestu.
+        if file_name.contains('/') || file_name.contains('\\') || file_name.contains("..") {
+            return Err(AppError::ComfyUi(format!(
+                "Neplatný název souboru: {file_name}"
+            )));
+        }
+        let path = self.checkpoints_dir().join(file_name);
+        std::fs::remove_file(&path)
+            .map_err(|e| AppError::ComfyUi(format!("Smazání modelu selhalo: {e}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_installer() -> LocalComfyInstaller {
+        let dir = std::env::temp_dir().join(format!("weave_ckpt_test_{}", uuid::Uuid::new_v4()));
+        LocalComfyInstaller::new(dir)
+    }
+
+    #[tokio::test]
+    async fn list_checkpoints_empty_without_directory() {
+        let installer = temp_installer();
+        assert!(installer.list_checkpoints().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_and_delete_checkpoints_roundtrip() {
+        let installer = temp_installer();
+        let dir = installer.checkpoints_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("model-a.safetensors"), b"aa").unwrap();
+        std::fs::write(dir.join("model-b.CKPT"), b"bbb").unwrap();
+        std::fs::write(dir.join("poznamky.txt"), b"ne-model").unwrap();
+
+        let listed = installer.list_checkpoints().await.unwrap();
+        let names: Vec<&str> = listed.iter().map(|c| c.file_name.as_str()).collect();
+        assert_eq!(names, vec!["model-a.safetensors", "model-b.CKPT"]);
+        assert_eq!(listed[0].size_bytes, 2);
+
+        installer
+            .delete_checkpoint("model-a.safetensors")
+            .await
+            .unwrap();
+        assert_eq!(installer.list_checkpoints().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_checkpoint_rejects_path_traversal() {
+        let installer = temp_installer();
+        assert!(installer
+            .delete_checkpoint("../venv/pyvenv.cfg")
+            .await
+            .is_err());
+        assert!(installer
+            .delete_checkpoint("sub/model.safetensors")
+            .await
+            .is_err());
     }
 }
