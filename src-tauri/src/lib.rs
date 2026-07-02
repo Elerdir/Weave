@@ -129,6 +129,7 @@ pub fn run() {
             commands::comfy_installer::save_file_copy,
             commands::settings::test_local_llm_connection,
             commands::logs::get_app_logs,
+            commands::logs::open_log_window,
             commands::models::list_local_models,
             commands::models::list_recommended_models,
             commands::models::detect_gpu,

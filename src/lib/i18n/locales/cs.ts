@@ -126,6 +126,7 @@ const cs = {
       refresh: "Obnovit",
       autoRefresh: "Sledovat živě",
       empty: "Žádné záznamy — zkus změnit filtry.",
+      openWindow: "Otevřít v samostatném okně",
       hint: "Logy se ukládají od prvního spuštění (denní soubory ve složce logs v datech aplikace) a zobrazuje se posledních 500 záznamů po filtraci.",
     },
     llm: {

@@ -128,6 +128,7 @@ const en: Messages = {
       refresh: "Refresh",
       autoRefresh: "Follow live",
       empty: "No entries — try changing the filters.",
+      openWindow: "Open in a separate window",
       hint: "Logs are kept since first launch (daily files in the logs folder inside app data); the last 500 entries after filtering are shown.",
     },
     llm: {
