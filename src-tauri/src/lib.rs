@@ -19,8 +19,7 @@ static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuar
 /// (`<app data>/logs/weave.log.YYYY-MM-DD`) pro log viewer v aplikaci.
 /// Výchozí úroveň INFO, přepsatelná přes RUST_LOG.
 fn init_logging() {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let log_dir = dirs::data_dir()
         .unwrap_or_else(std::env::temp_dir)

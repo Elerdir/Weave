@@ -253,7 +253,10 @@ mod tests {
         let all = read_logs(&dir, &LogFilter::default());
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].message, "první");
-        assert!(all[1].message.contains("stack line 2"), "víceřádková zpráva");
+        assert!(
+            all[1].message.contains("stack line 2"),
+            "víceřádková zpráva"
+        );
         assert_eq!(all[2].message, "novější");
 
         let limited = read_logs(

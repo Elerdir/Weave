@@ -11,6 +11,7 @@
   import { modelsStore, formatBytes } from "$lib/stores/models.svelte";
   import { comfyInstallStore } from "$lib/stores/comfy-install.svelte";
   import { TOKEN_URLS } from "$lib/token-urls";
+  import LogViewer from "./LogViewer.svelte";
 
   async function pickModelFile() {
     const path = await openFilePicker({
@@ -33,7 +34,7 @@
 
   let { onClose }: { onClose: () => void } = $props();
 
-  type Section = "appearance" | "language" | "apiKeys" | "llm" | "comfyui" | "models" | "notifications";
+  type Section = "appearance" | "language" | "apiKeys" | "llm" | "comfyui" | "models" | "notifications" | "logs";
   let section = $state<Section>("appearance");
 
   let downloadUrl = $state("");
@@ -127,6 +128,9 @@
         </button>
         <button class:active={section === "models"} onclick={() => (section = "models")}>
           {i18n.m.settings.sections.models}
+        </button>
+        <button class:active={section === "logs"} onclick={() => (section = "logs")}>
+          {i18n.m.settings.sections.logs}
         </button>
         <button class:active={section === "notifications"} onclick={() => (section = "notifications")}>
           {i18n.m.settings.sections.notifications}
@@ -558,6 +562,9 @@
               {i18n.m.settings.notifications.disabled}
             </button>
           </div>
+        {:else if section === "logs"}
+          <h3>{i18n.m.settings.sections.logs}</h3>
+          <LogViewer />
         {/if}
       </div>
     </div>
