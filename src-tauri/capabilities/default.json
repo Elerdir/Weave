@@ -2,7 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Hlavní oprávnění hlavního okna Weave (eventy, dialog, notifikace, otevírání odkazů).",
-  "windows": ["main"],
+  "windows": [
+    "main",
+    "logs"
+  ],
   "permissions": [
     "core:default",
     "dialog:allow-open",

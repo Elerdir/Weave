@@ -4,6 +4,9 @@
   import { logsStore } from "$lib/stores/logs.svelte";
   import type { LogLevel } from "$lib/stores/logs.svelte";
 
+  /** fill = roztáhnout na výšku rodiče (samostatné okno) místo fixních 380 px. */
+  let { fill = false }: { fill?: boolean } = $props();
+
   const levels: { value: LogLevel | ""; key: string }[] = [
     { value: "", key: "allLevels" },
     { value: "error", key: "levelError" },
@@ -44,7 +47,7 @@
   }
 </script>
 
-<div class="log-viewer">
+<div class="log-viewer" class:fill>
   <div class="filters">
     <select
       bind:value={logsStore.minLevel}
@@ -86,7 +89,7 @@
     </label>
   </div>
 
-  <div class="log-list" bind:this={listEl}>
+  <div class="log-list" class:fill bind:this={listEl}>
     {#if logsStore.entries.length === 0}
       <p class="empty">{i18n.m.settings.logs.empty}</p>
     {:else}
@@ -155,6 +158,18 @@
     font-size: 0.82rem;
     color: var(--color-text-muted);
     cursor: pointer;
+  }
+
+  .log-viewer.fill {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .log-list.fill {
+    flex: 1;
+    height: auto;
+    min-height: 0;
   }
 
   .log-list {

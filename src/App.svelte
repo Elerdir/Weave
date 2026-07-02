@@ -4,6 +4,11 @@
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import Wizard from "$features/wizard/Wizard.svelte";
   import MainLayout from "$features/chat/MainLayout.svelte";
+  import LogWindow from "$features/settings/LogWindow.svelte";
+
+  // Samostatné okno s logy — stejný frontend, jiný „view" (viz open_log_window)
+  const isLogWindow =
+    new URLSearchParams(window.location.search).get("view") === "logs";
 
   let ready = $state(false);
   let showWizard = $state(false);
@@ -12,6 +17,11 @@
     // Aplikuj téma ihned při startu
     const resolved = themeStore.resolvedTheme;
     document.documentElement.classList.add(resolved);
+
+    if (isLogWindow) {
+      ready = true;
+      return;
+    }
 
     // Zkontroluj zda je to první spuštění
     const firstRun = !localStorage.getItem("weave.setup-complete");
@@ -38,7 +48,9 @@
 </script>
 
 {#if ready}
-  {#if showWizard}
+  {#if isLogWindow}
+    <LogWindow />
+  {:else if showWizard}
     <Wizard onComplete={onWizardComplete} />
   {:else}
     <MainLayout />

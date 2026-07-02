@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { i18n } from "$lib/i18n/index.svelte";
   import type { Locale } from "$lib/i18n/index.svelte";
   import { themeStore } from "$lib/theme/index.svelte";
@@ -564,6 +565,12 @@
           </div>
         {:else if section === "logs"}
           <h3>{i18n.m.settings.sections.logs}</h3>
+          <button
+            class="open-log-window-btn"
+            onclick={() => invoke("open_log_window").catch((e) => console.warn(e))}
+          >
+            🗗 {i18n.m.settings.logs.openWindow}
+          </button>
           <LogViewer />
         {/if}
       </div>
@@ -679,6 +686,22 @@
     display: flex;
     gap: 0.5rem;
     flex-wrap: wrap;
+  }
+
+  .open-log-window-btn {
+    align-self: flex-start;
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.35rem 0.8rem;
+    font-size: 0.82rem;
+    cursor: pointer;
+    margin-bottom: 0.6rem;
+  }
+  .open-log-window-btn:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
   }
 
   .chip {
