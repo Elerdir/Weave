@@ -74,6 +74,7 @@ const en: Messages = {
       installing: "Installing ComfyUI (first run takes tens of minutes)…",
       downloading_model: "Downloading the model for the chosen style…",
       starting_server: "Starting the image generator…",
+      preparing_prompt: "Preparing the prompt for the generator…",
       generating: "Generating the image…",
       finishing: "Finishing and freeing GPU memory…",
     },

@@ -42,6 +42,8 @@ pub enum ImageStage {
     Installing,
     DownloadingModel,
     StartingServer,
+    /// LLM převádí požadavek uživatele na anglický Stable Diffusion prompt.
+    PreparingPrompt,
     Generating,
     Finishing,
 }

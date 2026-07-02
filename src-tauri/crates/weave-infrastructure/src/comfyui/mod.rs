@@ -10,6 +10,9 @@ use weave_application::{
 pub struct ComfyUiClient {
     http: Client,
     base_url: String,
+    /// Kam ukládat hotové obrázky. MUSÍ ležet uvnitř assetProtocol scope
+    /// (`$APPDATA/weave/**`), jinak frontend náhled nezobrazí.
+    gallery_dir: std::path::PathBuf,
 }
 
 impl ComfyUiClient {
@@ -17,7 +20,16 @@ impl ComfyUiClient {
         Self {
             http: Client::new(),
             base_url: base_url.into(),
+            gallery_dir: dirs::data_dir()
+                .unwrap_or_default()
+                .join("weave")
+                .join("gallery"),
         }
+    }
+
+    pub fn with_gallery_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.gallery_dir = dir.into();
+        self
     }
 }
 
@@ -140,10 +152,7 @@ impl ImageGenPort for ComfyUiClient {
         tracing::info!(%prompt_id, "ComfyUI prompt odeslán");
 
         // Poll na výsledek (zjednodušeno — produkčně WebSocket)
-        let output_dir = dirs::data_dir()
-            .unwrap_or_default()
-            .join("weave")
-            .join("gallery");
+        let output_dir = self.gallery_dir.clone();
         std::fs::create_dir_all(&output_dir).ok();
 
         loop {

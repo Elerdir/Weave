@@ -72,6 +72,7 @@ const cs = {
       installing: "Instaluji ComfyUI (poprvé to trvá desítky minut)…",
       downloading_model: "Stahuji model pro zvolený styl…",
       starting_server: "Spouštím generátor obrázků…",
+      preparing_prompt: "Připravuji zadání pro generátor…",
       generating: "Generuji obrázek…",
       finishing: "Dokončuji a uvolňuji paměť GPU…",
     },
