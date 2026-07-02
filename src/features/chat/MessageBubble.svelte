@@ -6,7 +6,7 @@
   import type { Message } from "$lib/stores/conversations.svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { referenceQueue } from "$lib/stores/reference-queue.svelte";
-  import { regenerateResponse } from "$lib/services/chat.service";
+  import { regenerateResponse, sendMessage } from "$lib/services/chat.service";
   import { extractLocalImagePaths, fileNameFromPath } from "$lib/generated-images";
   import { i18n } from "$lib/i18n/index.svelte";
   import { tts } from "$lib/services/tts.svelte";
@@ -29,6 +29,54 @@
 
   function regenerate() {
     if (conversationStore.activeId) void regenerateResponse(conversationStore.activeId);
+  }
+
+  // Editace / znovuodeslání vlastní zprávy — pošle se jako NOVÁ zpráva
+  // na konec konverzace (historie zůstává zachovaná).
+  let editing = $state(false);
+  let editText = $state("");
+  let editImages = $state<string[]>([]);
+
+  const canResend = $derived(isUser && !conversationStore.loading && conversationStore.activeId !== null);
+
+  function startEdit() {
+    editText = msg.content;
+    editImages = imageAttachments.map((a) => a.path);
+    editing = true;
+  }
+
+  function cancelEdit() {
+    editing = false;
+  }
+
+  function removeEditImage(path: string) {
+    editImages = editImages.filter((p) => p !== path);
+  }
+
+  async function sendEdited() {
+    const content = editText.trim();
+    if (!content || !conversationStore.activeId) return;
+    editing = false;
+    await sendMessage(conversationStore.activeId, content, [], editImages);
+  }
+
+  async function resend() {
+    if (!conversationStore.activeId) return;
+    await sendMessage(
+      conversationStore.activeId,
+      msg.content,
+      [],
+      imageAttachments.map((a) => a.path)
+    );
+  }
+
+  function onEditKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void sendEdited();
+    } else if (e.key === "Escape") {
+      cancelEdit();
+    }
   }
 
   async function saveImage(source: string) {
@@ -59,19 +107,52 @@
 
 <div class="bubble-wrap" class:user={isUser}>
   <div class="bubble" class:user={isUser} class:assistant={!isUser && !isSystem} class:system={isSystem}>
-    {#if imageAttachments.length > 0}
-      <div class="attachment-thumbs">
-        {#each imageAttachments as att (att.path)}
-          <img src={convertFileSrc(att.path)} alt="" class="attachment-thumb" />
-        {/each}
+    {#if editing}
+      <div class="edit-area">
+        {#if editImages.length > 0}
+          <div class="attachment-thumbs">
+            {#each editImages as path (path)}
+              <div class="edit-thumb-wrap">
+                <img src={convertFileSrc(path)} alt="" class="attachment-thumb" />
+                <button
+                  class="edit-thumb-remove"
+                  onclick={() => removeEditImage(path)}
+                  aria-label={i18n.m.chat.removeReferenceImage}
+                >×</button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+        <!-- svelte-ignore a11y_autofocus -->
+        <textarea
+          class="edit-input"
+          bind:value={editText}
+          onkeydown={onEditKeydown}
+          rows="3"
+          autofocus
+        ></textarea>
+        <div class="edit-actions">
+          <button class="edit-cancel" onclick={cancelEdit}>{i18n.m.chat.editCancel}</button>
+          <button class="edit-send" onclick={sendEdited} disabled={!editText.trim()}>
+            {i18n.m.chat.editSend}
+          </button>
+        </div>
       </div>
-    {/if}
+    {:else}
+      {#if imageAttachments.length > 0}
+        <div class="attachment-thumbs">
+          {#each imageAttachments as att (att.path)}
+            <img src={convertFileSrc(att.path)} alt="" class="attachment-thumb" />
+          {/each}
+        </div>
+      {/if}
 
-    <!-- Obsah je sanitizovaný přes DOMPurify v renderMarkdown -->
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-    <div class="bubble-content" onclick={onContentClick}>{@html renderMarkdown(msg.content)}</div>
+      <!-- Obsah je sanitizovaný přes DOMPurify v renderMarkdown -->
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+      <div class="bubble-content" onclick={onContentClick}>{@html renderMarkdown(msg.content)}</div>
+    {/if}
 
     {#if msg.stats}
       <div class="stats">
@@ -83,6 +164,20 @@
 
   <div class="actions">
     <button class="action-btn" onclick={copyContent} title={i18n.m.chat.copy}>⎘</button>
+    {#if canResend && !editing}
+      <button
+        class="action-btn"
+        onclick={resend}
+        title={i18n.m.chat.resend}
+        aria-label={i18n.m.chat.resend}
+      >↻</button>
+      <button
+        class="action-btn"
+        onclick={startEdit}
+        title={i18n.m.chat.edit}
+        aria-label={i18n.m.chat.edit}
+      >✏️</button>
+    {/if}
     {#if !isUser && tts.supported}
       <button
         class="action-btn"
@@ -256,6 +351,89 @@
     flex-wrap: wrap;
     gap: 0.4rem;
     margin-bottom: 0.5rem;
+  }
+
+  .edit-area {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 280px;
+  }
+
+  .edit-thumb-wrap {
+    position: relative;
+  }
+
+  .edit-thumb-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 18px;
+    height: 18px;
+    line-height: 1;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 0.75rem;
+  }
+  .edit-thumb-remove:hover {
+    background: rgba(0, 0, 0, 0.85);
+  }
+
+  .edit-input {
+    width: 100%;
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    border: 1px solid var(--color-accent);
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.9rem;
+    font-family: inherit;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+    field-sizing: content;
+    max-height: 240px;
+  }
+
+  .edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.4rem;
+  }
+
+  .edit-cancel {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    border-radius: 8px;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .edit-cancel:hover {
+    color: var(--color-text);
+    background: var(--color-surface-2);
+  }
+
+  .edit-send {
+    background: var(--color-accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 0.3rem 0.9rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .edit-send:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+  }
+  .edit-send:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
 
   .attachment-thumb {
