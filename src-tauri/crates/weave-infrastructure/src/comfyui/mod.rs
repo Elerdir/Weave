@@ -111,13 +111,13 @@ impl ImageGenPort for ComfyUiClient {
         request: ImageRequest,
         tx: mpsc::Sender<ImageProgress>,
     ) -> AppResult<()> {
-        // Referenční obrázek musí být nahraný do ComfyUI dřív, než na něj
-        // může workflow (LoadImage uzel) odkázat jménem.
-        let uploaded_reference = match &request.reference_image_path {
-            Some(path) => Some(self.upload_reference_image(path).await?),
-            None => None,
-        };
-        let workflow = build_basic_workflow(&request, uploaded_reference.as_deref());
+        // Referenční obrázky musí být nahrané do ComfyUI dřív, než na ně
+        // může workflow (LoadImage uzly) odkázat jménem.
+        let mut uploaded_references = Vec::with_capacity(request.reference_image_paths.len());
+        for path in &request.reference_image_paths {
+            uploaded_references.push(self.upload_reference_image(path).await?);
+        }
+        let workflow = build_basic_workflow(&request, &uploaded_references);
         let client_id = uuid::Uuid::new_v4().to_string();
 
         let prompt_req = PromptRequest {
@@ -218,10 +218,11 @@ impl ImageGenPort for ComfyUiClient {
 /// Checkpoint se volí podle stylu promptu (`req.style_preset`) — anime má
 /// vlastní doladěný SDXL checkpoint, zbytek jede na SDXL base. Obě varianty
 /// jsou SDXL architektura, takže fungují i s PuLID větví.
-fn build_basic_workflow(req: &ImageRequest, uploaded_reference: Option<&str>) -> serde_json::Value {
-    match uploaded_reference {
-        Some(image) => build_pulid_workflow(req, image),
-        None => build_txt2img_workflow(req),
+fn build_basic_workflow(req: &ImageRequest, uploaded_references: &[String]) -> serde_json::Value {
+    if uploaded_references.is_empty() {
+        build_txt2img_workflow(req)
+    } else {
+        build_pulid_workflow(req, uploaded_references)
     }
 }
 
@@ -274,8 +275,13 @@ fn build_txt2img_workflow(req: &ImageRequest) -> serde_json::Value {
     })
 }
 
-fn build_pulid_workflow(req: &ImageRequest, uploaded_image: &str) -> serde_json::Value {
-    serde_json::json!({
+/// PuLID workflow s podporou VÍCE referenčních obrázků: každý má vlastní
+/// LoadImage uzel (id 20, 21, …) a dohromady se řetězí core uzly `ImageBatch`
+/// (id 30, 31, …) do jedné dávky — PuLID pak identity embeddingy z dávky
+/// průměruje, takže víc fotek = věrnější podoba. `ImageBatch` si rozdílné
+/// rozměry srovná sám (druhý obrázek přeškáluje na rozměr prvního).
+fn build_pulid_workflow(req: &ImageRequest, uploaded_images: &[String]) -> serde_json::Value {
+    let mut workflow = serde_json::json!({
         "1": {
             "class_type": "CheckpointLoaderSimple",
             "inputs": {
@@ -320,10 +326,6 @@ fn build_pulid_workflow(req: &ImageRequest, uploaded_image: &str) -> serde_json:
             "class_type": "SaveImage",
             "inputs": { "images": ["6", 0], "filename_prefix": "weave" }
         },
-        "8": {
-            "class_type": "LoadImage",
-            "inputs": { "image": uploaded_image }
-        },
         "9": {
             "class_type": "PulidModelLoader",
             "inputs": { "pulid_file": crate::comfy_installer::PULID_WEIGHTS_FILENAME }
@@ -352,7 +354,40 @@ fn build_pulid_workflow(req: &ImageRequest, uploaded_image: &str) -> serde_json:
                 "end_at": 1.0
             }
         }
-    })
+    });
+
+    // LoadImage uzel pro každou referenci (id 20, 21, …)
+    let map = workflow.as_object_mut().expect("workflow je JSON objekt");
+    for (i, image) in uploaded_images.iter().enumerate() {
+        map.insert(
+            format!("{}", 20 + i),
+            serde_json::json!({
+                "class_type": "LoadImage",
+                "inputs": { "image": image }
+            }),
+        );
+    }
+
+    // Řetěz ImageBatch uzlů: (20+21)→30, (30+22)→31, … Poslední článek
+    // (nebo přímo LoadImage u jediné fotky) jde do ApplyPulid jako uzel "8".
+    let mut last_ref: serde_json::Value = serde_json::json!(["20", 0]);
+    for i in 1..uploaded_images.len() {
+        let batch_id = format!("{}", 30 + i - 1);
+        map.insert(
+            batch_id.clone(),
+            serde_json::json!({
+                "class_type": "ImageBatch",
+                "inputs": {
+                    "image1": last_ref,
+                    "image2": [format!("{}", 20 + i), 0]
+                }
+            }),
+        );
+        last_ref = serde_json::json!([batch_id, 0]);
+    }
+    map["12"]["inputs"]["image"] = last_ref;
+
+    workflow
 }
 
 fn extract_output_filename(outputs: &serde_json::Value) -> Option<String> {
@@ -383,14 +418,14 @@ mod tests {
             cfg_scale: 6.5,
             seed: Some(1234),
             style_preset: StylePreset::Realistic,
-            reference_image_path: None,
+            reference_image_paths: vec![],
         }
     }
 
     #[test]
     fn txt2img_workflow_used_without_reference_image() {
         let req = sample_request();
-        let workflow = build_basic_workflow(&req, None);
+        let workflow = build_basic_workflow(&req, &[]);
 
         // Realistický styl → SDXL base (stahuje se při instalaci ComfyUI)
         assert_eq!(
@@ -413,14 +448,14 @@ mod tests {
         let mut req = sample_request();
         req.style_preset = StylePreset::Anime;
 
-        let workflow = build_basic_workflow(&req, None);
+        let workflow = build_basic_workflow(&req, &[]);
         assert_eq!(
             workflow["1"]["inputs"]["ckpt_name"],
             crate::comfy_installer::ANIME_CHECKPOINT_FILENAME
         );
 
         // Anime checkpoint je SDXL architektura → platí i pro PuLID větev
-        let pulid = build_basic_workflow(&req, Some("ref.png"));
+        let pulid = build_basic_workflow(&req, &["ref.png".into()]);
         assert_eq!(
             pulid["1"]["inputs"]["ckpt_name"],
             crate::comfy_installer::ANIME_CHECKPOINT_FILENAME
@@ -430,7 +465,7 @@ mod tests {
     #[test]
     fn flux_workflow_carries_over_request_fields() {
         let req = sample_request();
-        let workflow = build_basic_workflow(&req, None);
+        let workflow = build_basic_workflow(&req, &[]);
 
         assert_eq!(workflow["2"]["inputs"]["text"], "kosmická loď nad planetou");
         assert_eq!(workflow["3"]["inputs"]["text"], "rozmazané");
@@ -447,7 +482,7 @@ mod tests {
         req.negative_prompt = None;
         req.seed = None;
 
-        let workflow = build_basic_workflow(&req, None);
+        let workflow = build_basic_workflow(&req, &[]);
 
         assert_eq!(workflow["3"]["inputs"]["text"], "");
         assert_eq!(workflow["5"]["inputs"]["seed"], 42);
@@ -456,20 +491,63 @@ mod tests {
     #[test]
     fn pulid_workflow_used_when_reference_image_present() {
         let req = sample_request();
-        let workflow = build_basic_workflow(&req, Some("uploaded-ref.png"));
+        let workflow = build_basic_workflow(&req, &["uploaded-ref.png".into()]);
 
         assert_eq!(
             workflow["1"]["inputs"]["ckpt_name"],
             crate::comfy_installer::SDXL_CHECKPOINT_FILENAME
         );
-        assert_eq!(workflow["8"]["class_type"], "LoadImage");
-        assert_eq!(workflow["8"]["inputs"]["image"], "uploaded-ref.png");
+        assert_eq!(workflow["20"]["class_type"], "LoadImage");
+        assert_eq!(workflow["20"]["inputs"]["image"], "uploaded-ref.png");
+        // Jediná fotka → žádný ImageBatch, LoadImage jde do ApplyPulid přímo
+        assert_eq!(
+            workflow["12"]["inputs"]["image"],
+            serde_json::json!(["20", 0])
+        );
+        assert!(workflow.get("30").is_none());
+    }
+
+    #[test]
+    fn pulid_workflow_batches_multiple_references() {
+        let req = sample_request();
+        let refs: Vec<String> = vec!["a.png".into(), "b.png".into(), "c.png".into()];
+        let workflow = build_basic_workflow(&req, &refs);
+
+        // Tři LoadImage uzly
+        assert_eq!(workflow["20"]["inputs"]["image"], "a.png");
+        assert_eq!(workflow["21"]["inputs"]["image"], "b.png");
+        assert_eq!(workflow["22"]["inputs"]["image"], "c.png");
+
+        // Řetěz: 30 = batch(20, 21), 31 = batch(30, 22)
+        assert_eq!(workflow["30"]["class_type"], "ImageBatch");
+        assert_eq!(
+            workflow["30"]["inputs"]["image1"],
+            serde_json::json!(["20", 0])
+        );
+        assert_eq!(
+            workflow["30"]["inputs"]["image2"],
+            serde_json::json!(["21", 0])
+        );
+        assert_eq!(
+            workflow["31"]["inputs"]["image1"],
+            serde_json::json!(["30", 0])
+        );
+        assert_eq!(
+            workflow["31"]["inputs"]["image2"],
+            serde_json::json!(["22", 0])
+        );
+
+        // Konec řetězu jde do ApplyPulid
+        assert_eq!(
+            workflow["12"]["inputs"]["image"],
+            serde_json::json!(["31", 0])
+        );
     }
 
     #[test]
     fn pulid_nodes_are_wired_together_correctly() {
         let req = sample_request();
-        let workflow = build_basic_workflow(&req, Some("uploaded-ref.png"));
+        let workflow = build_basic_workflow(&req, &["uploaded-ref.png".into()]);
 
         assert_eq!(workflow["9"]["class_type"], "PulidModelLoader");
         assert_eq!(
@@ -491,7 +569,7 @@ mod tests {
             apply_pulid["inputs"]["face_analysis"],
             serde_json::json!(["10", 0])
         );
-        assert_eq!(apply_pulid["inputs"]["image"], serde_json::json!(["8", 0]));
+        assert_eq!(apply_pulid["inputs"]["image"], serde_json::json!(["20", 0]));
 
         // KSampler musí čerpat z PuLID-patchnutého modelu (uzel 12), ne přímo
         // z checkpointu (uzel 1) — jinak by referenční obrázek nemělo na co vliv.
@@ -504,7 +582,7 @@ mod tests {
     #[test]
     fn pulid_workflow_carries_over_request_fields() {
         let req = sample_request();
-        let workflow = build_basic_workflow(&req, Some("uploaded-ref.png"));
+        let workflow = build_basic_workflow(&req, &["uploaded-ref.png".into()]);
 
         assert_eq!(workflow["2"]["inputs"]["text"], "kosmická loď nad planetou");
         assert_eq!(workflow["3"]["inputs"]["text"], "rozmazané");

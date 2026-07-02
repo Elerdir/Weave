@@ -14,7 +14,9 @@ pub struct ImageRequest {
     pub cfg_scale: f32,
     pub seed: Option<i64>,
     pub style_preset: StylePreset,
-    pub reference_image_path: Option<String>,
+    /// Referenční obrázky (PuLID). Víc fotek = věrnější podoba — identity
+    /// embeddingy se z dávky průměrují. Prázdný vektor = čisté text-to-image.
+    pub reference_image_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
