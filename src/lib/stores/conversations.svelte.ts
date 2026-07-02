@@ -57,6 +57,7 @@ function createConversationStore() {
   let currentStats = $state<GenerationStats | null>(null);
   let lastError = $state<string | null>(null);
   let imageStage = $state<ImageStageInfo | null>(null);
+  let compacting = $state(false);
 
   return {
     get conversations() { return conversations; },
@@ -67,6 +68,7 @@ function createConversationStore() {
     get currentStats() { return currentStats; },
     get lastError() { return lastError; },
     get imageStage() { return imageStage; },
+    get compacting() { return compacting; },
 
     get activeConversation() {
       return conversations.find(c => c.id === activeId) ?? null;
@@ -129,6 +131,21 @@ function createConversationStore() {
           if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
           return b.updated_at.localeCompare(a.updated_at);
         });
+    },
+
+    /** Zhustí konverzaci: LLM shrne historii, ta se nahradí souhrnem. */
+    async compact() {
+      if (!activeId || compacting || loading) return;
+      compacting = true;
+      lastError = null;
+      try {
+        await invoke<string>("compact_conversation", { conversationId: activeId });
+        messages = await invoke<Message[]>("list_messages", { conversationId: activeId });
+      } catch (e) {
+        lastError = String(e);
+      } finally {
+        compacting = false;
+      }
     },
 
     appendStreamToken(token: string) {

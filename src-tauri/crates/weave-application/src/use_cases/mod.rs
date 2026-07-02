@@ -1,3 +1,4 @@
+pub mod compact_conversation;
 pub mod create_conversation;
 pub mod export_conversation;
 pub mod generate_image;

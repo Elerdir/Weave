@@ -14,10 +14,15 @@
   let { msg, isLast = false }: { msg: Message; isLast?: boolean } = $props();
 
   const isUser = $derived(msg.role === "user");
+  const isSystem = $derived(msg.role === "system");
   const isSpeaking = $derived(tts.speakingId === msg.id);
   const imageAttachments = $derived(msg.attachments.filter((a) => a.type === "image"));
   const canRegenerate = $derived(
-    !isUser && isLast && !conversationStore.loading && conversationStore.activeId !== null
+    !isUser &&
+      !isSystem &&
+      isLast &&
+      !conversationStore.loading &&
+      conversationStore.activeId !== null
   );
   /** Vygenerované obrázky v odpovědi asistenta (lokální cesty z markdownu). */
   const generatedImages = $derived(isUser ? [] : extractLocalImagePaths(msg.content));
@@ -53,7 +58,7 @@
 </script>
 
 <div class="bubble-wrap" class:user={isUser}>
-  <div class="bubble" class:user={isUser} class:assistant={!isUser}>
+  <div class="bubble" class:user={isUser} class:assistant={!isUser && !isSystem} class:system={isSystem}>
     {#if imageAttachments.length > 0}
       <div class="attachment-thumbs">
         {#each imageAttachments as att (att.path)}
@@ -143,6 +148,14 @@
     background: var(--color-assistant-bubble);
     border: 1px solid var(--color-border);
     border-bottom-left-radius: 4px;
+  }
+
+  /* Systémová zpráva (souhrn po zhuštění) — decentní, odlišená od odpovědí */
+  .bubble.system {
+    background: transparent;
+    border: 1px dashed var(--color-border);
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
   }
 
   .bubble-content :global(pre) {

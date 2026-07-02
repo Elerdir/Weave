@@ -62,6 +62,26 @@ pub async fn regenerate_response(
     uc.regenerate(conv_id, tx).await.map_err(|e| e.to_string())
 }
 
+/// Zhustí konverzaci: LLM shrne historii a ta se nahradí souhrnem —
+/// kontextové okno se uvolní, ale podstatná „paměť" zůstane. Vrací souhrn.
+#[tauri::command]
+pub async fn compact_conversation(
+    conversation_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    use weave_application::use_cases::compact_conversation::CompactConversationUseCase;
+    use weave_infrastructure::db::message_repo::SqliteMessageRepository;
+
+    let conv_id = parse_conversation_id(&conversation_id)?;
+    let msg_repo = Arc::new(SqliteMessageRepository::new(state.pool.clone()));
+    let llm = super::settings::resolve_llm(&state).await;
+
+    CompactConversationUseCase::new(msg_repo, llm)
+        .execute(conv_id, "mistral-small-latest".into())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Vrátí per-konverzační parametry generování (posuvníky v chatu).
 #[tauri::command]
 pub async fn get_conversation_settings(

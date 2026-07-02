@@ -78,6 +78,13 @@ const cs = {
       maxTokens: "Max. tokenů odpovědi",
       unlimited: "Neomezeno",
     },
+    contextMeter: {
+      tooltip: "Odhad vyčerpání kontextového okna konverzace (~4 znaky na token)",
+      compact: "🗜 Zhustit",
+      compacting: "Zhušťuji…",
+      compactHint: "Shrne dosavadní konverzaci a nahradí ji souhrnem — uvolní kontextové okno, podstatné zůstane zapamatované.",
+      compactConfirm: "Zhustit konverzaci? Zprávy se nahradí souhrnem (původní text i přílohy zmizí), model si ale podstatné zapamatuje.",
+    },
   },
   sidebar: {
     conversations: "Konverzace",

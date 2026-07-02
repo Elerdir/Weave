@@ -80,6 +80,13 @@ const en: Messages = {
       maxTokens: "Max response tokens",
       unlimited: "Unlimited",
     },
+    contextMeter: {
+      tooltip: "Estimated context window usage for this conversation (~4 chars per token)",
+      compact: "🗜 Compact",
+      compacting: "Compacting…",
+      compactHint: "Summarizes the conversation so far and replaces it with the summary — frees the context window while keeping what matters.",
+      compactConfirm: "Compact this conversation? Messages will be replaced by a summary (original text and attachments disappear), but the model keeps the essentials.",
+    },
   },
   sidebar: {
     conversations: "Conversations",
