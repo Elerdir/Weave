@@ -118,6 +118,43 @@ describe("chat.service sendMessage", () => {
     expect(conversationStore.lastError).toBeNull();
   });
 
+  it("ImageStage chunky plní průběh obrázku a Done ho vyčistí", async () => {
+    let handler: ((e: { payload: unknown }) => void) | null = null;
+    mockListen.mockImplementation(async (_event, cb) => {
+      handler = cb as (e: { payload: unknown }) => void;
+      return () => {};
+    });
+    mockInvoke.mockImplementation(async () => {
+      handler?.({
+        payload: { ImageStage: { stage: "installing", detail: "pip install torch" } },
+      });
+      expect(conversationStore.imageStage?.stage).toBe("installing");
+      expect(conversationStore.imageStage?.detail).toBe("pip install torch");
+
+      handler?.({ payload: { ImageStage: { stage: "generating", detail: null } } });
+      expect(conversationStore.imageStage?.stage).toBe("generating");
+
+      handler?.({ payload: { Token: "![obrázek](/gallery/x.png)" } });
+      handler?.({
+        payload: {
+          Done: {
+            tokens_per_second: 0,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            model_id: "comfyui",
+            backend: "comfy_ui",
+          },
+        },
+      });
+      return undefined;
+    });
+
+    await sendMessage("conv-1", "nakresli hrad");
+
+    expect(conversationStore.imageStage).toBeNull();
+    expect(conversationStore.messages.at(-1)?.content).toContain("/gallery/x.png");
+  });
+
   it("stopGeneration() zavolá backend command", async () => {
     mockInvoke.mockResolvedValueOnce(undefined);
 

@@ -42,6 +42,25 @@
   // Panel per-konverzačních parametrů generování (posuvníky)
   let showGenSettings = $state(false);
 
+  // Uplynulý čas během přípravy/generování obrázku
+  let elapsedSeconds = $state(0);
+  const elapsedLabel = $derived(
+    elapsedSeconds >= 60
+      ? `${Math.floor(elapsedSeconds / 60)} min ${elapsedSeconds % 60} s`
+      : `${elapsedSeconds} s`
+  );
+
+  $effect(() => {
+    if (!(conversationStore.loading && conversationStore.imageStage)) {
+      elapsedSeconds = 0;
+      return;
+    }
+    const interval = setInterval(() => {
+      elapsedSeconds += 1;
+    }, 1000);
+    return () => clearInterval(interval);
+  });
+
   $effect(() => {
     const id = conversationStore.activeId;
     if (id) {
@@ -306,6 +325,21 @@
           <span class="cursor"></span>
         </div>
       </div>
+    {:else if conversationStore.loading && conversationStore.imageStage}
+      <div class="bubble assistant image-progress">
+        <div class="image-progress-head">
+          <span class="image-progress-label">
+            {i18n.t(`chat.imageStages.${conversationStore.imageStage.stage}`)}
+          </span>
+          <span class="image-progress-elapsed">{elapsedLabel}</span>
+        </div>
+        <div class="image-progress-bar">
+          <div class="image-progress-fill"></div>
+        </div>
+        {#if conversationStore.imageStage.detail}
+          <div class="image-progress-detail">{conversationStore.imageStage.detail}</div>
+        {/if}
+      </div>
     {:else if conversationStore.loading}
       <div class="bubble assistant thinking">
         <span class="dot"></span>
@@ -548,6 +582,65 @@
     align-self: flex-start;
     background: var(--color-assistant-bubble);
     border: 1px solid var(--color-border);
+  }
+
+  .bubble.image-progress {
+    min-width: 320px;
+    max-width: 75%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  .image-progress-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+  }
+
+  .image-progress-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  .image-progress-elapsed {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .image-progress-bar {
+    height: 6px;
+    background: var(--color-surface-2);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Neurčitý průběh — skutečná % u sampleru ComfyUI nehlásí */
+  .image-progress-fill {
+    position: absolute;
+    height: 100%;
+    width: 35%;
+    background: var(--color-accent);
+    border-radius: 3px;
+    animation: indeterminate 1.4s ease-in-out infinite;
+  }
+
+  @keyframes indeterminate {
+    0% { left: -35%; }
+    100% { left: 100%; }
+  }
+
+  .image-progress-detail {
+    font-size: 0.72rem;
+    color: var(--color-text-muted);
+    font-family: "JetBrains Mono", monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 480px;
   }
 
   .bubble.thinking {

@@ -234,6 +234,7 @@ mod tests {
                 StreamChunk::Token(t) => tokens.push_str(&t),
                 StreamChunk::Done(s) => done_stats = Some(s),
                 StreamChunk::Error(e) => panic!("nečekaná chyba: {e}"),
+                StreamChunk::ImageStage(_) => {}
             }
         }
 

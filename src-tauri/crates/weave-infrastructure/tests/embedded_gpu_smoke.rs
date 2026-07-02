@@ -51,6 +51,7 @@ async fn generates_real_tokens_on_gpu() {
             StreamChunk::Token(t) => output.push_str(&t),
             StreamChunk::Done(s) => stats = Some(s),
             StreamChunk::Error(e) => panic!("inference selhala: {e}"),
+            StreamChunk::ImageStage(_) => {}
         }
     }
 
@@ -103,6 +104,7 @@ async fn handles_prompt_longer_than_n_batch() {
             StreamChunk::Token(t) => output.push_str(&t),
             StreamChunk::Done(s) => stats = Some(s),
             StreamChunk::Error(e) => panic!("inference selhala: {e}"),
+            StreamChunk::ImageStage(_) => {}
         }
     }
 
@@ -165,6 +167,7 @@ async fn trims_history_that_exceeds_context_window() {
             StreamChunk::Token(t) => output.push_str(&t),
             StreamChunk::Done(s) => stats = Some(s),
             StreamChunk::Error(e) => panic!("inference selhala (ořez nezafungoval): {e}"),
+            StreamChunk::ImageStage(_) => {}
         }
     }
 

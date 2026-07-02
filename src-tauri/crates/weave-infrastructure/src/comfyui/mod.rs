@@ -206,22 +206,23 @@ impl ImageGenPort for ComfyUiClient {
 /// PO uploadu na ComfyUI server (viz `ComfyUiClient::upload_reference_image`),
 /// ne lokální filesystem cesta.
 ///
-/// Bez referenčního obrázku jede běžná FLUX text-to-image větev beze změny.
-/// S referenčním obrázkem se checkpoint přepne na SDXL a zapojí se PuLID —
-/// `cubiq/PuLID_ComfyUI` patchuje SDXL cross-attention a na FLUX/DiT
-/// architekturu použít nejde.
+/// Checkpoint se volí podle stylu promptu (`req.style_preset`) — anime má
+/// vlastní doladěný SDXL checkpoint, zbytek jede na SDXL base. Obě varianty
+/// jsou SDXL architektura, takže fungují i s PuLID větví.
 fn build_basic_workflow(req: &ImageRequest, uploaded_reference: Option<&str>) -> serde_json::Value {
     match uploaded_reference {
         Some(image) => build_pulid_workflow(req, image),
-        None => build_flux_workflow(req),
+        None => build_txt2img_workflow(req),
     }
 }
 
-fn build_flux_workflow(req: &ImageRequest) -> serde_json::Value {
+fn build_txt2img_workflow(req: &ImageRequest) -> serde_json::Value {
     serde_json::json!({
         "1": {
             "class_type": "CheckpointLoaderSimple",
-            "inputs": { "ckpt_name": "flux1-dev.safetensors" }
+            "inputs": {
+                "ckpt_name": crate::comfy_installer::checkpoint_filename_for_style(req.style_preset)
+            }
         },
         "2": {
             "class_type": "CLIPTextEncode",
@@ -268,7 +269,9 @@ fn build_pulid_workflow(req: &ImageRequest, uploaded_image: &str) -> serde_json:
     serde_json::json!({
         "1": {
             "class_type": "CheckpointLoaderSimple",
-            "inputs": { "ckpt_name": crate::comfy_installer::SDXL_CHECKPOINT_FILENAME }
+            "inputs": {
+                "ckpt_name": crate::comfy_installer::checkpoint_filename_for_style(req.style_preset)
+            }
         },
         "2": {
             "class_type": "CLIPTextEncode",
@@ -376,13 +379,14 @@ mod tests {
     }
 
     #[test]
-    fn flux_workflow_used_without_reference_image() {
+    fn txt2img_workflow_used_without_reference_image() {
         let req = sample_request();
         let workflow = build_basic_workflow(&req, None);
 
+        // Realistický styl → SDXL base (stahuje se při instalaci ComfyUI)
         assert_eq!(
             workflow["1"]["inputs"]["ckpt_name"],
-            "flux1-dev.safetensors"
+            crate::comfy_installer::SDXL_CHECKPOINT_FILENAME
         );
         assert_eq!(
             workflow["5"]["inputs"]["model"],
@@ -390,10 +394,28 @@ mod tests {
         );
         assert_eq!(workflow.as_object().unwrap().len(), 7);
 
-        // Žádná PuLID/SDXL větev nesmí být přítomná, dokud není referenční obrázek
+        // Žádná PuLID větev nesmí být přítomná, dokud není referenční obrázek
         let json_text = workflow.to_string();
         assert!(!json_text.contains("Pulid"));
-        assert!(!json_text.contains(crate::comfy_installer::SDXL_CHECKPOINT_FILENAME));
+    }
+
+    #[test]
+    fn txt2img_anime_style_switches_checkpoint() {
+        let mut req = sample_request();
+        req.style_preset = StylePreset::Anime;
+
+        let workflow = build_basic_workflow(&req, None);
+        assert_eq!(
+            workflow["1"]["inputs"]["ckpt_name"],
+            crate::comfy_installer::ANIME_CHECKPOINT_FILENAME
+        );
+
+        // Anime checkpoint je SDXL architektura → platí i pro PuLID větev
+        let pulid = build_basic_workflow(&req, Some("ref.png"));
+        assert_eq!(
+            pulid["1"]["inputs"]["ckpt_name"],
+            crate::comfy_installer::ANIME_CHECKPOINT_FILENAME
+        );
     }
 
     #[test]
