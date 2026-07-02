@@ -109,6 +109,8 @@ pub fn run() {
             commands::message::list_messages,
             commands::message::send_message,
             commands::message::regenerate_response,
+            commands::message::resend_message,
+            commands::message::truncate_conversation_from,
             commands::message::stop_generation,
             commands::message::compact_conversation,
             commands::message::get_conversation_settings,

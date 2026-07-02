@@ -175,6 +175,21 @@ impl SendMessageUseCase {
         .await
     }
 
+    /// „Poslat znovu": smaže vše PO dané zprávě uživatele (další dotazy
+    /// i odpovědi) a vygeneruje na ni čerstvou odpověď — konverzace se
+    /// vrátí do stavu těsně po tomto dotazu.
+    pub async fn resend(
+        &self,
+        conversation_id: ConversationId,
+        message_id: weave_domain::message::MessageId,
+        stream_tx: mpsc::Sender<StreamChunk>,
+    ) -> AppResult<()> {
+        self.msg_repo
+            .delete_messages_after(&conversation_id, &message_id)
+            .await?;
+        self.regenerate(conversation_id, stream_tx).await
+    }
+
     /// Společné jádro generování: obalí stream tak, aby se hotová odpověď
     /// asistenta uložila do DB (jinak by po přepnutí konverzace zmizela),
     /// a routuje podle záměru na obrázek/text.
@@ -1142,6 +1157,71 @@ mod tests {
                 panic!("necekana chyba: {e}");
             }
         }
+    }
+
+    /// „Poslat znovu" musí nejdřív smazat vše po dané zprávě a pak
+    /// regenerovat odpověď na ni (jako poslední zprávu v historii).
+    #[tokio::test]
+    async fn resend_truncates_after_message_then_regenerates() {
+        let conv = ConversationId::new();
+        let target = Message::user(conv.clone(), "původní dotaz");
+        let target_id = target.id.clone();
+        let target_for_list = target.clone();
+
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+
+        let mut msg_repo = MockMessageRepository::new();
+        let expected_id = target_id.clone();
+        msg_repo
+            .expect_delete_messages_after()
+            .times(1)
+            .withf(move |_, mid| *mid == expected_id)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        msg_repo
+            .expect_delete_trailing_assistant_messages()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        msg_repo.expect_list_by_conversation().returning(move |_| {
+            let history = vec![target_for_list.clone()];
+            Box::pin(async move { Ok(history) })
+        });
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut llm = MockLlmPort::new();
+        llm.expect_chat_stream().returning(|_, tx| {
+            Box::pin(async move {
+                let _ = tx.send(StreamChunk::Token("čerstvá odpověď".into())).await;
+                let _ = tx.send(StreamChunk::Done(Default::default())).await;
+                Ok(())
+            })
+        });
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(llm),
+            Arc::new(MockImageGenPort::new()),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(default_gen_settings()),
+            Arc::new(default_comfy_installer()),
+        );
+
+        let (tx, mut rx) = mpsc::channel(64);
+        uc.resend(conv, target_id, tx).await.unwrap();
+
+        let mut got_token = false;
+        while let Some(chunk) = rx.recv().await {
+            if let StreamChunk::Token(t) = chunk {
+                got_token = t.contains("čerstvá odpověď");
+            }
+        }
+        assert!(got_token);
     }
 
     /// Když LLM vylepšení promptu selže, generování běží dál s původním

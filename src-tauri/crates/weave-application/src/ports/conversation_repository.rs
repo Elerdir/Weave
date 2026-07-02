@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use weave_domain::conversation::{Conversation, ConversationId};
-use weave_domain::message::Message;
+use weave_domain::message::{Message, MessageId};
 
 use crate::error::AppResult;
 
@@ -23,4 +23,18 @@ pub trait MessageRepository: Send + Sync {
     /// Smaže zprávy následující po poslední zprávě uživatele (typicky poslední
     /// odpověď asistenta) — základ pro „znovu vygenerovat“.
     async fn delete_trailing_assistant_messages(&self, id: &ConversationId) -> AppResult<()>;
+    /// Smaže všechny zprávy PO dané zprávě (danou zprávu nechá) —
+    /// „poslat znovu": konverzace se vrátí do stavu těsně po tomto dotazu.
+    async fn delete_messages_after(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+    ) -> AppResult<()>;
+    /// Smaže danou zprávu a všechny po ní — „upravit a poslat":
+    /// původní dotaz nahradí nová verze.
+    async fn delete_messages_from(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+    ) -> AppResult<()>;
 }

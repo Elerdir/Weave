@@ -62,6 +62,44 @@ pub async fn regenerate_response(
     uc.regenerate(conv_id, tx).await.map_err(|e| e.to_string())
 }
 
+/// „Poslat znovu": smaže vše po dané zprávě uživatele a vygeneruje
+/// čerstvou odpověď (stream jde jako u send_message).
+#[tauri::command]
+pub async fn resend_message(
+    conversation_id: String,
+    message_id: String,
+    window: tauri::Window,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conv_id = parse_conversation_id(&conversation_id)?;
+    let msg_id = parse_message_id(&message_id)?;
+    let uc = build_use_case(&state).await;
+    let tx = spawn_stream_forwarder(window, &state);
+
+    uc.resend(conv_id, msg_id, tx)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// „Upravit a poslat": smaže původní zprávu a vše po ní — nová verze
+/// dotazu se pak posílá běžným send_message.
+#[tauri::command]
+pub async fn truncate_conversation_from(
+    conversation_id: String,
+    message_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use weave_application::ports::conversation_repository::MessageRepository;
+    use weave_infrastructure::db::message_repo::SqliteMessageRepository;
+
+    let conv_id = parse_conversation_id(&conversation_id)?;
+    let msg_id = parse_message_id(&message_id)?;
+    SqliteMessageRepository::new(state.pool.clone())
+        .delete_messages_from(&conv_id, &msg_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Zhustí konverzaci: LLM shrne historii a ta se nahradí souhrnem —
 /// kontextové okno se uvolní, ale podstatná „paměť" zůstane. Vrací souhrn.
 #[tauri::command]
@@ -131,6 +169,11 @@ pub fn stop_generation(state: State<'_, AppState>) {
 fn parse_conversation_id(raw: &str) -> Result<ConversationId, String> {
     let uuid = uuid::Uuid::parse_str(raw).map_err(|e| e.to_string())?;
     Ok(ConversationId::from_uuid(uuid))
+}
+
+fn parse_message_id(raw: &str) -> Result<weave_domain::message::MessageId, String> {
+    let uuid = uuid::Uuid::parse_str(raw).map_err(|e| e.to_string())?;
+    Ok(weave_domain::message::MessageId::from_uuid(uuid))
 }
 
 /// Sestaví use case se všemi závislostmi (LLM backend dle aktuálního nastavení).

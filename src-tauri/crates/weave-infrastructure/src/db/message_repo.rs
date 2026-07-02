@@ -86,7 +86,10 @@ impl MessageRepository for SqliteMessageRepository {
                     .map_err(|e| AppError::Repository(e.to_string()))?;
 
                 Ok(Message {
-                    id: MessageId::default(),
+                    // Skutečné ID z DB — frontend podle něj cílí resend/edit.
+                    id: MessageId::from_uuid(
+                        Uuid::parse_str(&r.id).map_err(|e| AppError::Repository(e.to_string()))?,
+                    ),
                     conversation_id: ConversationId::from_uuid(
                         Uuid::parse_str(&r.conversation_id).unwrap(),
                     ),
@@ -123,6 +126,47 @@ impl MessageRepository for SqliteMessageRepository {
         )
         .bind(&id_str)
         .bind(&id_str)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_messages_after(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+    ) -> AppResult<()> {
+        let conv_str = conversation_id.as_uuid().to_string();
+        let msg_str = message_id.as_uuid().to_string();
+        // Neexistující message_id → poddotaz NULL → nesmaže se nic.
+        sqlx::query(
+            "DELETE FROM messages
+             WHERE conversation_id = ?
+               AND created_at > (SELECT created_at FROM messages WHERE id = ?)",
+        )
+        .bind(&conv_str)
+        .bind(&msg_str)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AppError::Repository(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_messages_from(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+    ) -> AppResult<()> {
+        let conv_str = conversation_id.as_uuid().to_string();
+        let msg_str = message_id.as_uuid().to_string();
+        sqlx::query(
+            "DELETE FROM messages
+             WHERE conversation_id = ?
+               AND created_at >= (SELECT created_at FROM messages WHERE id = ?)",
+        )
+        .bind(&conv_str)
+        .bind(&msg_str)
         .execute(&self.pool)
         .await
         .map_err(|e| AppError::Repository(e.to_string()))?;
@@ -197,6 +241,86 @@ mod tests {
             contents,
             vec!["první otázka", "první odpověď", "druhá otázka"]
         );
+    }
+
+    /// Uloží do konverzace 4 zprávy s rostoucím created_at a vrátí je.
+    async fn seed_four_messages(
+        repo: &SqliteMessageRepository,
+        conv: &ConversationId,
+    ) -> Vec<Message> {
+        let mut base = chrono::Utc::now();
+        let mut saved = Vec::new();
+        for msg in [
+            Message::user(conv.clone(), "první otázka"),
+            Message::assistant(conv.clone(), "první odpověď", None),
+            Message::user(conv.clone(), "druhá otázka"),
+            Message::assistant(conv.clone(), "druhá odpověď", None),
+        ] {
+            let mut m = msg;
+            base += chrono::Duration::seconds(1);
+            m.created_at = base;
+            repo.save(&m).await.unwrap();
+            saved.push(m);
+        }
+        saved
+    }
+
+    #[tokio::test]
+    async fn list_returns_real_message_ids() {
+        let pool = test_pool().await;
+        let conv = seed_conversation(&pool).await;
+        let repo = SqliteMessageRepository::new(pool);
+        let saved = seed_four_messages(&repo, &conv).await;
+
+        let listed = repo.list_by_conversation(&conv).await.unwrap();
+        let saved_ids: Vec<String> = saved.iter().map(|m| m.id.to_string()).collect();
+        let listed_ids: Vec<String> = listed.iter().map(|m| m.id.to_string()).collect();
+        assert_eq!(listed_ids, saved_ids, "ID z DB musí odpovídat uloženým");
+    }
+
+    #[tokio::test]
+    async fn delete_messages_after_keeps_target_message() {
+        let pool = test_pool().await;
+        let conv = seed_conversation(&pool).await;
+        let repo = SqliteMessageRepository::new(pool);
+        let saved = seed_four_messages(&repo, &conv).await;
+
+        // Smaž vše po první otázce → zůstane jen ona
+        repo.delete_messages_after(&conv, &saved[0].id)
+            .await
+            .unwrap();
+        let remaining = repo.list_by_conversation(&conv).await.unwrap();
+        let contents: Vec<&str> = remaining.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(contents, vec!["první otázka"]);
+    }
+
+    #[tokio::test]
+    async fn delete_messages_from_removes_target_too() {
+        let pool = test_pool().await;
+        let conv = seed_conversation(&pool).await;
+        let repo = SqliteMessageRepository::new(pool);
+        let saved = seed_four_messages(&repo, &conv).await;
+
+        // Smaž od druhé otázky včetně → zůstane první výměna
+        repo.delete_messages_from(&conv, &saved[2].id)
+            .await
+            .unwrap();
+        let remaining = repo.list_by_conversation(&conv).await.unwrap();
+        let contents: Vec<&str> = remaining.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(contents, vec!["první otázka", "první odpověď"]);
+    }
+
+    #[tokio::test]
+    async fn delete_messages_after_is_noop_for_unknown_id() {
+        let pool = test_pool().await;
+        let conv = seed_conversation(&pool).await;
+        let repo = SqliteMessageRepository::new(pool);
+        seed_four_messages(&repo, &conv).await;
+
+        repo.delete_messages_after(&conv, &MessageId::new())
+            .await
+            .unwrap();
+        assert_eq!(repo.list_by_conversation(&conv).await.unwrap().len(), 4);
     }
 
     #[tokio::test]
