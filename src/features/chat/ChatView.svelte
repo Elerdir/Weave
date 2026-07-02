@@ -15,6 +15,7 @@
   import MessageBubble from "./MessageBubble.svelte";
   import PersonaPicker from "./PersonaPicker.svelte";
   import ExportMenu from "./ExportMenu.svelte";
+  import ContextMeter from "./ContextMeter.svelte";
 
   interface Mention {
     path: string;
@@ -258,6 +259,8 @@
       <ExportMenu />
     </div>
   </header>
+
+  <ContextMeter />
 
   {#if showGenSettings}
     <div class="gen-settings-panel">

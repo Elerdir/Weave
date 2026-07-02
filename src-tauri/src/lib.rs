@@ -110,6 +110,7 @@ pub fn run() {
             commands::message::send_message,
             commands::message::regenerate_response,
             commands::message::stop_generation,
+            commands::message::compact_conversation,
             commands::message::get_conversation_settings,
             commands::message::set_conversation_settings,
             commands::settings::get_api_key_status,
