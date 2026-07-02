@@ -1,14 +1,23 @@
 <script lang="ts">
   import { convertFileSrc } from "@tauri-apps/api/core";
   import type { Message } from "$lib/stores/conversations.svelte";
+  import { conversationStore } from "$lib/stores/conversations.svelte";
+  import { regenerateResponse } from "$lib/services/chat.service";
   import { i18n } from "$lib/i18n/index.svelte";
   import { tts } from "$lib/services/tts.svelte";
 
-  let { msg }: { msg: Message } = $props();
+  let { msg, isLast = false }: { msg: Message; isLast?: boolean } = $props();
 
   const isUser = $derived(msg.role === "user");
   const isSpeaking = $derived(tts.speakingId === msg.id);
   const imageAttachments = $derived(msg.attachments.filter((a) => a.type === "image"));
+  const canRegenerate = $derived(
+    !isUser && isLast && !conversationStore.loading && conversationStore.activeId !== null
+  );
+
+  function regenerate() {
+    if (conversationStore.activeId) void regenerateResponse(conversationStore.activeId);
+  }
 
   // Jednoduchý markdown renderer — inline kód + code bloky
   function renderContent(text: string): string {
@@ -61,6 +70,14 @@
         title={i18n.m.chat.speak}
         aria-label={i18n.m.chat.speak}
       >{isSpeaking ? "⏹" : "🔊"}</button>
+    {/if}
+    {#if canRegenerate}
+      <button
+        class="action-btn"
+        onclick={regenerate}
+        title={i18n.m.chat.regenerate}
+        aria-label={i18n.m.chat.regenerate}
+      >↻</button>
     {/if}
   </div>
 </div>

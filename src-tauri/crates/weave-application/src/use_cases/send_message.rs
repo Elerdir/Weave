@@ -84,17 +84,116 @@ impl SendMessageUseCase {
             Message::user(conversation_id.clone(), &content).with_attachments(attachments.clone());
         self.msg_repo.save(&user_msg).await?;
 
-        // Klasifikace záměru → routing
+        let reference_image_path = attachments.iter().find_map(|a| match a {
+            Attachment::Image { path, .. } => Some(path.clone()),
+            Attachment::Document { .. } => None,
+        });
+
+        self.generate_reply(
+            &conversation,
+            conversation_id,
+            content,
+            file_refs,
+            reference_image_path,
+            stream_tx,
+        )
+        .await
+    }
+
+    /// Znovu vygeneruje odpověď na poslední zprávu uživatele: smaže poslední
+    /// odpověď asistenta (z DB) a spustí generování nad zbylou historií.
+    pub async fn regenerate(
+        &self,
+        conversation_id: ConversationId,
+        stream_tx: mpsc::Sender<StreamChunk>,
+    ) -> AppResult<()> {
+        let conversation = self
+            .conv_repo
+            .find_by_id(&conversation_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Repository(format!("Konverzace {conversation_id} neexistuje"))
+            })?;
+
+        self.msg_repo
+            .delete_trailing_assistant_messages(&conversation_id)
+            .await?;
+
+        let history = self.msg_repo.list_by_conversation(&conversation_id).await?;
+        let last_user = history
+            .iter()
+            .rev()
+            .find(|m| m.role == weave_domain::message::Role::User)
+            .ok_or_else(|| {
+                AppError::Repository(
+                    "Není co znovu vygenerovat — konverzace nemá žádnou zprávu uživatele".into(),
+                )
+            })?;
+
+        let content = last_user.content.clone();
+        let reference_image_path = last_user.attachments.iter().find_map(|a| match a {
+            Attachment::Image { path, .. } => Some(path.clone()),
+            Attachment::Document { .. } => None,
+        });
+
+        // Obsah @souborů z původní zprávy se neukládá, takže regenerace běží
+        // jen nad uloženou historií (bez file kontextu).
+        self.generate_reply(
+            &conversation,
+            conversation_id,
+            content,
+            vec![],
+            reference_image_path,
+            stream_tx,
+        )
+        .await
+    }
+
+    /// Společné jádro generování: obalí stream tak, aby se hotová odpověď
+    /// asistenta uložila do DB (jinak by po přepnutí konverzace zmizela),
+    /// a routuje podle záměru na obrázek/text.
+    async fn generate_reply(
+        &self,
+        conversation: &weave_domain::conversation::Conversation,
+        conversation_id: ConversationId,
+        content: String,
+        file_refs: Vec<String>,
+        reference_image_path: Option<String>,
+        stream_tx: mpsc::Sender<StreamChunk>,
+    ) -> AppResult<()> {
         let intent = IntentClassifier::classify(&content);
         tracing::debug!(?intent, "Intent klasifikován");
 
-        match intent {
+        // Mezikanál: skládá text odpovědi průběžně a po dokončení (nebo po
+        // zastavení uživatelem — tehdy se uloží aspoň částečná odpověď) ji
+        // zapíše do DB. Chunky přeposílá dál beze změny.
+        let (tee_tx, mut tee_rx) = mpsc::channel::<StreamChunk>(128);
+        let persist_repo = self.msg_repo.clone();
+        let persist_conv = conversation_id.clone();
+        let persist = tokio::spawn(async move {
+            let mut text = String::new();
+            let mut stats = None;
+            while let Some(chunk) = tee_rx.recv().await {
+                match &chunk {
+                    StreamChunk::Token(t) => text.push_str(t),
+                    StreamChunk::Done(s) => stats = Some(s.clone()),
+                    StreamChunk::Error(_) => {}
+                }
+                if stream_tx.send(chunk).await.is_err() {
+                    break; // příjemce zmizel (Zastavit) — částečný text přesto uložíme
+                }
+            }
+            if !text.is_empty() {
+                let msg = Message::assistant(persist_conv, text, stats);
+                if let Err(e) = persist_repo.save(&msg).await {
+                    tracing::error!("Uložení odpovědi asistenta selhalo: {e}");
+                }
+            }
+        });
+
+        let result = match intent {
             weave_domain::model::Intent::ImageGeneration => {
-                let reference_image_path = attachments.iter().find_map(|a| match a {
-                    Attachment::Image { path, .. } => Some(path.clone()),
-                    Attachment::Document { .. } => None,
-                });
-                self.handle_image(content, reference_image_path, stream_tx)
+                self.handle_image(content, reference_image_path, tee_tx)
                     .await
             }
             _ => {
@@ -121,9 +220,14 @@ impl SendMessageUseCase {
                     temperature: 0.7,
                     stream: true,
                 };
-                self.llm.chat_stream(request, stream_tx).await
+                self.llm.chat_stream(request, tee_tx).await
             }
-        }
+        };
+
+        // Počkej na doběhnutí ukládací smyčky — u vestavěné inference tím
+        // příkaz skončí až po dokončení generování, což je žádoucí.
+        let _ = persist.await;
+        result
     }
 
     /// Vyřeší system prompt persony konverzace (vestavěná z domény, vlastní z repo).
@@ -435,5 +539,134 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn execute_persists_assistant_response_after_stream() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .withf(|m: &Message| m.role == weave_domain::message::Role::User)
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        msg_repo
+            .expect_save()
+            .withf(|m: &Message| {
+                m.role == weave_domain::message::Role::Assistant
+                    && m.content == "Ahoj světe"
+                    && m.stats.is_some()
+            })
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        msg_repo
+            .expect_list_by_conversation()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+
+        let mut llm = MockLlmPort::new();
+        llm.expect_chat_stream().returning(|_, tx| {
+            Box::pin(async move {
+                let _ = tx.send(StreamChunk::Token("Ahoj".into())).await;
+                let _ = tx.send(StreamChunk::Token(" světe".into())).await;
+                let _ = tx.send(StreamChunk::Done(Default::default())).await;
+                Ok(())
+            })
+        });
+
+        let uc = make_full_uc(
+            conv_repo,
+            msg_repo,
+            llm,
+            MockImageGenPort::new(),
+            MockAttachmentStorePort::new(),
+        );
+        let (tx, _rx) = mpsc::channel(16);
+
+        uc.execute(
+            ConversationId::new(),
+            "jak se máš?".into(),
+            vec![],
+            vec![],
+            tx,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn regenerate_deletes_trailing_reply_and_streams_new_one() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_delete_trailing_assistant_messages()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        msg_repo.expect_list_by_conversation().returning(|_| {
+            Box::pin(async { Ok(vec![Message::user(ConversationId::new(), "jak se máš?")]) })
+        });
+        // Jediná povolená save() je nová odpověď asistenta — uložení další
+        // zprávy uživatele by test shodilo (regenerace ji přidávat nesmí).
+        msg_repo
+            .expect_save()
+            .withf(|m: &Message| {
+                m.role == weave_domain::message::Role::Assistant && m.content == "Nová odpověď"
+            })
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut llm = MockLlmPort::new();
+        llm.expect_chat_stream().returning(|_, tx| {
+            Box::pin(async move {
+                let _ = tx.send(StreamChunk::Token("Nová odpověď".into())).await;
+                let _ = tx.send(StreamChunk::Done(Default::default())).await;
+                Ok(())
+            })
+        });
+
+        let uc = make_full_uc(
+            conv_repo,
+            msg_repo,
+            llm,
+            MockImageGenPort::new(),
+            MockAttachmentStorePort::new(),
+        );
+        let (tx, _rx) = mpsc::channel(16);
+
+        uc.regenerate(ConversationId::new(), tx).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn regenerate_fails_without_any_user_message() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_delete_trailing_assistant_messages()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        msg_repo
+            .expect_list_by_conversation()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+
+        let uc = make_full_uc(
+            conv_repo,
+            msg_repo,
+            MockLlmPort::new(),
+            MockImageGenPort::new(),
+            MockAttachmentStorePort::new(),
+        );
+        let (tx, _rx) = mpsc::channel(4);
+
+        assert!(uc.regenerate(ConversationId::new(), tx).await.is_err());
     }
 }

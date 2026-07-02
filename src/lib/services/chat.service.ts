@@ -8,6 +8,48 @@ type StreamChunk =
   | { Done: GenerationStats }
   | { Error: string };
 
+const UNKNOWN_STATS: GenerationStats = {
+  tokens_per_second: 0,
+  prompt_tokens: 0,
+  completion_tokens: 0,
+  model_id: "unknown",
+  backend: "unknown",
+};
+
+/** Přihlásí odběr stream eventů a plní jimi conversation store. */
+async function listenForStream(): Promise<() => void> {
+  const unlisten = await listen<StreamChunk>("stream-chunk", (event) => {
+    const chunk = event.payload;
+    if ("Token" in chunk) {
+      conversationStore.appendStreamToken(chunk.Token);
+    } else if ("Done" in chunk) {
+      conversationStore.finalizeStream(chunk.Done);
+      unlisten();
+    } else if ("Error" in chunk) {
+      console.error("Stream error:", chunk.Error);
+      conversationStore.finalizeStream(UNKNOWN_STATS);
+      unlisten();
+    }
+  });
+  return unlisten;
+}
+
+/** Spustí backend command generování a při chybě uklidí stav streamu. */
+async function runGeneration(
+  command: string,
+  args: Record<string, unknown>
+): Promise<void> {
+  conversationStore.startLoading();
+  const unlisten = await listenForStream();
+  try {
+    await invoke(command, args);
+  } catch (err) {
+    unlisten();
+    conversationStore.finalizeStream(UNKNOWN_STATS);
+    throw err;
+  }
+}
+
 export async function sendMessage(
   conversationId: string,
   content: string,
@@ -20,41 +62,18 @@ export async function sendMessage(
     mime: "image/*",
   }));
   conversationStore.pushUserMessage(content, attachments);
-  conversationStore.startLoading();
-
-  const unlisten = await listen<StreamChunk>("stream-chunk", (event) => {
-    const chunk = event.payload;
-    if ("Token" in chunk) {
-      conversationStore.appendStreamToken(chunk.Token);
-    } else if ("Done" in chunk) {
-      conversationStore.finalizeStream(chunk.Done);
-      unlisten();
-    } else if ("Error" in chunk) {
-      console.error("Stream error:", chunk.Error);
-      conversationStore.finalizeStream({
-        tokens_per_second: 0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        model_id: "unknown",
-        backend: "unknown",
-      });
-      unlisten();
-    }
+  await runGeneration("send_message", {
+    conversationId,
+    content,
+    fileRefs,
+    referenceImages,
   });
+}
 
-  try {
-    await invoke("send_message", { conversationId, content, fileRefs, referenceImages });
-  } catch (err) {
-    unlisten();
-    conversationStore.finalizeStream({
-      tokens_per_second: 0,
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      model_id: "unknown",
-      backend: "unknown",
-    });
-    throw err;
-  }
+/** Znovu vygeneruje poslední odpověď asistenta v konverzaci. */
+export async function regenerateResponse(conversationId: string): Promise<void> {
+  conversationStore.trimTrailingAssistantMessages();
+  await runGeneration("regenerate_response", { conversationId });
 }
 
 /** Zastaví právě běžící generování — částečná odpověď zůstane zachovaná. */

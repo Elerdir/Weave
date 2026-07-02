@@ -141,6 +141,13 @@ function createConversationStore() {
       currentStats = null;
     },
 
+    /** Odebere z lokálního stavu poslední odpovědi asistenta (před regenerací). */
+    trimTrailingAssistantMessages() {
+      let end = messages.length;
+      while (end > 0 && messages[end - 1].role === "assistant") end--;
+      messages = messages.slice(0, end);
+    },
+
     pushUserMessage(content: string, attachments: Attachment[] = []) {
       const msg: Message = {
         id: crypto.randomUUID(),

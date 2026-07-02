@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { sendMessage, stopGeneration } from "$lib/services/chat.service";
+import { regenerateResponse, sendMessage, stopGeneration } from "$lib/services/chat.service";
 import { conversationStore } from "$lib/stores/conversations.svelte";
 
 const mockInvoke = vi.mocked(invoke);
@@ -102,5 +102,39 @@ describe("chat.service sendMessage", () => {
     await stopGeneration();
 
     expect(mockInvoke).toHaveBeenCalledWith("stop_generation");
+  });
+
+  it("regenerateResponse() odebere poslední odpověď a zavolá backend", async () => {
+    // Historie: user zpráva + assistant odpověď (bez nového pushnutí user zprávy)
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await sendMessage("conv-1", "otázka");
+    conversationStore.finalizeStream({
+      tokens_per_second: 1,
+      prompt_tokens: 1,
+      completion_tokens: 1,
+      model_id: "m",
+      backend: "b",
+    });
+    conversationStore.appendStreamToken("stará odpověď");
+    conversationStore.finalizeStream({
+      tokens_per_second: 1,
+      prompt_tokens: 1,
+      completion_tokens: 1,
+      model_id: "m",
+      backend: "b",
+    });
+    const countBefore = conversationStore.messages.length;
+    expect(conversationStore.messages.at(-1)?.role).toBe("assistant");
+
+    mockInvoke.mockClear();
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await regenerateResponse("conv-1");
+
+    expect(mockInvoke).toHaveBeenCalledWith("regenerate_response", {
+      conversationId: "conv-1",
+    });
+    // Poslední assistant zpráva zmizela, žádná nová user zpráva nepřibyla
+    expect(conversationStore.messages.length).toBe(countBefore - 1);
+    expect(conversationStore.messages.at(-1)?.role).not.toBe("assistant");
   });
 });

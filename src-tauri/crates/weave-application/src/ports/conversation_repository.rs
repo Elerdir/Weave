@@ -20,4 +20,7 @@ pub trait MessageRepository: Send + Sync {
     async fn save(&self, message: &Message) -> AppResult<()>;
     async fn list_by_conversation(&self, id: &ConversationId) -> AppResult<Vec<Message>>;
     async fn delete_by_conversation(&self, id: &ConversationId) -> AppResult<()>;
+    /// Smaže zprávy následující po poslední zprávě uživatele (typicky poslední
+    /// odpověď asistenta) — základ pro „znovu vygenerovat“.
+    async fn delete_trailing_assistant_messages(&self, id: &ConversationId) -> AppResult<()>;
 }
