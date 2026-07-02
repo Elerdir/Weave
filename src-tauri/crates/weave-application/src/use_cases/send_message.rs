@@ -21,6 +21,17 @@ use crate::{
     },
 };
 
+/// Instrukce pro převod požadavku na anglický Stable Diffusion prompt.
+const IMAGE_PROMPT_SYSTEM: &str = "You convert user requests into English Stable Diffusion \
+    prompts. Reply with ONE line: comma-separated English descriptors (subject, appearance, \
+    setting, lighting, style, quality tags like 'highly detailed, sharp focus'). Translate \
+    non-English requests. Keep every detail the user asked for, including names used for \
+    people. No explanations, no quotes — output only the prompt itself.";
+
+/// Výchozí negative prompt — potlačuje typické artefakty SDXL.
+const DEFAULT_NEGATIVE_PROMPT: &str = "blurry, low quality, deformed, disfigured, extra limbs, \
+    bad anatomy, bad hands, watermark, text, signature, jpeg artifacts";
+
 pub struct SendMessageUseCase {
     conv_repo: Arc<dyn ConversationRepository>,
     msg_repo: Arc<dyn MessageRepository>,
@@ -364,13 +375,21 @@ impl SendMessageUseCase {
             self.comfy_installer.start_server().await?;
         }
 
+        // 3b. Prompt pro SDXL — model rozumí jen anglickým, komma-separovaným
+        // popisům. Český požadavek („nakresli mi…") poslaný napřímo vede na
+        // nesmyslné výstupy, proto ho LLM nejdřív převede; při selhání LLM
+        // se použije původní text (generování kvůli tomu nespadne).
+        let _ = stream_tx.send(stage(ImageStage::PreparingPrompt)).await;
+        let sd_prompt = self.enhance_image_prompt(&prompt).await;
+        tracing::info!(original = %prompt, enhanced = %sd_prompt, "Prompt pro generátor obrázků");
+
         // 4. Generování
         let _ = stream_tx.send(stage(ImageStage::Generating)).await;
 
         let (img_tx, mut img_rx) = mpsc::channel(32);
         let request = ImageRequest {
-            prompt,
-            negative_prompt: None,
+            prompt: sd_prompt,
+            negative_prompt: Some(DEFAULT_NEGATIVE_PROMPT.to_string()),
             width: 1024,
             height: 1024,
             steps: 20,
@@ -407,6 +426,47 @@ impl SendMessageUseCase {
             }
         }
         Ok(())
+    }
+
+    /// Převede požadavek uživatele (typicky česky) na anglický Stable
+    /// Diffusion prompt. Při jakémkoli selhání LLM vrací původní text —
+    /// horší prompt je lepší než spadlé generování.
+    async fn enhance_image_prompt(&self, user_prompt: &str) -> String {
+        let conv = ConversationId::new();
+        let messages = vec![
+            Message::system(conv.clone(), IMAGE_PROMPT_SYSTEM),
+            Message::user(conv, user_prompt),
+        ];
+        let request = ChatRequest {
+            messages,
+            model_id: "mistral-small-latest".into(),
+            max_tokens: Some(200),
+            context_length: None,
+            temperature: 0.4,
+            stream: true,
+        };
+
+        let (tx, mut rx) = mpsc::channel(64);
+        if self.llm.chat_stream(request, tx).await.is_err() {
+            return user_prompt.to_string();
+        }
+        let mut out = String::new();
+        while let Some(chunk) = rx.recv().await {
+            match chunk {
+                StreamChunk::Token(t) => out.push_str(&t),
+                StreamChunk::Error(e) => {
+                    tracing::warn!("Vylepšení promptu selhalo ({e}) — použije se původní");
+                    return user_prompt.to_string();
+                }
+                StreamChunk::Done(_) | StreamChunk::ImageStage(_) => {}
+            }
+        }
+        let out = out.trim().trim_matches('"').trim().to_string();
+        if out.is_empty() {
+            user_prompt.to_string()
+        } else {
+            out
+        }
     }
 
     fn model_for_intent(intent: &weave_domain::model::Intent) -> String {
@@ -472,6 +532,24 @@ mod tests {
         m.expect_get()
             .returning(|_| Box::pin(async { Ok(Default::default()) }));
         m
+    }
+
+    /// Mock LLM pro obrázkové testy: na žádost o vylepšení promptu vrátí
+    /// anglický SD prompt (handle_image ho volá před generováním).
+    fn image_prompt_llm() -> MockLlmPort {
+        let mut llm = MockLlmPort::new();
+        llm.expect_chat_stream().returning(|_, tx| {
+            Box::pin(async move {
+                let _ = tx
+                    .send(StreamChunk::Token(
+                        "young woman on a beach, detailed".into(),
+                    ))
+                    .await;
+                let _ = tx.send(StreamChunk::Done(Default::default())).await;
+                Ok(())
+            })
+        });
+        llm
     }
 
     /// Mock ComfyUI installeru: „vše připraveno, server běží" — orchestrace
@@ -673,7 +751,7 @@ mod tests {
         let uc = make_full_uc(
             conv_repo,
             msg_repo,
-            MockLlmPort::new(),
+            image_prompt_llm(),
             image_gen,
             attachment_store,
         );
@@ -915,7 +993,11 @@ mod tests {
             .returning(|| Box::pin(async { Ok(()) }));
 
         let mut image_gen = MockImageGenPort::new();
-        image_gen.expect_generate().returning(|_, tx| {
+        image_gen.expect_generate().returning(|req, tx| {
+            // Prompt musí projít LLM vylepšením (anglický SD prompt),
+            // ne originál „nakresli hrad na skale".
+            assert_eq!(req.prompt, "young woman on a beach, detailed");
+            assert!(req.negative_prompt.is_some());
             Box::pin(async move {
                 let _ = tx
                     .send(ImageProgress::Done {
@@ -929,7 +1011,7 @@ mod tests {
         let uc = SendMessageUseCase::new(
             Arc::new(conv_repo),
             Arc::new(msg_repo),
-            Arc::new(MockLlmPort::new()),
+            Arc::new(image_prompt_llm()),
             Arc::new(image_gen),
             Arc::new(MockWorkspaceRepository::new()),
             Arc::new(MockPersonaRepository::new()),
@@ -1032,7 +1114,7 @@ mod tests {
         let uc = SendMessageUseCase::new(
             Arc::new(conv_repo),
             Arc::new(msg_repo),
-            Arc::new(MockLlmPort::new()),
+            Arc::new(image_prompt_llm()),
             Arc::new(image_gen),
             Arc::new(MockWorkspaceRepository::new()),
             Arc::new(MockPersonaRepository::new()),
@@ -1057,5 +1139,72 @@ mod tests {
                 panic!("necekana chyba: {e}");
             }
         }
+    }
+
+    /// Když LLM vylepšení promptu selže, generování běží dál s původním
+    /// textem — horší prompt je lepší než spadlá pipeline.
+    #[tokio::test]
+    async fn image_prompt_falls_back_to_original_on_llm_error() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut llm = MockLlmPort::new();
+        llm.expect_chat_stream().returning(|_, tx| {
+            Box::pin(async move {
+                let _ = tx.send(StreamChunk::Error("LLM nedostupné".into())).await;
+                Ok(())
+            })
+        });
+
+        let mut image_gen = MockImageGenPort::new();
+        image_gen.expect_generate().returning(|req, tx| {
+            assert_eq!(req.prompt, "nakresli hrad na skale");
+            Box::pin(async move {
+                let _ = tx
+                    .send(ImageProgress::Done {
+                        output_path: "/gallery/hrad.png".into(),
+                    })
+                    .await;
+                Ok(())
+            })
+        });
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(llm),
+            Arc::new(image_gen),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(default_gen_settings()),
+            Arc::new(default_comfy_installer()),
+        );
+
+        let (tx, mut rx) = mpsc::channel(64);
+        uc.execute(
+            ConversationId::new(),
+            "nakresli hrad na skale".into(),
+            vec![],
+            vec![],
+            tx,
+        )
+        .await
+        .unwrap();
+
+        let mut got_done = false;
+        while let Some(chunk) = rx.recv().await {
+            if matches!(chunk, StreamChunk::Done(_)) {
+                got_done = true;
+            }
+        }
+        assert!(got_done, "generovani nedobehlo");
     }
 }

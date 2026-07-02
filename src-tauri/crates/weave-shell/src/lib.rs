@@ -40,7 +40,12 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
         pool,
         keychain,
         llm: Arc::new(MistralClient::new(mistral_key)),
-        image_gen: Arc::new(ComfyUiClient::new(comfyui_url)),
+        // Galerie musí být uvnitř assetProtocol scope ($APPDATA/weave/**),
+        // jinak se náhledy vygenerovaných obrázků v chatu nezobrazí.
+        image_gen: Arc::new(
+            ComfyUiClient::new(comfyui_url)
+                .with_gallery_dir(data_dir.join("weave").join("gallery")),
+        ),
         model_manager: Arc::new(LocalModelManager::new(models_dir)),
         comfy_installer: Arc::new(LocalComfyInstaller::new(comfyui_install_dir)),
         attachment_store: Arc::new(LocalAttachmentStore::new(reference_images_dir)),

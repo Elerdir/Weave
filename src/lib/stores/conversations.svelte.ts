@@ -40,6 +40,7 @@ export type ImageStage =
   | "installing"
   | "downloading_model"
   | "starting_server"
+  | "preparing_prompt"
   | "generating"
   | "finishing";
 
