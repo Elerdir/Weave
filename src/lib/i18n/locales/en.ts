@@ -62,6 +62,7 @@ const en: Messages = {
     imageGenerated: "Image generated",
     addReferenceImage: "Add reference image",
     removeReferenceImage: "Remove image",
+    dropImagesHint: "Drop images here — attached as references",
     genSettings: {
       title: "Generation parameters",
       context: "Context window (tokens)",

@@ -60,6 +60,7 @@ const cs = {
     imageGenerated: "Obrázek vygenerován",
     addReferenceImage: "Přidat referenční obrázek",
     removeReferenceImage: "Odebrat obrázek",
+    dropImagesHint: "Pusť obrázky sem — přiloží se jako reference",
     genSettings: {
       title: "Parametry generování",
       context: "Kontextové okno (tokeny)",

@@ -1,7 +1,9 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
+  import { filterNewImagePaths, IMAGE_EXTENSIONS } from "$lib/reference-images";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { generationSettingsStore } from "$lib/stores/generation-settings.svelte";
   import { sendMessage, stopGeneration } from "$lib/services/chat.service";
@@ -22,8 +24,6 @@
     path: string;
     previewUrl: string;
   }
-
-  const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 
   let input = $state("");
   let messagesEl = $state<HTMLDivElement | null>(null);
@@ -50,23 +50,58 @@
     }
   });
 
+  function addReferenceImages(paths: string[]) {
+    const fresh = filterNewImagePaths(
+      paths,
+      refImages.map((r) => r.path)
+    );
+    if (fresh.length > 0) {
+      refImages = [
+        ...refImages,
+        ...fresh.map((path) => ({ path, previewUrl: convertFileSrc(path) })),
+      ];
+    }
+  }
+
   async function pickReferenceImages() {
     const picked = await openFilePicker({
       multiple: true,
       filters: [{ name: "Obrázky", extensions: IMAGE_EXTENSIONS }],
     });
     if (!picked) return;
-    const paths = Array.isArray(picked) ? picked : [picked];
-    for (const path of paths) {
-      if (!refImages.some((r) => r.path === path)) {
-        refImages = [...refImages, { path, previewUrl: convertFileSrc(path) }];
-      }
-    }
+    addReferenceImages(Array.isArray(picked) ? picked : [picked]);
   }
 
   function removeRefImage(path: string) {
     refImages = refImages.filter((r) => r.path !== path);
   }
+
+  // Drag & drop obrázků kamkoliv do okna chatu → referenční obrázky
+  let dragActive = $state(false);
+
+  $effect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          dragActive = true;
+        } else if (event.payload.type === "drop") {
+          dragActive = false;
+          addReferenceImages(event.payload.paths);
+        } else {
+          dragActive = false; // leave
+        }
+      })
+      .then((u) => {
+        if (disposed) u();
+        else unlisten = u;
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  });
 
   $effect(() => {
     void conversationStore.messages.length;
@@ -166,6 +201,11 @@
 </script>
 
 <div class="chat-view">
+  {#if dragActive}
+    <div class="drop-overlay">
+      <div class="drop-overlay-inner">🖼️ {i18n.m.chat.dropImagesHint}</div>
+    </div>
+  {/if}
   <header class="chat-header">
     <div class="header-left">
       <span class="conv-title">
@@ -369,6 +409,31 @@
     flex-direction: column;
     height: 100%;
     overflow: hidden;
+    position: relative;
+  }
+
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--color-bg) 70%, transparent);
+    border: 2px dashed var(--color-accent);
+    border-radius: 12px;
+    margin: 0.5rem;
+    pointer-events: none;
+  }
+
+  .drop-overlay-inner {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--color-accent);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    padding: 0.85rem 1.5rem;
   }
 
   .chat-header {
