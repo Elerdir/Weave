@@ -103,17 +103,20 @@ impl SendMessageUseCase {
             Message::user(conversation_id.clone(), &content).with_attachments(attachments.clone());
         self.msg_repo.save(&user_msg).await?;
 
-        let reference_image_path = attachments.iter().find_map(|a| match a {
-            Attachment::Image { path, .. } => Some(path.clone()),
-            Attachment::Document { .. } => None,
-        });
+        let reference_image_paths: Vec<String> = attachments
+            .iter()
+            .filter_map(|a| match a {
+                Attachment::Image { path, .. } => Some(path.clone()),
+                Attachment::Document { .. } => None,
+            })
+            .collect();
 
         self.generate_reply(
             &conversation,
             conversation_id,
             content,
             file_refs,
-            reference_image_path,
+            reference_image_paths,
             stream_tx,
         )
         .await
@@ -150,10 +153,14 @@ impl SendMessageUseCase {
             })?;
 
         let content = last_user.content.clone();
-        let reference_image_path = last_user.attachments.iter().find_map(|a| match a {
-            Attachment::Image { path, .. } => Some(path.clone()),
-            Attachment::Document { .. } => None,
-        });
+        let reference_image_paths: Vec<String> = last_user
+            .attachments
+            .iter()
+            .filter_map(|a| match a {
+                Attachment::Image { path, .. } => Some(path.clone()),
+                Attachment::Document { .. } => None,
+            })
+            .collect();
 
         // Obsah @souborů z původní zprávy se neukládá, takže regenerace běží
         // jen nad uloženou historií (bez file kontextu).
@@ -162,7 +169,7 @@ impl SendMessageUseCase {
             conversation_id,
             content,
             vec![],
-            reference_image_path,
+            reference_image_paths,
             stream_tx,
         )
         .await
@@ -177,7 +184,7 @@ impl SendMessageUseCase {
         conversation_id: ConversationId,
         content: String,
         file_refs: Vec<String>,
-        reference_image_path: Option<String>,
+        reference_image_paths: Vec<String>,
         stream_tx: mpsc::Sender<StreamChunk>,
     ) -> AppResult<()> {
         let intent = IntentClassifier::classify(&content);
@@ -212,7 +219,7 @@ impl SendMessageUseCase {
 
         let result = match intent {
             weave_domain::model::Intent::ImageGeneration => {
-                self.handle_image(content, reference_image_path, tee_tx)
+                self.handle_image(content, reference_image_paths, tee_tx)
                     .await
             }
             _ => {
@@ -309,7 +316,7 @@ impl SendMessageUseCase {
     async fn handle_image(
         &self,
         prompt: String,
-        reference_image_path: Option<String>,
+        reference_image_paths: Vec<String>,
         stream_tx: mpsc::Sender<StreamChunk>,
     ) -> AppResult<()> {
         use crate::ports::comfy_installer_port::ComfyStatus;
@@ -357,7 +364,7 @@ impl SendMessageUseCase {
         // 2b. Assety pro referenční obrázek (PuLID node, váhy, InsightFace) —
         // instalace z dřívějších verzí appky je mít nemusí, workflow by pak
         // spadl na "pulid_file not in []".
-        if reference_image_path.is_some() {
+        if !reference_image_paths.is_empty() {
             let (itx, irx) = mpsc::channel(64);
             let fwd = tokio::spawn(forward_install_progress(
                 ImageStage::DownloadingModel,
@@ -396,7 +403,7 @@ impl SendMessageUseCase {
             cfg_scale: 7.0,
             seed: None,
             style_preset: style,
-            reference_image_path,
+            reference_image_paths,
         };
 
         let gen_result = self.image_gen.generate(request, img_tx).await;
@@ -731,8 +738,7 @@ mod tests {
         image_gen
             .expect_generate()
             .withf(|req: &ImageRequest, _tx| {
-                req.reference_image_path.as_deref()
-                    == Some("/data/weave/reference-images/stored.png")
+                req.reference_image_paths == ["/data/weave/reference-images/stored.png"]
             })
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
@@ -1097,10 +1103,7 @@ mod tests {
 
         let mut image_gen = MockImageGenPort::new();
         image_gen.expect_generate().returning(|req, tx| {
-            assert_eq!(
-                req.reference_image_path.as_deref(),
-                Some("/appdata/reference/ref.png")
-            );
+            assert_eq!(req.reference_image_paths, ["/appdata/reference/ref.png"]);
             Box::pin(async move {
                 let _ = tx
                     .send(ImageProgress::Done {
