@@ -98,6 +98,7 @@ const cs = {
       modelPathPlaceholder: "Nevybráno — vyber .gguf soubor",
       browse: "Vybrat jiný soubor",
       gpuLayers: "Počet vrstev na GPU (999 = vše)",
+      contextLength: "Kontextové okno (tokeny) — víc = delší konverzace i odpovědi, ale víc VRAM",
       recommendedTitle: "Doporučené modely",
       download: "Stáhnout",
       activate: "Použít",

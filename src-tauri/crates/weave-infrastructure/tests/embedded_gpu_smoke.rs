@@ -114,3 +114,66 @@ async fn handles_prompt_longer_than_n_batch() {
     );
     assert!(stats.completion_tokens > 0);
 }
+
+/// Regresní test na „decode: failed to find a memory slot" — historie delší
+/// než kontextové okno se musí oříznout (vypustit nejstarší zprávy), ne
+/// shodit generování. Malé n_ctx (1024) + historie ~3000 tokenů.
+#[tokio::test]
+#[ignore = "vyžaduje GPU + stažený .gguf model, spouštět ručně"]
+async fn trims_history_that_exceeds_context_window() {
+    let model_path = std::env::var("WEAVE_SMOKE_MODEL")
+        .expect("nastav WEAVE_SMOKE_MODEL na cestu k .gguf souboru");
+
+    let client = EmbeddedLlamaClient::new(model_path.into(), 999, 1024);
+
+    // Několik dlouhých výměn — dohromady výrazně přes 1024 tokenů.
+    let conv = ConversationId::new();
+    let filler = "Tohle je dlouhý odstavec historie konverzace, který se opakuje, \
+        aby celkový prompt spolehlivě přerostl kontextové okno modelu. "
+        .repeat(15);
+    let mut messages = Vec::new();
+    for _ in 0..4 {
+        messages.push(Message::user(conv.clone(), filler.clone()));
+        messages.push(Message::assistant(conv.clone(), filler.clone(), None));
+    }
+    messages.push(Message::user(
+        conv.clone(),
+        "Řekni jedno krátké české slovo.",
+    ));
+
+    let request = ChatRequest {
+        messages,
+        model_id: "smoke-test".into(),
+        max_tokens: Some(16),
+        temperature: 0.7,
+        stream: true,
+    };
+
+    let (tx, mut rx) = mpsc::channel(64);
+    client
+        .chat_stream(request, tx)
+        .await
+        .expect("chat_stream selhal");
+
+    let mut output = String::new();
+    let mut stats = None;
+    while let Some(chunk) = rx.recv().await {
+        match chunk {
+            StreamChunk::Token(t) => output.push_str(&t),
+            StreamChunk::Done(s) => stats = Some(s),
+            StreamChunk::Error(e) => panic!("inference selhala (ořez nezafungoval): {e}"),
+        }
+    }
+
+    println!("--- výstup (oříznutá historie) ---\n{output}\n---------------------");
+    println!("stats: {stats:?}");
+
+    let stats = stats.expect("chybí GenerationStats — decode pravděpodobně selhal");
+    // Prompt se musel oříznout pod n_ctx (1024) i s rezervou pro odpověď.
+    assert!(
+        stats.prompt_tokens <= 1024 - 256,
+        "prompt nebyl oříznut: {} tokenů",
+        stats.prompt_tokens
+    );
+    assert!(stats.completion_tokens > 0);
+}

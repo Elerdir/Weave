@@ -195,6 +195,17 @@
   </div>
 
   <div class="input-area-wrap">
+    {#if conversationStore.lastError}
+      <div class="error-banner" role="alert">
+        <span class="error-text">⚠️ {conversationStore.lastError}</span>
+        <button
+          class="error-dismiss"
+          onclick={() => conversationStore.setLastError(null)}
+          aria-label="Zavřít"
+        >×</button>
+      </div>
+    {/if}
+
     {#if refImages.length > 0}
       <div class="ref-image-strip">
         {#each refImages as img (img.path)}
@@ -378,6 +389,36 @@
     border-top: 1px solid var(--color-border);
     background: var(--color-surface);
   }
+
+  .error-banner {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin: 0.75rem 1.25rem 0;
+    padding: 0.6rem 0.85rem;
+    background: color-mix(in srgb, var(--color-error, #e5484d) 10%, transparent);
+    border: 1px solid var(--color-error, #e5484d);
+    border-radius: 10px;
+    font-size: 0.82rem;
+    color: var(--color-text);
+  }
+
+  .error-banner .error-text {
+    line-height: 1.5;
+    word-break: break-word;
+  }
+
+  .error-dismiss {
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.15rem;
+  }
+  .error-dismiss:hover { color: var(--color-text); }
 
   .ref-image-strip {
     display: flex;

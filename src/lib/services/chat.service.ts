@@ -27,6 +27,7 @@ async function listenForStream(): Promise<() => void> {
       unlisten();
     } else if ("Error" in chunk) {
       console.error("Stream error:", chunk.Error);
+      conversationStore.setLastError(chunk.Error);
       conversationStore.finalizeStream(UNKNOWN_STATS);
       unlisten();
     }
@@ -45,6 +46,7 @@ async function runGeneration(
     await invoke(command, args);
   } catch (err) {
     unlisten();
+    conversationStore.setLastError(String(err));
     conversationStore.finalizeStream(UNKNOWN_STATS);
     throw err;
   }

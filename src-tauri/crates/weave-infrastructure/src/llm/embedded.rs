@@ -20,7 +20,7 @@ use weave_application::{
     error::{AppError, AppResult},
     ports::llm_port::{ChatRequest, LlmPort, StreamChunk},
 };
-use weave_domain::message::{GenerationStats, ModelBackend, Role};
+use weave_domain::message::{GenerationStats, Message, ModelBackend, Role};
 
 #[cfg(feature = "llm-cuda")]
 const ACTIVE_BACKEND: ModelBackend = ModelBackend::LocalCuda;
@@ -76,9 +76,9 @@ impl LlmPort for EmbeddedLlamaClient {
 }
 
 /// Sestaví jednoduchý chat prompt z historie (obecný ChatML-like formát).
-fn build_prompt(request: &ChatRequest) -> String {
+fn build_prompt(messages: &[&Message]) -> String {
     let mut out = String::new();
-    for msg in &request.messages {
+    for msg in messages {
         let role = match msg.role {
             Role::System => "system",
             Role::User => "user",
@@ -91,6 +91,22 @@ fn build_prompt(request: &ChatRequest) -> String {
     }
     out.push_str("<|im_start|>assistant\n");
     out
+}
+
+/// Vypustí nejstarší zprávu, kterou lze obětovat: přeskakuje system zprávy
+/// (persona, kontext souborů) a nikdy nesahá na poslední zprávu (aktuální
+/// dotaz). Vrací false, když už není co vypustit.
+fn drop_oldest_droppable(messages: &mut Vec<&Message>) -> bool {
+    if messages.len() <= 1 {
+        return false;
+    }
+    let last = messages.len() - 1;
+    if let Some(idx) = messages[..last].iter().position(|m| m.role != Role::System) {
+        messages.remove(idx);
+        true
+    } else {
+        false
+    }
 }
 
 fn worker_loop(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32, rx: Receiver<WorkerRequest>) {
@@ -134,17 +150,36 @@ fn run_inference(
     n_ctx: u32,
     req: &WorkerRequest,
 ) -> AppResult<()> {
+    // Kontext držíme v mezích toho, na co byl model trénovaný.
+    let n_ctx_eff = n_ctx.max(512).min(model.n_ctx_train());
+
     let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(n_ctx.max(512)))
+        .with_n_ctx(NonZeroU32::new(n_ctx_eff))
         .with_n_batch(N_BATCH as u32);
     let mut ctx = model
         .new_context(backend, ctx_params)
         .map_err(|e| AppError::Llm(format!("Kontext: {e}")))?;
 
-    let prompt = build_prompt(&req.request);
-    let tokens = model
-        .str_to_token(&prompt, AddBos::Always)
-        .map_err(|e| AppError::Llm(format!("Tokenizace: {e}")))?;
+    // Historie musí nechat v okně rezervu pro odpověď — jinak decode spadne
+    // na „failed to find a memory slot" a generování nejde vůbec spustit.
+    // Vypouštíme nejstarší zprávy, dokud se prompt nevejde.
+    let reserve = (n_ctx_eff / 4).max(256);
+    let mut messages: Vec<&Message> = req.request.messages.iter().collect();
+    let tokens = loop {
+        let prompt = build_prompt(&messages);
+        let tokens = model
+            .str_to_token(&prompt, AddBos::Always)
+            .map_err(|e| AppError::Llm(format!("Tokenizace: {e}")))?;
+        if (tokens.len() as u32).saturating_add(reserve) <= n_ctx_eff {
+            break tokens;
+        }
+        if !drop_oldest_droppable(&mut messages) {
+            return Err(AppError::Llm(format!(
+                "Zpráva se nevejde do kontextového okna modelu ({n_ctx_eff} tokenů). \
+                 Zkrať ji, nebo zvětši kontextové okno v Nastavení → AI model."
+            )));
+        }
+    };
 
     // Prompt musí jít do decode() po částech ≤ N_BATCH — llama.cpp jinak
     // spadne na GGML_ASSERT(n_tokens_all <= cparams.n_batch). U delší
@@ -180,7 +215,7 @@ fn run_inference(
     let mut n_cur = tokens.len() as i32;
     let mut completion_tokens = 0u32;
     let max_tokens = req.request.max_tokens;
-    let n_ctx_limit = n_ctx as i32;
+    let n_ctx_limit = n_ctx_eff as i32;
 
     loop {
         // Zastavíme se jen na přirozeném konci (EOG token, viz níže), na
@@ -246,6 +281,49 @@ fn should_stop_generating(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use weave_domain::conversation::ConversationId;
+
+    fn history() -> Vec<Message> {
+        let conv = ConversationId::new();
+        vec![
+            Message::system(conv.clone(), "persona prompt"),
+            Message::user(conv.clone(), "první otázka"),
+            Message::assistant(conv.clone(), "první odpověď", None),
+            Message::user(conv.clone(), "druhá otázka"),
+        ]
+    }
+
+    #[test]
+    fn drop_oldest_skips_system_and_keeps_last() {
+        let owned = history();
+        let mut msgs: Vec<&Message> = owned.iter().collect();
+
+        // 1. vypuštění: nejstarší ne-system → "první otázka"
+        assert!(drop_oldest_droppable(&mut msgs));
+        let contents: Vec<&str> = msgs.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(
+            contents,
+            vec!["persona prompt", "první odpověď", "druhá otázka"]
+        );
+
+        // 2. vypuštění: "první odpověď"
+        assert!(drop_oldest_droppable(&mut msgs));
+        let contents: Vec<&str> = msgs.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(contents, vec!["persona prompt", "druhá otázka"]);
+
+        // Zbývá jen system + poslední zpráva → není co vypustit
+        assert!(!drop_oldest_droppable(&mut msgs));
+        assert_eq!(msgs.len(), 2);
+    }
+
+    #[test]
+    fn drop_oldest_never_touches_single_message() {
+        let conv = ConversationId::new();
+        let owned = [Message::user(conv, "jediná zpráva")];
+        let mut msgs: Vec<&Message> = owned.iter().collect();
+        assert!(!drop_oldest_droppable(&mut msgs));
+        assert_eq!(msgs.len(), 1);
+    }
 
     #[test]
     fn continues_without_cap_until_context_window_fills() {

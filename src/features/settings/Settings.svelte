@@ -335,6 +335,20 @@
                 oninput={(e) => settingsStore.setGpuLayers((e.target as HTMLInputElement).value)}
                 onblur={() => settingsStore.saveGpuLayers()}
               />
+              <label class="field-label" for="context-length" style="margin-top:0.75rem">
+                {i18n.m.settings.llm.contextLength}
+              </label>
+              <input
+                id="context-length"
+                class="gpu-layers-input"
+                type="number"
+                min="512"
+                step="1024"
+                value={settingsStore.contextLength}
+                oninput={(e) =>
+                  settingsStore.setContextLength((e.target as HTMLInputElement).value)}
+                onblur={() => settingsStore.saveContextLength()}
+              />
             </details>
           {/if}
 
