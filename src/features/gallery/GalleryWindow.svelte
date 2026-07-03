@@ -1,0 +1,198 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+  import { emitTo } from "@tauri-apps/api/event";
+  import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+  import { i18n } from "$lib/i18n/index.svelte";
+
+  interface GalleryImage {
+    path: string;
+    file_name: string;
+    size_bytes: number;
+    modified_at: number;
+  }
+
+  let images = $state<GalleryImage[]>([]);
+  let loading = $state(true);
+
+  async function load() {
+    loading = true;
+    try {
+      images = await invoke<GalleryImage[]>("list_gallery_images");
+    } finally {
+      loading = false;
+    }
+  }
+
+  onMount(() => {
+    void load();
+  });
+
+  async function saveImage(img: GalleryImage) {
+    const dest = await saveDialog({
+      defaultPath: img.file_name,
+      filters: [{ name: "Obrázek", extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (dest) await invoke("save_file_copy", { source: img.path, dest });
+  }
+
+  /** Pošle cestu hlavnímu oknu — tam se přiloží jako reference k dalšímu vstupu. */
+  async function useAsReference(img: GalleryImage) {
+    await emitTo("main", "use-reference", img.path);
+  }
+
+  async function deleteImage(img: GalleryImage) {
+    if (!confirm(i18n.t("gallery.deleteConfirm", { name: img.file_name }))) return;
+    await invoke("delete_gallery_image", { fileName: img.file_name });
+    images = images.filter((i) => i.path !== img.path);
+  }
+
+  function formatSize(bytes: number): string {
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${Math.ceil(bytes / 1024)} kB`;
+  }
+</script>
+
+<div class="gallery-window">
+  <header>
+    <h2>{i18n.m.gallery.title}</h2>
+    <button class="refresh" onclick={load} disabled={loading}>{i18n.m.gallery.refresh}</button>
+  </header>
+
+  {#if images.length === 0 && !loading}
+    <p class="empty">{i18n.m.gallery.empty}</p>
+  {:else}
+    <div class="grid">
+      {#each images as img (img.path)}
+        <div class="card">
+          <img src={convertFileSrc(img.path)} alt={img.file_name} loading="lazy" />
+          <div class="card-footer">
+            <span class="name" title={img.file_name}>{img.file_name}</span>
+            <span class="size">{formatSize(img.size_bytes)}</span>
+          </div>
+          <div class="card-actions">
+            <button onclick={() => saveImage(img)} title={i18n.m.chat.saveImage}>💾</button>
+            <button onclick={() => useAsReference(img)} title={i18n.m.chat.useAsReference}>🖼️</button>
+            <button onclick={() => deleteImage(img)} title={i18n.m.gallery.delete}>🗑</button>
+          </div>
+        </div>
+      {/each}
+    </div>
+  {/if}
+</div>
+
+<style>
+  .gallery-window {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    height: 100vh;
+    padding: 1rem 1.25rem;
+    background: var(--color-bg);
+    color: var(--color-text);
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 1.1rem;
+  }
+
+  .refresh {
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.82rem;
+    cursor: pointer;
+  }
+  .refresh:hover:not(:disabled) {
+    border-color: var(--color-accent);
+  }
+
+  .empty {
+    color: var(--color-text-muted);
+    text-align: center;
+    margin-top: 3rem;
+  }
+
+  .grid {
+    flex: 1;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 0.9rem;
+    align-content: start;
+    padding-bottom: 1rem;
+  }
+
+  .card {
+    position: relative;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    display: block;
+  }
+
+  .card-footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.72rem;
+    color: var(--color-text-muted);
+  }
+
+  .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .size {
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .card-actions {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: flex;
+    gap: 0.25rem;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .card:hover .card-actions {
+    opacity: 1;
+  }
+
+  .card-actions button {
+    background: rgba(0, 0, 0, 0.55);
+    border: none;
+    border-radius: 6px;
+    padding: 0.25rem 0.4rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .card-actions button:hover {
+    background: rgba(0, 0, 0, 0.8);
+  }
+</style>

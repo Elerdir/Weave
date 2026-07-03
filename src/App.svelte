@@ -5,10 +5,12 @@
   import Wizard from "$features/wizard/Wizard.svelte";
   import MainLayout from "$features/chat/MainLayout.svelte";
   import LogWindow from "$features/settings/LogWindow.svelte";
+  import GalleryWindow from "$features/gallery/GalleryWindow.svelte";
 
-  // Samostatné okno s logy — stejný frontend, jiný „view" (viz open_log_window)
-  const isLogWindow =
-    new URLSearchParams(window.location.search).get("view") === "logs";
+  // Samostatná okna — stejný frontend, jiný „view" (viz open_*_window)
+  const view = new URLSearchParams(window.location.search).get("view");
+  const isLogWindow = view === "logs";
+  const isGalleryWindow = view === "gallery";
 
   let ready = $state(false);
   let showWizard = $state(false);
@@ -18,7 +20,7 @@
     const resolved = themeStore.resolvedTheme;
     document.documentElement.classList.add(resolved);
 
-    if (isLogWindow) {
+    if (isLogWindow || isGalleryWindow) {
       ready = true;
       return;
     }
@@ -50,6 +52,8 @@
 {#if ready}
   {#if isLogWindow}
     <LogWindow />
+  {:else if isGalleryWindow}
+    <GalleryWindow />
   {:else if showWizard}
     <Wizard onComplete={onWizardComplete} />
   {:else}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
   import { filterNewImagePaths, IMAGE_EXTENSIONS } from "$lib/reference-images";
@@ -102,6 +103,22 @@
     if (referenceQueue.pending.length > 0) {
       addReferenceImages(referenceQueue.drain());
     }
+  });
+
+  // „Použít jako referenci" z okna galerie (emitTo("main", "use-reference", path))
+  $effect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    listen<string>("use-reference", (e) => {
+      if (typeof e.payload === "string") addReferenceImages([e.payload]);
+    }).then((u) => {
+      if (disposed) u();
+      else unlisten = u;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   });
 
   // Drag & drop obrázků kamkoliv do okna chatu → referenční obrázky
@@ -249,6 +266,12 @@
           })} · {conversationStore.currentStats.model_id}
         </span>
       {/if}
+      <button
+        class="gen-settings-btn"
+        onclick={() => invoke("open_gallery_window").catch((e) => console.warn(e))}
+        title={i18n.m.gallery.title}
+        aria-label={i18n.m.gallery.title}
+      >🖼</button>
       <button
         class="gen-settings-btn"
         class:active={showGenSettings}
