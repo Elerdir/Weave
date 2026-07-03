@@ -47,6 +47,8 @@ export type ImageStage =
 export interface ImageStageInfo {
   stage: ImageStage;
   detail: string | null;
+  /** Skutečný průběh 0–100 (kroky sampleru); chybí = neurčitý průběh. */
+  percent?: number | null;
 }
 
 function createConversationStore() {

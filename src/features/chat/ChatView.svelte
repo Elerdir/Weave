@@ -345,7 +345,14 @@
           <span class="image-progress-elapsed">{elapsedLabel}</span>
         </div>
         <div class="image-progress-bar">
-          <div class="image-progress-fill"></div>
+          {#if conversationStore.imageStage.percent != null}
+            <div
+              class="image-progress-fill determinate"
+              style="width: {conversationStore.imageStage.percent}%"
+            ></div>
+          {:else}
+            <div class="image-progress-fill"></div>
+          {/if}
         </div>
         {#if conversationStore.imageStage.detail}
           <div class="image-progress-detail">{conversationStore.imageStage.detail}</div>
@@ -642,6 +649,13 @@
   @keyframes indeterminate {
     0% { left: -35%; }
     100% { left: 100%; }
+  }
+
+  /* Skutečná procenta (kroky sampleru) — bez animace, plynulá šířka */
+  .image-progress-fill.determinate {
+    position: static;
+    animation: none;
+    transition: width 0.3s ease;
   }
 
   .image-progress-detail {
