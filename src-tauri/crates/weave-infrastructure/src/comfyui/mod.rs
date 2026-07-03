@@ -188,6 +188,12 @@ impl ImageGenPort for ComfyUiClient {
                         std::fs::write(&out_path, &img_bytes)
                             .map_err(|e| AppError::ComfyUi(e.to_string()))?;
 
+                        // Označení AI původu (metadata + neviditelný vodoznak).
+                        // Selhání generování neshodí — obrázek už na disku je.
+                        if let Err(e) = crate::image_stamp::stamp_ai_image(&out_path) {
+                            tracing::warn!("Označení AI obrázku selhalo: {e:#}");
+                        }
+
                         let _ = tx
                             .send(ImageProgress::Done {
                                 output_path: out_path.to_string_lossy().into_owned(),

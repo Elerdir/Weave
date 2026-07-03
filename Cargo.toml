@@ -39,6 +39,9 @@ sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "migrate", "mac
 # HTTP client
 reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 
+# PNG (AI watermark + metadata generovaných obrázků)
+png = "0.18"
+
 # Tauri
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
