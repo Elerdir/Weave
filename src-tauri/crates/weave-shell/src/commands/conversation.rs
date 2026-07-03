@@ -42,6 +42,16 @@ pub async fn create_conversation(
     uc.execute(title).await.map_err(|e| e.to_string())
 }
 
+/// Fulltext hledání: názvy konverzací I obsah zpráv (case-insensitive LIKE).
+#[tauri::command]
+pub async fn search_conversations(
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<Conversation>, String> {
+    let repo = Arc::new(SqliteConversationRepository::new(state.pool.clone()));
+    repo.search(&query).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn delete_conversation(id: String, state: State<'_, AppState>) -> Result<(), String> {
     let repo = Arc::new(SqliteConversationRepository::new(state.pool.clone()));

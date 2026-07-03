@@ -111,6 +111,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::conversation::list_conversations,
+            commands::conversation::search_conversations,
             commands::conversation::create_conversation,
             commands::conversation::delete_conversation,
             commands::conversation::rename_conversation,

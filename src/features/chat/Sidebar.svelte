@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import { conversationStore } from "$lib/stores/conversations.svelte";
+  import type { Conversation } from "$lib/stores/conversations.svelte";
   import { i18n } from "$lib/i18n/index.svelte";
 
   let {
@@ -9,11 +11,35 @@
 
   let search = $state("");
 
+  // Fulltext přes backend (názvy + obsah zpráv), debounce 250 ms.
+  // Než dorazí výsledek (nebo mimo Tauri), platí lokální filtr názvů.
+  let backendResults = $state<Conversation[] | null>(null);
+  let searchTimer: ReturnType<typeof setTimeout>;
+
+  $effect(() => {
+    const query = search.trim();
+    clearTimeout(searchTimer);
+    if (!query) {
+      backendResults = null;
+      return;
+    }
+    searchTimer = setTimeout(async () => {
+      try {
+        backendResults = await invoke<Conversation[]>("search_conversations", { query });
+      } catch (err) {
+        console.warn("Fulltext hledání selhalo:", err);
+        backendResults = null;
+      }
+    }, 250);
+    return () => clearTimeout(searchTimer);
+  });
+
   const filtered = $derived(
     search.trim()
-      ? conversationStore.conversations.filter(c =>
-          c.title.toLowerCase().includes(search.toLowerCase())
-        )
+      ? (backendResults ??
+          conversationStore.conversations.filter((c) =>
+            c.title.toLowerCase().includes(search.toLowerCase())
+          ))
       : conversationStore.conversations
   );
 
