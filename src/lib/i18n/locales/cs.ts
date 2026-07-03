@@ -125,6 +125,18 @@ const cs = {
       comfyui: "ComfyUI",
       notifications: "Oznámení",
       logs: "Logy",
+      updates: "Aktualizace",
+    },
+    updates: {
+      currentVersion: "Aktuální verze:",
+      checkNow: "Zkontrolovat aktualizace",
+      checking: "Kontroluji…",
+      upToDate: "Máš nejnovější verzi.",
+      available: "K dispozici je verze {version}",
+      downloadInstall: "Stáhnout a nainstalovat",
+      downloading: "Stahuji aktualizaci…",
+      readyToRestart: "Aktualizace je připravená. Restartuj aplikaci pro dokončení.",
+      restartNow: "Restartovat nyní",
     },
     logs: {
       level: "Úroveň",

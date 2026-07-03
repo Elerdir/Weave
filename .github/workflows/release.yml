@@ -1,0 +1,85 @@
+name: release
+
+# Spustí se po pushnutí tagu verze (např. v0.1.0). Sestaví Windows instalátor,
+# podepíše ho Tauri updater klíčem a nahraje do UpdateHubu jako Draft release.
+# Publikace je ruční v admin UI UpdateHubu (draft → publish).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Verze bez 'v' (např. 0.1.0)"
+        required: true
+
+env:
+  SQLX_OFFLINE: "true"
+
+jobs:
+  build-windows:
+    name: build-windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install deps
+        run: pnpm install
+
+      # Sestaví frontend (vite) + Rust release + Windows bundly (NSIS + MSI).
+      # createUpdaterArtifacts v tauri.conf.json vygeneruje k instalátoru .sig.
+      - name: Build Tauri app
+        run: pnpm tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      # Nahraje NSIS instalátor + jeho podpis do UpdateHubu. Verze se bere z tagu
+      # (bez 'v') nebo ze vstupu workflow_dispatch. UpdateHub vrátí .sig zpět
+      # v Tauri manifestu, takže klient updateru ověří Ed25519 podpis.
+      - name: Upload to UpdateHub
+        shell: bash
+        env:
+          UPDATEHUB_URL: ${{ secrets.UPDATEHUB_URL }}
+          UPDATEHUB_CI_TOKEN: ${{ secrets.UPDATEHUB_CI_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version }}"
+          if [ -z "$VERSION" ]; then VERSION="${GITHUB_REF_NAME#v}"; fi
+
+          INSTALLER=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe | head -n1)
+          SIGNATURE=$(cat "${INSTALLER}.sig")
+          echo "Nahrávám $INSTALLER (verze $VERSION)"
+
+          curl -f -X POST "${UPDATEHUB_URL}/api/ci/apps/weave/releases" \
+            -H "X-UpdateHub-Token: ${UPDATEHUB_CI_TOKEN}" \
+            -F "file=@${INSTALLER}" \
+            -F "signature=${SIGNATURE}" \
+            -F "version=${VERSION}" \
+            -F "platform=windows" \
+            -F "arch=x64" \
+            -F "channel=stable" \
+            -F "release_notes=Release ${VERSION}"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weave-windows-installer
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*-setup.exe.sig
+          retention-days: 14
