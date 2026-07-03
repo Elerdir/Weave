@@ -1,3 +1,4 @@
+pub mod auto_title;
 pub mod compact_conversation;
 pub mod create_conversation;
 pub mod export_conversation;

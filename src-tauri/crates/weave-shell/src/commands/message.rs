@@ -100,6 +100,31 @@ pub async fn truncate_conversation_from(
         .map_err(|e| e.to_string())
 }
 
+/// Vygeneruje krátký název konverzace z první výměny (LLM) a uloží ho.
+/// Kdy se volá, rozhoduje frontend — jen u konverzací s výchozím názvem.
+#[tauri::command]
+pub async fn auto_title_conversation(
+    conversation_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    use weave_application::use_cases::auto_title::AutoTitleUseCase;
+    use weave_infrastructure::db::{
+        conversation_repo::SqliteConversationRepository, message_repo::SqliteMessageRepository,
+    };
+
+    let conv_id = parse_conversation_id(&conversation_id)?;
+    let llm = super::settings::resolve_llm(&state).await;
+
+    AutoTitleUseCase::new(
+        Arc::new(SqliteConversationRepository::new(state.pool.clone())),
+        Arc::new(SqliteMessageRepository::new(state.pool.clone())),
+        llm,
+    )
+    .execute(conv_id, "mistral-small-latest".into())
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Zhustí konverzaci: LLM shrne historii a ta se nahradí souhrnem —
 /// kontextové okno se uvolní, ale podstatná „paměť" zůstane. Vrací souhrn.
 #[tauri::command]

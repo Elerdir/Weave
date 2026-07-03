@@ -54,11 +54,36 @@ async function runGeneration(
     // Sladí lokální stav s DB — hlavně skutečná ID zpráv (potřebná pro
     // resend/edit, lokálně vytvořené bubliny mají jen dočasná ID).
     await conversationStore.reloadMessages();
+    await maybeAutoTitle();
   } catch (err) {
     unlisten();
     conversationStore.setLastError(String(err));
     conversationStore.finalizeStream(UNKNOWN_STATS);
     throw err;
+  }
+}
+
+/** Výchozí názvy konverzací (cs/en) — jen ty se auto-pojmenovávají. */
+const DEFAULT_TITLE_PREFIXES = ["Nová konverzace", "New Conversation"];
+
+/** Po dokončené výměně nechá LLM pojmenovat konverzaci s výchozím názvem.
+ *  Best-effort — selhání se jen zaloguje, chat běží dál. */
+async function maybeAutoTitle(): Promise<void> {
+  const conv = conversationStore.activeConversation;
+  if (!conv) return;
+  const isDefault = DEFAULT_TITLE_PREFIXES.some((p) => conv.title.startsWith(p));
+  const hasExchange =
+    conversationStore.messages.some((m) => m.role === "user") &&
+    conversationStore.messages.some((m) => m.role === "assistant");
+  if (!isDefault || !hasExchange) return;
+
+  try {
+    const title = await invoke<string>("auto_title_conversation", {
+      conversationId: conv.id,
+    });
+    conversationStore.updateTitleLocal(conv.id, title);
+  } catch (err) {
+    console.warn("Auto-pojmenování selhalo:", err);
   }
 }
 
