@@ -89,6 +89,9 @@ const cs = {
       compacting: "Zhušťuji…",
       compactHint: "Shrne dosavadní konverzaci a nahradí ji souhrnem — uvolní kontextové okno, podstatné zůstane zapamatované.",
       compactConfirm: "Zhustit konverzaci? Zprávy se nahradí souhrnem (původní text i přílohy zmizí), model si ale podstatné zapamatuje.",
+      fullWarning: "Kontextové okno je téměř plné — doporučuji konverzaci zhustit, jinak se začnou zahazovat nejstarší zprávy.",
+      compactNow: "Zhustit teď",
+      later: "Později",
     },
   },
   sidebar: {

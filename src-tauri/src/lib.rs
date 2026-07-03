@@ -95,6 +95,17 @@ pub fn run() {
                     .await
                     .expect("Chyba inicializace stavu");
             });
+
+            // Předehřátí LLM na pozadí: u vestavěné inference se model začne
+            // nahrávat do VRAM hned při startu, ne až s první zprávou —
+            // resolve_llm ho uloží do cache v AppState. U API backendů no-op.
+            let warmup_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = warmup_handle.state::<weave_shell::state::AppState>();
+                let _ = weave_shell::commands::settings::resolve_llm(state.inner()).await;
+                tracing::info!("LLM backend připraven (předehřátí při startu)");
+            });
+
             build_tray(app.handle())?;
             Ok(())
         })

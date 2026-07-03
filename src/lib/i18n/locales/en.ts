@@ -91,6 +91,9 @@ const en: Messages = {
       compacting: "Compacting…",
       compactHint: "Summarizes the conversation so far and replaces it with the summary — frees the context window while keeping what matters.",
       compactConfirm: "Compact this conversation? Messages will be replaced by a summary (original text and attachments disappear), but the model keeps the essentials.",
+      fullWarning: "The context window is almost full — compacting is recommended, otherwise the oldest messages start getting dropped.",
+      compactNow: "Compact now",
+      later: "Later",
     },
   },
   sidebar: {
