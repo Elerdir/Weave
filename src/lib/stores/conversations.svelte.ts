@@ -195,6 +195,11 @@ function createConversationStore() {
       messages = messages.slice(0, end);
     },
 
+    /** Aktualizuje název konverzace jen v lokálním stavu (po auto-pojmenování). */
+    updateTitleLocal(id: string, title: string) {
+      conversations = conversations.map((c) => (c.id === id ? { ...c, title } : c));
+    },
+
     /** Znovu načte zprávy aktivní konverzace z DB (sladí lokální ID s backendem).
      *  Defenzivně: mimo Tauri (e2e v prohlížeči) nechá lokální stav být. */
     async reloadMessages() {

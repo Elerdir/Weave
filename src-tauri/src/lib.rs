@@ -113,6 +113,7 @@ pub fn run() {
             commands::message::truncate_conversation_from,
             commands::message::stop_generation,
             commands::message::compact_conversation,
+            commands::message::auto_title_conversation,
             commands::message::get_conversation_settings,
             commands::message::set_conversation_settings,
             commands::settings::get_api_key_status,
