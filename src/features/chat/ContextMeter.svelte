@@ -15,9 +15,29 @@
   const percent = $derived(contextUsagePercent(usedTokens, contextLength));
   const severity = $derived(usageSeverity(percent));
 
+  // Nabídka zhuštění při téměř plném kontextu — „Později" ji schová pro
+  // danou konverzaci (žádné otravování dokola).
+  let dismissedFor = $state<string | null>(null);
+  const showSuggestion = $derived(
+    percent >= 90 &&
+      !conversationStore.loading &&
+      !conversationStore.compacting &&
+      conversationStore.messages.length >= 2 &&
+      dismissedFor !== conversationStore.activeId
+  );
+
   async function compact() {
     if (!confirm(i18n.m.chat.contextMeter.compactConfirm)) return;
     await conversationStore.compact();
+  }
+
+  /** Z nabídky — uživatel už souhlas vyjádřil kliknutím, bez confirm dialogu. */
+  async function compactNow() {
+    await conversationStore.compact();
+  }
+
+  function dismissSuggestion() {
+    dismissedFor = conversationStore.activeId;
   }
 </script>
 
@@ -41,6 +61,20 @@
       : i18n.m.chat.contextMeter.compact}
   </button>
 </div>
+
+{#if showSuggestion}
+  <div class="compact-suggestion" role="status">
+    <span>⚠ {i18n.m.chat.contextMeter.fullWarning}</span>
+    <div class="suggestion-actions">
+      <button class="suggestion-yes" onclick={compactNow}>
+        {i18n.m.chat.contextMeter.compactNow}
+      </button>
+      <button class="suggestion-later" onclick={dismissSuggestion}>
+        {i18n.m.chat.contextMeter.later}
+      </button>
+    </div>
+  </div>
+{/if}
 
 <style>
   .context-meter {
@@ -100,5 +134,49 @@
   .compact-btn:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+
+  .compact-suggestion {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.45rem 1.25rem;
+    border-bottom: 1px solid #d29922;
+    background: color-mix(in srgb, #d29922 12%, transparent);
+    font-size: 0.8rem;
+    color: var(--color-text);
+  }
+
+  .suggestion-actions {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .suggestion-yes {
+    background: var(--color-accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 0.2rem 0.7rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .suggestion-yes:hover {
+    background: var(--color-accent-hover);
+  }
+
+  .suggestion-later {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    border-radius: 6px;
+    padding: 0.2rem 0.7rem;
+    font-size: 0.78rem;
+    cursor: pointer;
+  }
+  .suggestion-later:hover {
+    color: var(--color-text);
   }
 </style>
