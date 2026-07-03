@@ -11,6 +11,8 @@
   import type { ApiServiceId } from "$lib/stores/settings.svelte";
   import { modelsStore, formatBytes } from "$lib/stores/models.svelte";
   import { comfyInstallStore } from "$lib/stores/comfy-install.svelte";
+  import { updaterStore } from "$lib/stores/updater.svelte";
+  import { getVersion } from "@tauri-apps/api/app";
   import { TOKEN_URLS } from "$lib/token-urls";
   import LogViewer from "./LogViewer.svelte";
 
@@ -35,8 +37,10 @@
 
   let { onClose }: { onClose: () => void } = $props();
 
-  type Section = "appearance" | "language" | "apiKeys" | "llm" | "comfyui" | "models" | "notifications" | "logs";
+  type Section = "appearance" | "language" | "apiKeys" | "llm" | "comfyui" | "models" | "notifications" | "logs" | "updates";
   let section = $state<Section>("appearance");
+
+  let appVersion = $state("");
 
   let downloadUrl = $state("");
   let downloadId = $state("");
@@ -70,6 +74,9 @@
     settingsStore.load().catch((e) => console.warn("settings load selhal:", e));
     modelsStore.load().catch((e) => console.warn("models load selhal:", e));
     comfyInstallStore.load().catch((e) => console.warn("comfy status load selhal:", e));
+    getVersion()
+      .then((v) => (appVersion = v))
+      .catch((e) => console.warn("app version load selhal:", e));
   });
 
   async function startDownload() {
@@ -135,6 +142,9 @@
         </button>
         <button class:active={section === "notifications"} onclick={() => (section = "notifications")}>
           {i18n.m.settings.sections.notifications}
+        </button>
+        <button class:active={section === "updates"} onclick={() => (section = "updates")}>
+          {i18n.m.settings.sections.updates}
         </button>
       </nav>
 
@@ -572,6 +582,57 @@
             🗗 {i18n.m.settings.logs.openWindow}
           </button>
           <LogViewer />
+        {:else if section === "updates"}
+          <h3>{i18n.m.settings.sections.updates}</h3>
+          <div class="version-row">
+            <span class="version-label">{i18n.m.settings.updates.currentVersion}</span>
+            <span class="version-value">{appVersion || "…"}</span>
+          </div>
+
+          {#if updaterStore.phase === "downloading"}
+            <div class="dl-progress" style="margin-top:0.75rem">
+              <div class="dl-head">
+                <span>{i18n.m.settings.updates.downloading}</span>
+                <span>{updaterStore.percent}%</span>
+              </div>
+              <div class="dl-bar">
+                <div class="dl-fill" style="width: {updaterStore.percent}%"></div>
+              </div>
+            </div>
+          {:else if updaterStore.phase === "readyToRestart"}
+            <p class="hint" style="margin-top:0.75rem">{i18n.m.settings.updates.readyToRestart}</p>
+            <button class="btn-sm primary" onclick={() => updaterStore.restart()}>
+              {i18n.m.settings.updates.restartNow}
+            </button>
+          {:else if updaterStore.phase === "available"}
+            <div class="update-available">
+              <span class="conn-status connected">
+                ● {i18n.t("settings.updates.available", { version: updaterStore.version ?? "" })}
+              </span>
+              {#if updaterStore.notes}
+                <pre class="update-notes">{updaterStore.notes}</pre>
+              {/if}
+              <button class="btn-sm primary" onclick={() => updaterStore.downloadAndInstall()}>
+                {i18n.m.settings.updates.downloadInstall}
+              </button>
+            </div>
+          {:else}
+            <button
+              class="btn-sm primary"
+              style="margin-top:0.75rem"
+              disabled={updaterStore.phase === "checking"}
+              onclick={() => updaterStore.checkForUpdate()}
+            >
+              {updaterStore.phase === "checking"
+                ? i18n.m.settings.updates.checking
+                : i18n.m.settings.updates.checkNow}
+            </button>
+            {#if updaterStore.phase === "upToDate"}
+              <span class="conn-status connected">● {i18n.m.settings.updates.upToDate}</span>
+            {:else if updaterStore.phase === "error"}
+              <span class="conn-status disconnected">{updaterStore.error}</span>
+            {/if}
+          {/if}
         {/if}
       </div>
     </div>
@@ -1090,6 +1151,41 @@
   }
   .dl-form input:focus {
     border-color: var(--color-accent);
+  }
+
+  .version-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+  }
+  .version-label {
+    color: var(--color-text-muted);
+  }
+  .version-value {
+    font-family: monospace;
+    font-weight: 600;
+  }
+
+  .update-available {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.6rem;
+    margin-top: 0.75rem;
+  }
+  .update-notes {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    align-self: stretch;
   }
 
   .dl-progress {

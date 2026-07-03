@@ -127,6 +127,18 @@ const en: Messages = {
       comfyui: "ComfyUI",
       notifications: "Notifications",
       logs: "Logs",
+      updates: "Updates",
+    },
+    updates: {
+      currentVersion: "Current version:",
+      checkNow: "Check for updates",
+      checking: "Checking…",
+      upToDate: "You're on the latest version.",
+      available: "Version {version} is available",
+      downloadInstall: "Download and install",
+      downloading: "Downloading update…",
+      readyToRestart: "Update is ready. Restart the app to finish.",
+      restartNow: "Restart now",
     },
     logs: {
       level: "Level",
