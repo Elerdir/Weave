@@ -17,6 +17,9 @@ pub struct ImageRequest {
     /// Referenční obrázky (PuLID). Víc fotek = věrnější podoba — identity
     /// embeddingy se z dávky průměrují. Prázdný vektor = čisté text-to-image.
     pub reference_image_paths: Vec<String>,
+    /// Název souboru LoRA v `models/loras` — zapojí se přes LoraLoader.
+    /// Trigger words musí být už v promptu (řeší orchestrace).
+    pub lora_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

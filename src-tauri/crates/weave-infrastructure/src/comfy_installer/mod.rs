@@ -104,6 +104,10 @@ impl LocalComfyInstaller {
         self.install_dir.join("models").join("checkpoints")
     }
 
+    fn loras_dir(&self) -> PathBuf {
+        self.install_dir.join("models").join("loras")
+    }
+
     /// Složka pro PuLID *váhy* (`models/pulid/`) — nezaměňovat s [`Self::pulid_dir`],
     /// což je adresář se zdrojovým kódem custom node uzlu.
     fn pulid_weights_dir(&self) -> PathBuf {
@@ -348,6 +352,26 @@ impl ComfyInstallerPort for LocalComfyInstaller {
 
         let _ = tx.send(InstallProgress::Done).await;
         Ok(())
+    }
+
+    async fn ensure_lora(
+        &self,
+        file_name: &str,
+        download_url: &str,
+        tx: mpsc::Sender<InstallProgress>,
+    ) -> AppResult<()> {
+        // Ochrana proti path traversal — jméno souboru nesmí obsahovat cestu.
+        if file_name.contains('/') || file_name.contains('\\') || file_name.contains("..") {
+            return Err(AppError::ComfyUi(format!(
+                "Neplatný název LoRA souboru: {file_name}"
+            )));
+        }
+        let path = self.loras_dir().join(file_name);
+        if path.exists() {
+            return Ok(());
+        }
+        Self::step(&tx, &format!("Stahuji LoRA: {file_name}")).await;
+        download_file(&self.http, download_url, &path, file_name, &tx).await
     }
 
     async fn ensure_reference_assets(&self, tx: mpsc::Sender<InstallProgress>) -> AppResult<()> {
