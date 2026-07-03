@@ -189,6 +189,15 @@ async fn build_use_case(state: &State<'_, AppState>) -> SendMessageUseCase {
 
     let llm = crate::commands::settings::resolve_llm(state).await;
 
+    // CivitAI token (volitelný) — bez něj funguje hledání LoRA, jen
+    // stažení některých modelů může selhat.
+    let civitai_token = state
+        .keychain
+        .retrieve(&weave_application::ports::keychain_port::ApiService::CivitAi)
+        .await
+        .ok()
+        .flatten();
+
     SendMessageUseCase::new(
         Arc::new(SqliteConversationRepository::new(state.pool.clone())),
         Arc::new(SqliteMessageRepository::new(state.pool.clone())),
@@ -199,6 +208,9 @@ async fn build_use_case(state: &State<'_, AppState>) -> SendMessageUseCase {
         state.attachment_store.clone(),
         Arc::new(SqliteGenerationSettingsRepository::new(state.pool.clone())),
         state.comfy_installer.clone(),
+        Arc::new(weave_infrastructure::civitai::CivitAiClient::new(
+            civitai_token,
+        )),
     )
 }
 

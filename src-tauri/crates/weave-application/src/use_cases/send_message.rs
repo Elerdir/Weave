@@ -16,21 +16,51 @@ use crate::{
         generation_settings_repository::GenerationSettingsRepository,
         image_gen_port::{ImageGenPort, ImageProgress, ImageRequest, StylePreset},
         llm_port::{ChatRequest, LlmPort, StreamChunk},
+        lora_catalog_port::LoraCatalogPort,
         persona_repository::PersonaRepository,
         workspace_port::WorkspaceRepository,
     },
 };
 
-/// Instrukce pro převod požadavku na anglický Stable Diffusion prompt.
+/// Instrukce pro převod požadavku na anglický Stable Diffusion prompt
+/// + návrh konceptu pro vyhledání LoRA (druhý řádek).
 const IMAGE_PROMPT_SYSTEM: &str = "You convert user requests into English Stable Diffusion \
-    prompts. Reply with ONE line: comma-separated English descriptors (subject, appearance, \
-    setting, lighting, style, quality tags like 'highly detailed, sharp focus'). Translate \
-    non-English requests. Keep every detail the user asked for, including names used for \
-    people. No explanations, no quotes — output only the prompt itself.";
+    prompts. Reply with EXACTLY two lines:\n\
+    Line 1: comma-separated English descriptors (subject, appearance, setting, lighting, \
+    style, quality tags like 'highly detailed, sharp focus'). Translate non-English requests. \
+    Keep every detail the user asked for, including names used for people.\n\
+    Line 2: 'LORA: <2-4 English words naming a specific character, celebrity, art style or \
+    concept a LoRA model could exist for>' or 'LORA: none' when the request is generic.\n\
+    No explanations, no quotes.";
 
 /// Výchozí negative prompt — potlačuje typické artefakty SDXL.
 const DEFAULT_NEGATIVE_PROMPT: &str = "blurry, low quality, deformed, disfigured, extra limbs, \
     bad anatomy, bad hands, watermark, text, signature, jpeg artifacts";
+
+/// Rozparsuje výstup LLM vylepšení promptu: řádky bez prefixu LORA: tvoří
+/// prompt, řádek `LORA: <koncept>` je dotaz pro katalog LoRA (`none`/prázdno
+/// = žádný). Když je prompt prázdný, vrací fallback.
+fn parse_prompt_enhancement(raw: &str, fallback: &str) -> (String, Option<String>) {
+    let mut prompt_lines: Vec<&str> = Vec::new();
+    let mut lora = None;
+    for line in raw.lines() {
+        let trimmed = line.trim().trim_matches('"');
+        if trimmed.len() >= 5 && trimmed[..5].eq_ignore_ascii_case("lora:") {
+            let value = trimmed[5..].trim().trim_matches('"');
+            if !value.is_empty() && !value.eq_ignore_ascii_case("none") {
+                lora = Some(value.to_string());
+            }
+        } else if !trimmed.is_empty() {
+            prompt_lines.push(trimmed);
+        }
+    }
+    let prompt = prompt_lines.join(" ");
+    if prompt.is_empty() {
+        (fallback.to_string(), lora)
+    } else {
+        (prompt, lora)
+    }
+}
 
 pub struct SendMessageUseCase {
     conv_repo: Arc<dyn ConversationRepository>,
@@ -42,6 +72,7 @@ pub struct SendMessageUseCase {
     attachment_store: Arc<dyn AttachmentStorePort>,
     gen_settings_repo: Arc<dyn GenerationSettingsRepository>,
     comfy_installer: Arc<dyn ComfyInstallerPort>,
+    lora_catalog: Arc<dyn LoraCatalogPort>,
 }
 
 impl SendMessageUseCase {
@@ -56,6 +87,7 @@ impl SendMessageUseCase {
         attachment_store: Arc<dyn AttachmentStorePort>,
         gen_settings_repo: Arc<dyn GenerationSettingsRepository>,
         comfy_installer: Arc<dyn ComfyInstallerPort>,
+        lora_catalog: Arc<dyn LoraCatalogPort>,
     ) -> Self {
         Self {
             conv_repo,
@@ -67,6 +99,7 @@ impl SendMessageUseCase {
             attachment_store,
             gen_settings_repo,
             comfy_installer,
+            lora_catalog,
         }
     }
 
@@ -400,10 +433,61 @@ impl SendMessageUseCase {
         // 3b. Prompt pro SDXL — model rozumí jen anglickým, komma-separovaným
         // popisům. Český požadavek („nakresli mi…") poslaný napřímo vede na
         // nesmyslné výstupy, proto ho LLM nejdřív převede; při selhání LLM
-        // se použije původní text (generování kvůli tomu nespadne).
+        // se použije původní text (generování kvůli tomu nespadne). LLM
+        // zároveň navrhne koncept pro vyhledání LoRA.
         let _ = stream_tx.send(stage(ImageStage::PreparingPrompt)).await;
-        let sd_prompt = self.enhance_image_prompt(&prompt).await;
-        tracing::info!(original = %prompt, enhanced = %sd_prompt, "Prompt pro generátor obrázků");
+        let (mut sd_prompt, lora_query) = self.enhance_image_prompt(&prompt).await;
+        tracing::info!(original = %prompt, enhanced = %sd_prompt, ?lora_query,
+            "Prompt pro generátor obrázků");
+
+        // 3c. LoRA — když LLM navrhl koncept, zkusíme na CivitAI najít
+        // vhodnou LoRA, stáhnout ji (pokud chybí) a zapojit: soubor do
+        // workflow, trigger words do promptu. Jakékoli selhání = generuje
+        // se bez LoRA, nikdy to neshodí celou pipeline.
+        let mut lora_file = None;
+        if let Some(query) = lora_query {
+            let base_model = match style {
+                StylePreset::SemiRealistic | StylePreset::Anime => "Pony",
+                _ => "SDXL 1.0",
+            };
+            let _ = stream_tx
+                .send(StreamChunk::ImageStage(ImageStageInfo {
+                    stage: ImageStage::DownloadingModel,
+                    detail: Some(format!("Hledám LoRA: {query}")),
+                }))
+                .await;
+            match self.lora_catalog.find_lora(&query, base_model).await {
+                Ok(Some(lora)) => {
+                    let (itx, irx) = mpsc::channel(64);
+                    let fwd = tokio::spawn(forward_install_progress(
+                        ImageStage::DownloadingModel,
+                        irx,
+                        stream_tx.clone(),
+                    ));
+                    let result = self
+                        .comfy_installer
+                        .ensure_lora(&lora.file_name, &lora.download_url, itx)
+                        .await;
+                    let _ = fwd.await;
+                    match result {
+                        Ok(()) => {
+                            if !lora.trigger_words.is_empty() {
+                                sd_prompt =
+                                    format!("{sd_prompt}, {}", lora.trigger_words.join(", "));
+                            }
+                            tracing::info!(name = %lora.name, file = %lora.file_name,
+                                "LoRA zapojena do generování");
+                            lora_file = Some(lora.file_name);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Stažení LoRA selhalo ({e}) — generuji bez ní");
+                        }
+                    }
+                }
+                Ok(None) => tracing::info!(%query, "Žádná vhodná LoRA nenalezena"),
+                Err(e) => tracing::warn!("Hledání LoRA selhalo ({e}) — generuji bez ní"),
+            }
+        }
 
         // 4. Generování
         let _ = stream_tx.send(stage(ImageStage::Generating)).await;
@@ -419,6 +503,7 @@ impl SendMessageUseCase {
             seed: None,
             style_preset: style,
             reference_image_paths,
+            lora_file,
         };
 
         let gen_result = self.image_gen.generate(request, img_tx).await;
@@ -451,9 +536,10 @@ impl SendMessageUseCase {
     }
 
     /// Převede požadavek uživatele (typicky česky) na anglický Stable
-    /// Diffusion prompt. Při jakémkoli selhání LLM vrací původní text —
-    /// horší prompt je lepší než spadlé generování.
-    async fn enhance_image_prompt(&self, user_prompt: &str) -> String {
+    /// Diffusion prompt + volitelný koncept pro vyhledání LoRA. Při
+    /// jakémkoli selhání LLM vrací původní text — horší prompt je lepší
+    /// než spadlé generování.
+    async fn enhance_image_prompt(&self, user_prompt: &str) -> (String, Option<String>) {
         let conv = ConversationId::new();
         let messages = vec![
             Message::system(conv.clone(), IMAGE_PROMPT_SYSTEM),
@@ -470,7 +556,7 @@ impl SendMessageUseCase {
 
         let (tx, mut rx) = mpsc::channel(64);
         if self.llm.chat_stream(request, tx).await.is_err() {
-            return user_prompt.to_string();
+            return (user_prompt.to_string(), None);
         }
         let mut out = String::new();
         while let Some(chunk) = rx.recv().await {
@@ -478,17 +564,12 @@ impl SendMessageUseCase {
                 StreamChunk::Token(t) => out.push_str(&t),
                 StreamChunk::Error(e) => {
                     tracing::warn!("Vylepšení promptu selhalo ({e}) — použije se původní");
-                    return user_prompt.to_string();
+                    return (user_prompt.to_string(), None);
                 }
                 StreamChunk::Done(_) | StreamChunk::ImageStage(_) => {}
             }
         }
-        let out = out.trim().trim_matches('"').trim().to_string();
-        if out.is_empty() {
-            user_prompt.to_string()
-        } else {
-            out
-        }
+        parse_prompt_enhancement(&out, user_prompt)
     }
 
     fn model_for_intent(intent: &weave_domain::model::Intent) -> String {
@@ -543,6 +624,7 @@ mod tests {
         generation_settings_repository::MockGenerationSettingsRepository,
         image_gen_port::MockImageGenPort,
         llm_port::{ImageStage, MockLlmPort},
+        lora_catalog_port::MockLoraCatalogPort,
         persona_repository::MockPersonaRepository,
         workspace_port::MockWorkspaceRepository,
     };
@@ -574,6 +656,15 @@ mod tests {
         llm
     }
 
+    /// Mock LoRA katalogu: nikdy nic nenajde (výchozí pro testy, kde LoRA
+    /// není předmětem — LLM mock stejně žádný LORA řádek nevrací).
+    fn default_lora_catalog() -> MockLoraCatalogPort {
+        let mut m = MockLoraCatalogPort::new();
+        m.expect_find_lora()
+            .returning(|_, _| Box::pin(async { Ok(None) }));
+        m
+    }
+
     /// Mock ComfyUI installeru: „vše připraveno, server běží" — orchestrace
     /// tak nic neinstaluje ani nespouští (výchozí pro testy mimo orchestraci).
     fn default_comfy_installer() -> MockComfyInstallerPort {
@@ -600,6 +691,7 @@ mod tests {
             Arc::new(MockAttachmentStorePort::new()),
             Arc::new(default_gen_settings()),
             Arc::new(default_comfy_installer()),
+            Arc::new(default_lora_catalog()),
         )
     }
 
@@ -625,6 +717,7 @@ mod tests {
             Arc::new(attachment_store),
             Arc::new(default_gen_settings()),
             Arc::new(default_comfy_installer()),
+            Arc::new(default_lora_catalog()),
         )
     }
 
@@ -966,6 +1059,7 @@ mod tests {
             Arc::new(MockAttachmentStorePort::new()),
             Arc::new(gen_repo),
             Arc::new(default_comfy_installer()),
+            Arc::new(default_lora_catalog()),
         );
         let (tx, _rx) = mpsc::channel(8);
 
@@ -1039,6 +1133,7 @@ mod tests {
             Arc::new(MockAttachmentStorePort::new()),
             Arc::new(default_gen_settings()),
             Arc::new(installer),
+            Arc::new(default_lora_catalog()),
         );
 
         let (tx, mut rx) = mpsc::channel(64);
@@ -1139,6 +1234,7 @@ mod tests {
             Arc::new(attachment_store),
             Arc::new(default_gen_settings()),
             Arc::new(installer),
+            Arc::new(default_lora_catalog()),
         );
 
         let (tx, mut rx) = mpsc::channel(64);
@@ -1210,6 +1306,7 @@ mod tests {
             Arc::new(MockAttachmentStorePort::new()),
             Arc::new(default_gen_settings()),
             Arc::new(default_comfy_installer()),
+            Arc::new(default_lora_catalog()),
         );
 
         let (tx, mut rx) = mpsc::channel(64);
@@ -1222,6 +1319,137 @@ mod tests {
             }
         }
         assert!(got_token);
+    }
+
+    #[test]
+    fn parse_enhancement_extracts_prompt_and_lora() {
+        let (prompt, lora) = parse_prompt_enhancement(
+            "young woman on a beach, detailed\nLORA: nikol woman",
+            "fallback",
+        );
+        assert_eq!(prompt, "young woman on a beach, detailed");
+        assert_eq!(lora.as_deref(), Some("nikol woman"));
+
+        // none / chybějící řádek / prázdný výstup
+        let (p2, l2) = parse_prompt_enhancement("castle on a rock\nLORA: none", "fb");
+        assert_eq!(p2, "castle on a rock");
+        assert!(l2.is_none());
+
+        let (p3, l3) = parse_prompt_enhancement("just a prompt", "fb");
+        assert_eq!(p3, "just a prompt");
+        assert!(l3.is_none());
+
+        let (p4, _) = parse_prompt_enhancement("  \n LORA: x", "fallback");
+        assert_eq!(p4, "fallback", "prázdný prompt padá na fallback");
+
+        // case-insensitive prefix
+        let (_, l5) = parse_prompt_enhancement("p\nlora: Sailor Moon style", "fb");
+        assert_eq!(l5.as_deref(), Some("Sailor Moon style"));
+    }
+
+    /// Celá LoRA cesta: LLM navrhne koncept → katalog najde LoRA →
+    /// stáhne se → soubor jde do requestu a trigger words do promptu.
+    #[tokio::test]
+    async fn lora_is_found_downloaded_and_wired_into_request() {
+        use crate::ports::lora_catalog_port::LoraInfo;
+
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut llm = MockLlmPort::new();
+        llm.expect_chat_stream().returning(|_, tx| {
+            Box::pin(async move {
+                let _ = tx
+                    .send(StreamChunk::Token(
+                        "young woman portrait\nLORA: nikol".into(),
+                    ))
+                    .await;
+                let _ = tx.send(StreamChunk::Done(Default::default())).await;
+                Ok(())
+            })
+        });
+
+        let mut catalog = MockLoraCatalogPort::new();
+        catalog
+            .expect_find_lora()
+            .times(1)
+            .withf(|query, base| query == "nikol" && base == "SDXL 1.0")
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(Some(LoraInfo {
+                        name: "Nikol Style".into(),
+                        file_name: "nikol_v1.safetensors".into(),
+                        download_url: "https://cdn/nikol.safetensors".into(),
+                        trigger_words: vec!["nikol woman".into()],
+                    }))
+                })
+            });
+
+        let mut installer = MockComfyInstallerPort::new();
+        installer
+            .expect_status()
+            .returning(|| Box::pin(async { Ok(ComfyStatus::Running) }));
+        installer
+            .expect_ensure_style_checkpoint()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        installer
+            .expect_ensure_lora()
+            .times(1)
+            .withf(|file, url, _| file == "nikol_v1.safetensors" && url.contains("cdn"))
+            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+        installer
+            .expect_stop_server()
+            .returning(|| Box::pin(async { Ok(()) }));
+
+        let mut image_gen = MockImageGenPort::new();
+        image_gen.expect_generate().returning(|req, tx| {
+            assert_eq!(req.lora_file.as_deref(), Some("nikol_v1.safetensors"));
+            assert!(req.prompt.contains("nikol woman"), "chybí trigger words");
+            Box::pin(async move {
+                let _ = tx
+                    .send(ImageProgress::Done {
+                        output_path: "/gallery/lora.png".into(),
+                    })
+                    .await;
+                Ok(())
+            })
+        });
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(llm),
+            Arc::new(image_gen),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(default_gen_settings()),
+            Arc::new(installer),
+            Arc::new(catalog),
+        );
+
+        let (tx, mut rx) = mpsc::channel(64);
+        uc.execute(
+            ConversationId::new(),
+            "nakresli Nikol jako portrét".into(),
+            vec![],
+            vec![],
+            tx,
+        )
+        .await
+        .unwrap();
+
+        while let Some(chunk) = rx.recv().await {
+            if let StreamChunk::Error(e) = chunk {
+                panic!("necekana chyba: {e}");
+            }
+        }
     }
 
     /// Když LLM vylepšení promptu selže, generování běží dál s původním
@@ -1269,6 +1497,7 @@ mod tests {
             Arc::new(MockAttachmentStorePort::new()),
             Arc::new(default_gen_settings()),
             Arc::new(default_comfy_installer()),
+            Arc::new(default_lora_catalog()),
         );
 
         let (tx, mut rx) = mpsc::channel(64);

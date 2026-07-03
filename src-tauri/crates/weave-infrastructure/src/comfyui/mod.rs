@@ -254,6 +254,38 @@ fn uses_clip_skip(style: StylePreset) -> bool {
     matches!(style, StylePreset::SemiRealistic | StylePreset::Anime)
 }
 
+/// Zapojí LoRA (uzel 14): model větev jde checkpoint → LoraLoader →
+/// spotřebitel modelu (KSampler u txt2img, ApplyPulid u reference větve),
+/// CLIP větev checkpoint → LoraLoader → (CLIPSetLastLayer) → text encody.
+/// Trigger words do promptu doplňuje orchestrace, ne builder.
+fn apply_lora(workflow: &mut serde_json::Value, req: &ImageRequest, model_consumer: &str) {
+    let Some(lora_file) = &req.lora_file else {
+        return;
+    };
+    let map = workflow.as_object_mut().expect("workflow je JSON objekt");
+    map.insert(
+        "14".into(),
+        serde_json::json!({
+            "class_type": "LoraLoader",
+            "inputs": {
+                "model": ["1", 0],
+                "clip": ["1", 1],
+                "lora_name": lora_file,
+                "strength_model": 0.8,
+                "strength_clip": 0.8
+            }
+        }),
+    );
+    map[model_consumer]["inputs"]["model"] = serde_json::json!(["14", 0]);
+    if map.contains_key("13") {
+        // Clip skip (Pony) zůstává poslední v řadě před text encody
+        map["13"]["inputs"]["clip"] = serde_json::json!(["14", 1]);
+    } else {
+        map["2"]["inputs"]["clip"] = serde_json::json!(["14", 1]);
+        map["3"]["inputs"]["clip"] = serde_json::json!(["14", 1]);
+    }
+}
+
 /// Doplní style-specifika do hotového workflow: prefixy promptů a případný
 /// CLIPSetLastLayer uzel (id 13), přes který pak jdou oba text encody.
 fn apply_style_tuning(workflow: &mut serde_json::Value, req: &ImageRequest) {
@@ -329,6 +361,7 @@ fn build_txt2img_workflow(req: &ImageRequest) -> serde_json::Value {
         }
     });
     apply_style_tuning(&mut workflow, req);
+    apply_lora(&mut workflow, req, "5");
     workflow
 }
 
@@ -445,6 +478,7 @@ fn build_pulid_workflow(req: &ImageRequest, uploaded_images: &[String]) -> serde
     map["12"]["inputs"]["image"] = last_ref;
 
     apply_style_tuning(&mut workflow, req);
+    apply_lora(&mut workflow, req, "12");
     workflow
 }
 
@@ -477,7 +511,41 @@ mod tests {
             seed: Some(1234),
             style_preset: StylePreset::Realistic,
             reference_image_paths: vec![],
+            lora_file: None,
         }
+    }
+
+    #[test]
+    fn lora_is_wired_between_checkpoint_and_consumers() {
+        let mut req = sample_request();
+        req.lora_file = Some("nikol_v1.safetensors".into());
+
+        // txt2img: KSampler bere model z LoRA, text encody clip z LoRA
+        let workflow = build_basic_workflow(&req, &[]);
+        assert_eq!(workflow["14"]["class_type"], "LoraLoader");
+        assert_eq!(
+            workflow["14"]["inputs"]["lora_name"],
+            "nikol_v1.safetensors"
+        );
+        assert_eq!(
+            workflow["5"]["inputs"]["model"],
+            serde_json::json!(["14", 0])
+        );
+        assert_eq!(
+            workflow["2"]["inputs"]["clip"],
+            serde_json::json!(["14", 1])
+        );
+
+        // PuLID větev: ApplyPulid bere model z LoRA, KSampler dál z PuLID
+        let pulid = build_basic_workflow(&req, &["ref.png".into()]);
+        assert_eq!(pulid["12"]["inputs"]["model"], serde_json::json!(["14", 0]));
+        assert_eq!(pulid["5"]["inputs"]["model"], serde_json::json!(["12", 0]));
+
+        // Pony (clip skip): řetěz LoRA → CLIPSetLastLayer → text encody
+        req.style_preset = StylePreset::Anime;
+        let pony = build_basic_workflow(&req, &[]);
+        assert_eq!(pony["13"]["inputs"]["clip"], serde_json::json!(["14", 1]));
+        assert_eq!(pony["2"]["inputs"]["clip"], serde_json::json!(["13", 0]));
     }
 
     #[test]
