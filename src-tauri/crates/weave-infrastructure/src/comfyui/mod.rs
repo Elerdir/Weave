@@ -151,7 +151,15 @@ impl ImageGenPort for ComfyUiClient {
         let prompt_id = resp.prompt_id;
         tracing::info!(%prompt_id, "ComfyUI prompt odeslán");
 
-        // Poll na výsledek (zjednodušeno — produkčně WebSocket)
+        // Kroky sampleru posílá ComfyUI přes WebSocket — posloucháme je na
+        // pozadí a přeposíláme jako Progress (frontend z nich dělá procenta).
+        // Výsledek dál hlídáme pollingem /history (spolehlivější na dokončení).
+        let ws_task = tokio::spawn(forward_sampler_progress(
+            self.base_url.clone(),
+            client_id,
+            tx.clone(),
+        ));
+
         let output_dir = self.gallery_dir.clone();
         std::fs::create_dir_all(&output_dir).ok();
 
@@ -187,6 +195,8 @@ impl ImageGenPort for ComfyUiClient {
                         let out_path = output_dir.join(&filename);
                         std::fs::write(&out_path, &img_bytes)
                             .map_err(|e| AppError::ComfyUi(e.to_string()))?;
+
+                        ws_task.abort();
 
                         // Označení AI původu (metadata + neviditelný vodoznak).
                         // Selhání generování neshodí — obrázek už na disku je.
@@ -482,6 +492,48 @@ fn build_pulid_workflow(req: &ImageRequest, uploaded_images: &[String]) -> serde
     workflow
 }
 
+/// Poslouchá ComfyUI WebSocket a přeposílá kroky sampleru jako
+/// `ImageProgress::Progress`. Best-effort — když se WS nepřipojí, generování
+/// běží dál jen bez procent (výsledek hlídá polling /history).
+async fn forward_sampler_progress(
+    base_url: String,
+    client_id: String,
+    tx: mpsc::Sender<ImageProgress>,
+) {
+    use futures_util::StreamExt;
+
+    let ws_url = format!(
+        "{}/ws?clientId={}",
+        base_url.replacen("http", "ws", 1),
+        client_id
+    );
+    let Ok((mut stream, _)) = tokio_tungstenite::connect_async(&ws_url).await else {
+        tracing::warn!(%ws_url, "ComfyUI WebSocket se nepřipojil — průběh bez procent");
+        return;
+    };
+
+    while let Some(Ok(message)) = stream.next().await {
+        if let tokio_tungstenite::tungstenite::Message::Text(text) = message {
+            if let Some((step, total)) = parse_ws_progress(&text) {
+                let _ = tx.send(ImageProgress::Progress { step, total }).await;
+            }
+        }
+    }
+}
+
+/// Vytáhne (value, max) ze zprávy `{"type":"progress","data":{"value":..,"max":..}}`.
+fn parse_ws_progress(text: &str) -> Option<(u32, u32)> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    if value.get("type")?.as_str()? != "progress" {
+        return None;
+    }
+    let data = value.get("data")?;
+    Some((
+        data.get("value")?.as_u64()? as u32,
+        data.get("max")?.as_u64()? as u32,
+    ))
+}
+
 fn extract_output_filename(outputs: &serde_json::Value) -> Option<String> {
     outputs.as_object()?.values().find_map(|node| {
         node.get("images")?
@@ -513,6 +565,19 @@ mod tests {
             reference_image_paths: vec![],
             lora_file: None,
         }
+    }
+
+    #[test]
+    fn parse_ws_progress_reads_sampler_steps() {
+        assert_eq!(
+            parse_ws_progress(r#"{"type":"progress","data":{"value":12,"max":20}}"#),
+            Some((12, 20))
+        );
+        assert_eq!(
+            parse_ws_progress(r#"{"type":"executing","data":{"node":"5"}}"#),
+            None
+        );
+        assert_eq!(parse_ws_progress("neni json"), None);
     }
 
     #[test]

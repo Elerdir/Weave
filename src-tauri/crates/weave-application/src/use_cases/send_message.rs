@@ -375,6 +375,7 @@ impl SendMessageUseCase {
             StreamChunk::ImageStage(ImageStageInfo {
                 stage: s,
                 detail: None,
+                percent: None,
             })
         };
 
@@ -454,6 +455,7 @@ impl SendMessageUseCase {
                 .send(StreamChunk::ImageStage(ImageStageInfo {
                     stage: ImageStage::DownloadingModel,
                     detail: Some(format!("Hledám LoRA: {query}")),
+                    percent: None,
                 }))
                 .await;
             match self.lora_catalog.find_lora(&query, base_model).await {
@@ -529,7 +531,17 @@ impl SendMessageUseCase {
                 ImageProgress::Error(e) => {
                     let _ = stream_tx.send(StreamChunk::Error(e)).await;
                 }
-                ImageProgress::Progress { .. } => {}
+                ImageProgress::Progress { step, total } => {
+                    // Skutečné kroky sampleru (ComfyUI WebSocket) → progress bar
+                    let percent = (step * 100).checked_div(total).unwrap_or(0).min(100) as u8;
+                    let _ = stream_tx
+                        .send(StreamChunk::ImageStage(ImageStageInfo {
+                            stage: ImageStage::Generating,
+                            detail: Some(format!("Krok {step}/{total}")),
+                            percent: Some(percent),
+                        }))
+                        .await;
+                }
             }
         }
         Ok(())
@@ -608,6 +620,7 @@ async fn forward_install_progress(
                 .send(StreamChunk::ImageStage(ImageStageInfo {
                     stage,
                     detail: Some(detail),
+                    percent: None,
                 }))
                 .await;
         }

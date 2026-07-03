@@ -33,6 +33,10 @@ pub struct ImageStageInfo {
     pub stage: ImageStage,
     /// Doplňkový popis (řádek výstupu instalace, průběh stahování…).
     pub detail: Option<String>,
+    /// Skutečný průběh 0–100 (kroky sampleru z ComfyUI WebSocketu).
+    /// `None` = neurčitý průběh (animovaný pruh).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
