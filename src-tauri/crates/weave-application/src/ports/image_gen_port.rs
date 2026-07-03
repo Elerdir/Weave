@@ -20,6 +20,9 @@ pub struct ImageRequest {
     /// Název souboru LoRA v `models/loras` — zapojí se přes LoraLoader.
     /// Trigger words musí být už v promptu (řeší orchestrace).
     pub lora_file: Option<String>,
+    /// Výchozí obrázek pro img2img úpravu („uprav tento obrázek") —
+    /// latent se místo prázdného plátna vezme z něj (denoise ~0.55).
+    pub init_image_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

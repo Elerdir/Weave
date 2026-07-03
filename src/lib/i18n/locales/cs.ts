@@ -67,6 +67,8 @@ const cs = {
     dropImagesHint: "Pusť obrázky sem — přiloží se jako reference",
     saveImage: "Uložit obrázek",
     useAsReference: "Použít jako referenci",
+    editImage: "Upravit obrázek",
+    editingImage: "Upravuji: {name} — napiš, co změnit",
     imageStages: {
       checking: "Kontroluji prostředí pro generování…",
       installing: "Instaluji ComfyUI (poprvé to trvá desítky minut)…",

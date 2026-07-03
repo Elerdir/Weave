@@ -6,9 +6,15 @@
   import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
   import { filterNewImagePaths, IMAGE_EXTENSIONS } from "$lib/reference-images";
   import { referenceQueue } from "$lib/stores/reference-queue.svelte";
+  import { editImageStore } from "$lib/stores/edit-image.svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { generationSettingsStore } from "$lib/stores/generation-settings.svelte";
-  import { sendMessage, stopGeneration } from "$lib/services/chat.service";
+  import {
+    editImageMessage,
+    sendMessage,
+    stopGeneration,
+  } from "$lib/services/chat.service";
+  import { fileNameFromPath } from "$lib/generated-images";
   import { i18n } from "$lib/i18n/index.svelte";
   import { activeMention, removeMentionToken } from "$lib/mentions";
   import type { MentionMatch } from "$lib/mentions";
@@ -212,7 +218,13 @@
     mentions = [];
     refImages = [];
     closeSuggestions();
-    await sendMessage(conversationStore.activeId, content, refs, images);
+    // Čeká-li obrázek na úpravu, jde instrukce jako img2img místo běžné zprávy.
+    const initImage = editImageStore.take();
+    if (initImage) {
+      await editImageMessage(conversationStore.activeId, content, initImage);
+    } else {
+      await sendMessage(conversationStore.activeId, content, refs, images);
+    }
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -398,6 +410,20 @@
           class="error-dismiss"
           onclick={() => conversationStore.setLastError(null)}
           aria-label="Zavřít"
+        >×</button>
+      </div>
+    {/if}
+
+    {#if editImageStore.pending}
+      <div class="edit-image-badge">
+        <img src={convertFileSrc(editImageStore.pending)} alt="" class="edit-image-thumb" />
+        <span class="edit-image-label">
+          🎨 {i18n.t("chat.editingImage", { name: fileNameFromPath(editImageStore.pending) })}
+        </span>
+        <button
+          class="edit-image-cancel"
+          onclick={() => editImageStore.clear()}
+          aria-label={i18n.m.chat.editCancel}
         >×</button>
       </div>
     {/if}
@@ -763,6 +789,44 @@
     padding: 0 0.15rem;
   }
   .error-dismiss:hover { color: var(--color-text); }
+
+  .edit-image-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.75rem 1.25rem 0;
+    padding: 0.4rem 0.6rem;
+    background: var(--color-user-bubble);
+    border: 1px solid var(--color-accent);
+    border-radius: 10px;
+    font-size: 0.82rem;
+  }
+
+  .edit-image-thumb {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid var(--color-border);
+  }
+
+  .edit-image-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .edit-image-cancel {
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.15rem;
+  }
+  .edit-image-cancel:hover { color: var(--color-text); }
 
   .ref-image-strip {
     display: flex;

@@ -150,6 +150,7 @@ impl SendMessageUseCase {
             content,
             file_refs,
             reference_image_paths,
+            None,
             stream_tx,
         )
         .await
@@ -203,6 +204,7 @@ impl SendMessageUseCase {
             content,
             vec![],
             reference_image_paths,
+            None,
             stream_tx,
         )
         .await
@@ -223,9 +225,50 @@ impl SendMessageUseCase {
         self.regenerate(conversation_id, stream_tx).await
     }
 
+    /// Úprava vygenerovaného obrázku (img2img): instrukce uživatele se uloží
+    /// jako zpráva s náhledem upravovaného obrázku a generuje se z něj
+    /// (latent z init obrázku, denoise 0.55 — kompozice zůstává).
+    pub async fn edit_image(
+        &self,
+        conversation_id: ConversationId,
+        content: String,
+        init_image: String,
+        stream_tx: mpsc::Sender<StreamChunk>,
+    ) -> AppResult<()> {
+        let conversation = self
+            .conv_repo
+            .find_by_id(&conversation_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Repository(format!("Konverzace {conversation_id} neexistuje"))
+            })?;
+
+        // Náhled upravovaného obrázku u zprávy — soubor už je v galerii
+        // (spravované úložiště), takže se nekopíruje znovu.
+        let user_msg = Message::user(conversation_id.clone(), &content).with_attachments(vec![
+            Attachment::Image {
+                path: init_image.clone(),
+                mime: "image/png".into(),
+            },
+        ]);
+        self.msg_repo.save(&user_msg).await?;
+
+        self.generate_reply(
+            &conversation,
+            conversation_id,
+            content,
+            vec![],
+            vec![],
+            Some(init_image),
+            stream_tx,
+        )
+        .await
+    }
+
     /// Společné jádro generování: obalí stream tak, aby se hotová odpověď
     /// asistenta uložila do DB (jinak by po přepnutí konverzace zmizela),
     /// a routuje podle záměru na obrázek/text.
+    #[allow(clippy::too_many_arguments)]
     async fn generate_reply(
         &self,
         conversation: &weave_domain::conversation::Conversation,
@@ -233,6 +276,7 @@ impl SendMessageUseCase {
         content: String,
         file_refs: Vec<String>,
         reference_image_paths: Vec<String>,
+        init_image: Option<String>,
         stream_tx: mpsc::Sender<StreamChunk>,
     ) -> AppResult<()> {
         let intent = IntentClassifier::classify(&content);
@@ -265,12 +309,16 @@ impl SendMessageUseCase {
             }
         });
 
-        let result = match intent {
-            weave_domain::model::Intent::ImageGeneration => {
-                self.handle_image(content, reference_image_paths, tee_tx)
+        // Úprava obrázku (init_image) je vždy generování obrázku, bez ohledu
+        // na to, jak by heuristika klasifikovala samotný text instrukce.
+        let is_image =
+            init_image.is_some() || matches!(intent, weave_domain::model::Intent::ImageGeneration);
+        let result = match is_image {
+            true => {
+                self.handle_image(content, reference_image_paths, init_image, tee_tx)
                     .await
             }
-            _ => {
+            false => {
                 let mut history = self.msg_repo.list_by_conversation(&conversation_id).await?;
 
                 // Přiložené @soubory → system kontext na začátku (neukládá se do historie)
@@ -365,6 +413,7 @@ impl SendMessageUseCase {
         &self,
         prompt: String,
         reference_image_paths: Vec<String>,
+        init_image: Option<String>,
         stream_tx: mpsc::Sender<StreamChunk>,
     ) -> AppResult<()> {
         use crate::ports::comfy_installer_port::ComfyStatus;
@@ -506,6 +555,7 @@ impl SendMessageUseCase {
             style_preset: style,
             reference_image_paths,
             lora_file,
+            init_image_path: init_image,
         };
 
         let gen_result = self.image_gen.generate(request, img_tx).await;
@@ -889,6 +939,58 @@ mod tests {
             "nakresli mě jako rytíře".into(),
             vec![],
             vec!["/tmp/selfie.png".into()],
+            tx,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn edit_image_forces_image_intent_and_passes_init_image() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+
+        let mut msg_repo = MockMessageRepository::new();
+        // Zpráva uživatele nese náhled upravovaného obrázku jako přílohu.
+        msg_repo
+            .expect_save()
+            .withf(|m: &Message| {
+                m.role != weave_domain::message::Role::User
+                    || m.attachments
+                        == vec![Attachment::Image {
+                            path: "/data/weave/gallery/original.png".into(),
+                            mime: "image/png".into(),
+                        }]
+            })
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut image_gen = MockImageGenPort::new();
+        image_gen
+            .expect_generate()
+            .withf(|req: &ImageRequest, _tx| {
+                req.init_image_path.as_deref() == Some("/data/weave/gallery/original.png")
+                    && req.reference_image_paths.is_empty()
+            })
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let uc = make_full_uc(
+            conv_repo,
+            msg_repo,
+            image_prompt_llm(),
+            image_gen,
+            MockAttachmentStorePort::new(),
+        );
+        let (tx, _rx) = mpsc::channel(8);
+
+        // Instrukce bez obrázkových klíčových slov — obrázková větev se
+        // přesto musí vynutit (init obrázek rozhoduje, ne klasifikace).
+        uc.edit_image(
+            ConversationId::new(),
+            "změň pozadí na západ slunce".into(),
+            "/data/weave/gallery/original.png".into(),
             tx,
         )
         .await

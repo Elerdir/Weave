@@ -107,6 +107,23 @@ export async function sendMessage(
   });
 }
 
+/** Úprava vygenerovaného obrázku (img2img): instrukce + výchozí obrázek.
+ *  Backend uloží dotaz s náhledem obrázku a generuje z něj (denoise ~0.55). */
+export async function editImageMessage(
+  conversationId: string,
+  content: string,
+  initImage: string
+): Promise<void> {
+  conversationStore.pushUserMessage(content, [
+    { type: "image", path: initImage, mime: "image/*" },
+  ]);
+  await runGeneration("edit_image_message", {
+    conversationId,
+    content,
+    initImage,
+  });
+}
+
 /** Znovu vygeneruje poslední odpověď asistenta v konverzaci. */
 export async function regenerateResponse(conversationId: string): Promise<void> {
   conversationStore.trimTrailingAssistantMessages();
