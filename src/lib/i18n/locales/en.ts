@@ -69,6 +69,8 @@ const en: Messages = {
     dropImagesHint: "Drop images here — attached as references",
     saveImage: "Save image",
     useAsReference: "Use as reference",
+    editImage: "Edit image",
+    editingImage: "Editing: {name} — describe the change",
     imageStages: {
       checking: "Checking the image generation environment…",
       installing: "Installing ComfyUI (first run takes tens of minutes)…",

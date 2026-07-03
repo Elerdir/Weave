@@ -6,6 +6,7 @@
   import type { Message } from "$lib/stores/conversations.svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { referenceQueue } from "$lib/stores/reference-queue.svelte";
+  import { editImageStore } from "$lib/stores/edit-image.svelte";
   import {
     regenerateResponse,
     resendMessage,
@@ -90,6 +91,10 @@
 
   function useAsReference(path: string) {
     referenceQueue.add(path);
+  }
+
+  function editImage(path: string) {
+    editImageStore.set(path);
   }
 
   async function copyContent() {
@@ -209,6 +214,12 @@
         title={i18n.m.chat.useAsReference}
         aria-label={i18n.m.chat.useAsReference}
       >🖼️</button>
+      <button
+        class="action-btn"
+        onclick={() => editImage(generatedImages[0])}
+        title={i18n.m.chat.editImage}
+        aria-label={i18n.m.chat.editImage}
+      >🎨</button>
     {/if}
   </div>
 </div>

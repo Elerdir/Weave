@@ -117,7 +117,12 @@ impl ImageGenPort for ComfyUiClient {
         for path in &request.reference_image_paths {
             uploaded_references.push(self.upload_reference_image(path).await?);
         }
-        let workflow = build_basic_workflow(&request, &uploaded_references);
+        let uploaded_init = match &request.init_image_path {
+            Some(path) => Some(self.upload_reference_image(path).await?),
+            None => None,
+        };
+        let workflow =
+            build_basic_workflow(&request, &uploaded_references, uploaded_init.as_deref());
         let client_id = uuid::Uuid::new_v4().to_string();
 
         let prompt_req = PromptRequest {
@@ -234,12 +239,44 @@ impl ImageGenPort for ComfyUiClient {
 /// Checkpoint se volí podle stylu promptu (`req.style_preset`) — anime má
 /// vlastní doladěný SDXL checkpoint, zbytek jede na SDXL base. Obě varianty
 /// jsou SDXL architektura, takže fungují i s PuLID větví.
-fn build_basic_workflow(req: &ImageRequest, uploaded_references: &[String]) -> serde_json::Value {
-    if uploaded_references.is_empty() {
+fn build_basic_workflow(
+    req: &ImageRequest,
+    uploaded_references: &[String],
+    uploaded_init: Option<&str>,
+) -> serde_json::Value {
+    let mut workflow = if uploaded_references.is_empty() {
         build_txt2img_workflow(req)
     } else {
         build_pulid_workflow(req, uploaded_references)
+    };
+    if let Some(init) = uploaded_init {
+        apply_init_image(&mut workflow, init);
     }
+    workflow
+}
+
+/// Přepne workflow na img2img: latent se místo prázdného plátna vezme
+/// z výchozího obrázku (LoadImage 15 → VAEEncode 16) a denoise klesne na
+/// 0.55 — výsledek zachová kompozici a mění jen to, co říká prompt.
+/// Funguje pro txt2img i PuLID větev (obě berou latent z KSampleru "5").
+fn apply_init_image(workflow: &mut serde_json::Value, uploaded_init: &str) {
+    let map = workflow.as_object_mut().expect("workflow je JSON objekt");
+    map.insert(
+        "15".into(),
+        serde_json::json!({
+            "class_type": "LoadImage",
+            "inputs": { "image": uploaded_init }
+        }),
+    );
+    map.insert(
+        "16".into(),
+        serde_json::json!({
+            "class_type": "VAEEncode",
+            "inputs": { "pixels": ["15", 0], "vae": ["1", 2] }
+        }),
+    );
+    map["5"]["inputs"]["latent_image"] = serde_json::json!(["16", 0]);
+    map["5"]["inputs"]["denoise"] = serde_json::json!(0.55);
 }
 
 /// Pony V6 checkpoint vyžaduje score tagy v promptu (bez nich generuje
@@ -564,7 +601,43 @@ mod tests {
             style_preset: StylePreset::Realistic,
             reference_image_paths: vec![],
             lora_file: None,
+            init_image_path: None,
         }
+    }
+
+    #[test]
+    fn init_image_switches_latent_to_vaeencode() {
+        let req = sample_request();
+
+        // txt2img + init: latent z VAEEncode, denoise 0.55
+        let workflow = build_basic_workflow(&req, &[], Some("edit-me.png"));
+        assert_eq!(workflow["15"]["class_type"], "LoadImage");
+        assert_eq!(workflow["15"]["inputs"]["image"], "edit-me.png");
+        assert_eq!(workflow["16"]["class_type"], "VAEEncode");
+        assert_eq!(
+            workflow["5"]["inputs"]["latent_image"],
+            serde_json::json!(["16", 0])
+        );
+        assert_eq!(workflow["5"]["inputs"]["denoise"], 0.55);
+
+        // Bez init zůstává prázdný latent a plný denoise
+        let plain = build_basic_workflow(&req, &[], None);
+        assert_eq!(
+            plain["5"]["inputs"]["latent_image"],
+            serde_json::json!(["4", 0])
+        );
+        assert_eq!(plain["5"]["inputs"]["denoise"], 1.0);
+
+        // Kombinace s PuLID referencí funguje taky
+        let combined = build_basic_workflow(&req, &["face.png".into()], Some("edit-me.png"));
+        assert_eq!(
+            combined["5"]["inputs"]["latent_image"],
+            serde_json::json!(["16", 0])
+        );
+        assert_eq!(
+            combined["5"]["inputs"]["model"],
+            serde_json::json!(["12", 0])
+        );
     }
 
     #[test]
@@ -586,7 +659,7 @@ mod tests {
         req.lora_file = Some("nikol_v1.safetensors".into());
 
         // txt2img: KSampler bere model z LoRA, text encody clip z LoRA
-        let workflow = build_basic_workflow(&req, &[]);
+        let workflow = build_basic_workflow(&req, &[], None);
         assert_eq!(workflow["14"]["class_type"], "LoraLoader");
         assert_eq!(
             workflow["14"]["inputs"]["lora_name"],
@@ -602,13 +675,13 @@ mod tests {
         );
 
         // PuLID větev: ApplyPulid bere model z LoRA, KSampler dál z PuLID
-        let pulid = build_basic_workflow(&req, &["ref.png".into()]);
+        let pulid = build_basic_workflow(&req, &["ref.png".into()], None);
         assert_eq!(pulid["12"]["inputs"]["model"], serde_json::json!(["14", 0]));
         assert_eq!(pulid["5"]["inputs"]["model"], serde_json::json!(["12", 0]));
 
         // Pony (clip skip): řetěz LoRA → CLIPSetLastLayer → text encody
         req.style_preset = StylePreset::Anime;
-        let pony = build_basic_workflow(&req, &[]);
+        let pony = build_basic_workflow(&req, &[], None);
         assert_eq!(pony["13"]["inputs"]["clip"], serde_json::json!(["14", 1]));
         assert_eq!(pony["2"]["inputs"]["clip"], serde_json::json!(["13", 0]));
     }
@@ -616,7 +689,7 @@ mod tests {
     #[test]
     fn txt2img_workflow_used_without_reference_image() {
         let req = sample_request();
-        let workflow = build_basic_workflow(&req, &[]);
+        let workflow = build_basic_workflow(&req, &[], None);
 
         // Realistický styl → RealVisXL (nejlepší fotorealismus)
         assert_eq!(
@@ -639,14 +712,14 @@ mod tests {
         let mut req = sample_request();
         req.style_preset = StylePreset::Anime;
 
-        let workflow = build_basic_workflow(&req, &[]);
+        let workflow = build_basic_workflow(&req, &[], None);
         assert_eq!(
             workflow["1"]["inputs"]["ckpt_name"],
             crate::comfy_installer::PONY_CHECKPOINT_FILENAME
         );
 
         // Pony checkpoint je SDXL architektura → platí i pro PuLID větev
-        let pulid = build_basic_workflow(&req, &["ref.png".into()]);
+        let pulid = build_basic_workflow(&req, &["ref.png".into()], None);
         assert_eq!(
             pulid["1"]["inputs"]["ckpt_name"],
             crate::comfy_installer::PONY_CHECKPOINT_FILENAME
@@ -658,7 +731,7 @@ mod tests {
         let mut req = sample_request();
         req.style_preset = StylePreset::Anime;
 
-        let workflow = build_basic_workflow(&req, &[]);
+        let workflow = build_basic_workflow(&req, &[], None);
         let positive = workflow["2"]["inputs"]["text"].as_str().unwrap();
         let negative = workflow["3"]["inputs"]["text"].as_str().unwrap();
         assert!(positive.starts_with("score_9, score_8_up, score_7_up, source_anime, "));
@@ -675,7 +748,7 @@ mod tests {
 
         // Semi-real dostane realistic tag místo source_anime
         req.style_preset = StylePreset::SemiRealistic;
-        let semi = build_basic_workflow(&req, &[]);
+        let semi = build_basic_workflow(&req, &[], None);
         let semi_positive = semi["2"]["inputs"]["text"].as_str().unwrap();
         assert!(semi_positive.contains("realistic, "));
         assert!(!semi_positive.contains("source_anime"));
@@ -684,7 +757,7 @@ mod tests {
     #[test]
     fn realistic_style_has_no_score_tags_nor_clip_skip() {
         let req = sample_request();
-        let workflow = build_basic_workflow(&req, &[]);
+        let workflow = build_basic_workflow(&req, &[], None);
 
         assert_eq!(workflow["2"]["inputs"]["text"], "kosmická loď nad planetou");
         assert!(workflow.get("13").is_none());
@@ -694,7 +767,7 @@ mod tests {
     #[test]
     fn flux_workflow_carries_over_request_fields() {
         let req = sample_request();
-        let workflow = build_basic_workflow(&req, &[]);
+        let workflow = build_basic_workflow(&req, &[], None);
 
         assert_eq!(workflow["2"]["inputs"]["text"], "kosmická loď nad planetou");
         assert_eq!(workflow["3"]["inputs"]["text"], "rozmazané");
@@ -711,7 +784,7 @@ mod tests {
         req.negative_prompt = None;
         req.seed = None;
 
-        let workflow = build_basic_workflow(&req, &[]);
+        let workflow = build_basic_workflow(&req, &[], None);
 
         assert_eq!(workflow["3"]["inputs"]["text"], "");
         assert_eq!(workflow["5"]["inputs"]["seed"], 42);
@@ -720,7 +793,7 @@ mod tests {
     #[test]
     fn pulid_workflow_used_when_reference_image_present() {
         let req = sample_request();
-        let workflow = build_basic_workflow(&req, &["uploaded-ref.png".into()]);
+        let workflow = build_basic_workflow(&req, &["uploaded-ref.png".into()], None);
 
         assert_eq!(
             workflow["1"]["inputs"]["ckpt_name"],
@@ -740,7 +813,7 @@ mod tests {
     fn pulid_workflow_batches_multiple_references() {
         let req = sample_request();
         let refs: Vec<String> = vec!["a.png".into(), "b.png".into(), "c.png".into()];
-        let workflow = build_basic_workflow(&req, &refs);
+        let workflow = build_basic_workflow(&req, &refs, None);
 
         // Tři LoadImage uzly
         assert_eq!(workflow["20"]["inputs"]["image"], "a.png");
@@ -776,7 +849,7 @@ mod tests {
     #[test]
     fn pulid_nodes_are_wired_together_correctly() {
         let req = sample_request();
-        let workflow = build_basic_workflow(&req, &["uploaded-ref.png".into()]);
+        let workflow = build_basic_workflow(&req, &["uploaded-ref.png".into()], None);
 
         assert_eq!(workflow["9"]["class_type"], "PulidModelLoader");
         assert_eq!(
@@ -811,7 +884,7 @@ mod tests {
     #[test]
     fn pulid_workflow_carries_over_request_fields() {
         let req = sample_request();
-        let workflow = build_basic_workflow(&req, &["uploaded-ref.png".into()]);
+        let workflow = build_basic_workflow(&req, &["uploaded-ref.png".into()], None);
 
         assert_eq!(workflow["2"]["inputs"]["text"], "kosmická loď nad planetou");
         assert_eq!(workflow["3"]["inputs"]["text"], "rozmazané");

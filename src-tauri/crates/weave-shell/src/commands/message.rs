@@ -100,6 +100,25 @@ pub async fn truncate_conversation_from(
         .map_err(|e| e.to_string())
 }
 
+/// Úprava vygenerovaného obrázku (img2img): instrukce + cesta k obrázku,
+/// stream jde jako u send_message.
+#[tauri::command]
+pub async fn edit_image_message(
+    conversation_id: String,
+    content: String,
+    init_image: String,
+    window: tauri::Window,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conv_id = parse_conversation_id(&conversation_id)?;
+    let uc = build_use_case(&state).await;
+    let tx = spawn_stream_forwarder(window, &state);
+
+    uc.edit_image(conv_id, content, init_image, tx)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Vygeneruje krátký název konverzace z první výměny (LLM) a uloží ho.
 /// Kdy se volá, rozhoduje frontend — jen u konverzací s výchozím názvem.
 #[tauri::command]
