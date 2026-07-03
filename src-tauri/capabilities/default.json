@@ -4,7 +4,8 @@
   "description": "Hlavní oprávnění hlavního okna Weave (eventy, dialog, notifikace, otevírání odkazů).",
   "windows": [
     "main",
-    "logs"
+    "logs",
+    "gallery"
   ],
   "permissions": [
     "core:default",

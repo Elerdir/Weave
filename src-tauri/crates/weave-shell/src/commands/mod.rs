@@ -1,5 +1,6 @@
 pub mod comfy_installer;
 pub mod conversation;
+pub mod gallery;
 pub mod logs;
 pub mod message;
 pub mod models;

@@ -94,6 +94,13 @@ const cs = {
       later: "Později",
     },
   },
+  gallery: {
+    title: "Galerie vygenerovaných obrázků",
+    refresh: "Obnovit",
+    empty: "Zatím žádné vygenerované obrázky.",
+    delete: "Smazat obrázek",
+    deleteConfirm: "Smazat {name} z galerie? Soubor se odstraní z disku.",
+  },
   sidebar: {
     conversations: "Konverzace",
     search: "Hledat...",

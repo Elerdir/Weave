@@ -96,6 +96,13 @@ const en: Messages = {
       later: "Later",
     },
   },
+  gallery: {
+    title: "Generated images gallery",
+    refresh: "Refresh",
+    empty: "No generated images yet.",
+    delete: "Delete image",
+    deleteConfirm: "Delete {name} from the gallery? The file will be removed from disk.",
+  },
   sidebar: {
     conversations: "Conversations",
     search: "Search...",
