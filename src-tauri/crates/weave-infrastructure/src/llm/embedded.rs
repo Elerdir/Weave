@@ -223,11 +223,19 @@ fn run_inference(
             .map_err(|e| AppError::Llm(format!("Decode: {e}")))?;
     }
 
+    // Repetition penalty (penalty_last_n=64, repeat=1.15) je klíčová — bez ní
+    // menší modely upadají do smyček a opakují dokola tutéž větu. Seed je
+    // náhodný, aby regenerace / další povídky nevycházely pokaždé stejně.
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(1234);
     let mut sampler = LlamaSampler::chain_simple([
+        LlamaSampler::penalties(64, 1.15, 0.0, 0.0),
         LlamaSampler::top_k(40),
         LlamaSampler::top_p(0.95, 1),
         LlamaSampler::temp(req.request.temperature.max(0.1)),
-        LlamaSampler::dist(1234),
+        LlamaSampler::dist(seed),
     ]);
 
     // UTF-8 decoder napříč tokeny — jeden token může být jen část
