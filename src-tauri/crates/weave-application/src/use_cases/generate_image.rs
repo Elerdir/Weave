@@ -24,7 +24,7 @@ impl GenerateImageUseCase {
         if !self.image_gen.is_available().await {
             let _ = tx
                 .send(ImageProgress::Error(
-                    "ComfyUI není dostupný. Zkontroluj zda běží na localhost:8188.".into(),
+                    "ComfyUI není dostupný. Zkontroluj, že běží jeho lokální server.".into(),
                 ))
                 .await;
             return Ok(());

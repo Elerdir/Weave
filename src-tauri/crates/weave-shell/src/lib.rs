@@ -32,7 +32,11 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
         .unwrap_or_default();
 
     let models_dir = data_dir.join("models");
-    let comfyui_url = "http://localhost:8188".to_string();
+    // Musí odpovídat portu, na kterém LocalComfyInstaller spouští server.
+    let comfyui_url = format!(
+        "http://localhost:{}",
+        weave_infrastructure::comfy_installer::COMFYUI_DEFAULT_PORT
+    );
     let comfyui_install_dir = data_dir.join("comfyui");
     let reference_images_dir = data_dir.join("weave").join("reference-images");
 

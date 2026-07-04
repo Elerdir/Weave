@@ -102,6 +102,52 @@ impl ComfyUiClient {
             format!("{}/{}", uploaded.subfolder, uploaded.name)
         })
     }
+
+    /// Ověří, že běžící ComfyUI zná daný checkpoint (dotaz na `/object_info`).
+    /// Když ne, vrátí srozumitelnou chybu — typicky na portu poslouchá jiná
+    /// ComfyUI instance (např. z AI Studia) než ta, do které Weave stahuje
+    /// modely. Bez tohohle by /prompt vrátil jen kryptické „value_not_in_list".
+    /// Nedostupné `/object_info` = kontrolu přeskočíme (chybu ukáže až /prompt).
+    async fn verify_checkpoint_available(&self, ckpt_name: &str) -> AppResult<()> {
+        let url = format!("{}/object_info/CheckpointLoaderSimple", self.base_url);
+        let Ok(resp) = self.http.get(&url).send().await else {
+            return Ok(());
+        };
+        if !resp.status().is_success() {
+            return Ok(());
+        }
+        let Ok(info) = resp.json::<serde_json::Value>().await else {
+            return Ok(());
+        };
+
+        let list = info
+            .get("CheckpointLoaderSimple")
+            .and_then(|c| c.get("input"))
+            .and_then(|i| i.get("required"))
+            .and_then(|r| r.get("ckpt_name"))
+            .and_then(|c| c.get(0))
+            .and_then(|l| l.as_array());
+
+        let Some(list) = list else {
+            return Ok(());
+        };
+        if list.iter().any(|v| v.as_str() == Some(ckpt_name)) {
+            return Ok(());
+        }
+
+        let available: Vec<&str> = list.iter().filter_map(|v| v.as_str()).collect();
+        let available = if available.is_empty() {
+            "žádné".to_string()
+        } else {
+            available.join(", ")
+        };
+        Err(AppError::ComfyUi(format!(
+            "Běžící ComfyUI nezná model '{ckpt_name}'. Na adrese {} nejspíš poslouchá jiná \
+             ComfyUI instance (např. z AI Studia) než ta, kterou spravuje Weave - zavři ji \
+             a zkus generování znovu. Dostupné modely: {available}.",
+            self.base_url
+        )))
+    }
 }
 
 #[async_trait]
@@ -123,6 +169,19 @@ impl ImageGenPort for ComfyUiClient {
         };
         let workflow =
             build_basic_workflow(&request, &uploaded_references, uploaded_init.as_deref());
+
+        // Preflight: zná běžící ComfyUI požadovaný checkpoint? Když ne, dej
+        // srozumitelnou chybu (nejspíš cizí instance na portu) místo kryptické
+        // validace z /prompt.
+        if let Some(ckpt) = workflow
+            .get("1")
+            .and_then(|n| n.get("inputs"))
+            .and_then(|i| i.get("ckpt_name"))
+            .and_then(|v| v.as_str())
+        {
+            self.verify_checkpoint_available(ckpt).await?;
+        }
+
         let client_id = uuid::Uuid::new_v4().to_string();
 
         let prompt_req = PromptRequest {
@@ -973,5 +1032,71 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+    }
+
+    fn checkpoint_object_info(names: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "CheckpointLoaderSimple": {
+                "input": { "required": { "ckpt_name": [names, { "tooltip": "x" }] } }
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn verify_checkpoint_errors_when_not_in_running_comfyui() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/object_info/CheckpointLoaderSimple"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(checkpoint_object_info(&["sd_xl_base_1.0.safetensors"])),
+            )
+            .mount(&server)
+            .await;
+
+        let client = ComfyUiClient::new(server.uri());
+        let result = client
+            .verify_checkpoint_available("RealVisXL_V5.0_fp16.safetensors")
+            .await;
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("RealVisXL_V5.0_fp16.safetensors"));
+        assert!(
+            err.contains("sd_xl_base_1.0.safetensors"),
+            "chyba vypíše dostupné modely"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_checkpoint_ok_when_present() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/object_info/CheckpointLoaderSimple"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(checkpoint_object_info(&[
+                    "sd_xl_base_1.0.safetensors",
+                    "RealVisXL_V5.0_fp16.safetensors",
+                ])),
+            )
+            .mount(&server)
+            .await;
+
+        let client = ComfyUiClient::new(server.uri());
+        assert!(client
+            .verify_checkpoint_available("RealVisXL_V5.0_fp16.safetensors")
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn verify_checkpoint_skips_when_object_info_unavailable() {
+        // Nedostupné /object_info (404) → kontrola se přeskočí (Ok), chybu
+        // ať případně ukáže až /prompt.
+        let server = MockServer::start().await;
+        let client = ComfyUiClient::new(server.uri());
+        assert!(client
+            .verify_checkpoint_available("cokoliv.safetensors")
+            .await
+            .is_ok());
     }
 }
