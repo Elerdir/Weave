@@ -20,7 +20,11 @@ use process::{
 
 const COMFYUI_REPO: &str = "https://github.com/comfyanonymous/ComfyUI.git";
 const PULID_REPO: &str = "https://github.com/cubiq/PuLID_ComfyUI.git";
-pub const COMFYUI_DEFAULT_PORT: u16 = 8188;
+/// Weave spouští vlastní ComfyUI na dedikovaném portu, ne na standardním
+/// 8188 — na 8188 běžně poslouchají jiné ComfyUI instalace (např. z AI
+/// Studia). Kdyby Weave použil 8188, health-check by se navázal na cizí
+/// instanci s jinými modely a workflow by padal na „checkpoint not in list".
+pub const COMFYUI_DEFAULT_PORT: u16 = 8199;
 
 /// Základní SDXL checkpoint — používá ho text-to-image i PuLID větev workflow.
 /// `cubiq/PuLID_ComfyUI` patchuje SDXL cross-attention, ne FLUX/DiT. SDXL base
