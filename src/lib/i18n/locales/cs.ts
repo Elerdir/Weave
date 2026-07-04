@@ -105,6 +105,7 @@ const cs = {
     prompt: "Prompt",
     negativePrompt: "Negativní:",
     copyPrompt: "Kopírovat prompt",
+    openExternal: "Otevřít v prohlížeči fotek",
   },
   sidebar: {
     conversations: "Konverzace",

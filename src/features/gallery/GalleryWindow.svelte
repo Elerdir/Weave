@@ -53,6 +53,15 @@
     await navigator.clipboard.writeText(prompt);
   }
 
+  /** Otevře obrázek v systémovém prohlížeči fotek (výchozí aplikace pro PNG). */
+  async function openInViewer(img: GalleryImage) {
+    try {
+      await invoke("open_image_external", { path: img.path });
+    } catch (e) {
+      console.warn("Otevření obrázku selhalo:", e);
+    }
+  }
+
   function formatSize(bytes: number): string {
     if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     return `${Math.ceil(bytes / 1024)} kB`;
@@ -71,7 +80,14 @@
     <div class="grid">
       {#each images as img (img.path)}
         <div class="card">
-          <img src={convertFileSrc(img.path)} alt={img.file_name} loading="lazy" />
+          <button
+            class="img-btn"
+            onclick={() => openInViewer(img)}
+            title={i18n.m.gallery.openExternal}
+            aria-label={i18n.m.gallery.openExternal}
+          >
+            <img src={convertFileSrc(img.path)} alt={img.file_name} loading="lazy" />
+          </button>
           <div class="card-footer">
             <span class="name" title={img.file_name}>{img.file_name}</span>
             <span class="size">{formatSize(img.size_bytes)}</span>
@@ -168,6 +184,16 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+  }
+
+  .img-btn {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+    line-height: 0;
   }
 
   .card img {
