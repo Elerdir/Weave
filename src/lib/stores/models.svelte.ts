@@ -32,6 +32,8 @@ export interface DownloadState {
   downloaded: number;
   total: number;
   phase: "downloading" | "verifying";
+  /** Aktuální rychlost stahování v bajtech/s (vyhlazený odhad). */
+  speedBytesPerSec: number;
 }
 
 interface DownloadEvent {
@@ -47,6 +49,55 @@ export function formatBytes(bytes: number): string {
   const units = ["B", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
+}
+
+/** Rychlost stahování jako čitelný text, např. „12.3 MB/s". */
+export function formatSpeed(bytesPerSec: number): string {
+  if (bytesPerSec <= 0) return "";
+  return `${formatBytes(bytesPerSec)}/s`;
+}
+
+/** Zbývající čas stahování jako „m:ss" / „h:mm:ss"; prázdný, když nelze určit. */
+export function formatEta(remainingBytes: number, bytesPerSec: number): string {
+  if (bytesPerSec <= 0 || remainingBytes <= 0) return "";
+  const secs = Math.round(remainingBytes / bytesPerSec);
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+/**
+ * Průběžný odhad rychlosti stahování. Progress eventy chodí po každém chunku
+ * (velmi často), takže vzorkujeme nejvýš jednou za `SAMPLE_MS` a rychlost
+ * vyhlazujeme klouzavým průměrem (EMA), aby číslo neposkakovalo.
+ */
+const SAMPLE_MS = 500;
+function createSpeedMeter() {
+  let lastTime = 0;
+  let lastBytes = 0;
+  let speed = 0;
+
+  return {
+    reset() {
+      lastTime = performance.now();
+      lastBytes = 0;
+      speed = 0;
+    },
+    /** Zapíše nový počet stažených bajtů a vrátí aktuální odhad rychlosti. */
+    update(downloaded: number): number {
+      const now = performance.now();
+      const dt = now - lastTime;
+      if (dt >= SAMPLE_MS) {
+        const inst = ((downloaded - lastBytes) / dt) * 1000;
+        speed = speed === 0 ? inst : speed * 0.6 + inst * 0.4;
+        lastTime = now;
+        lastBytes = downloaded;
+      }
+      return speed;
+    },
+  };
 }
 
 function createModelsStore() {
@@ -104,21 +155,32 @@ function createModelsStore() {
 
   async function runDownload(modelId: string, invokeDownload: () => Promise<unknown>) {
     error = null;
-    download = { modelId, downloaded: 0, total: 0, phase: "downloading" };
+    download = { modelId, downloaded: 0, total: 0, phase: "downloading", speedBytesPerSec: 0 };
+    const meter = createSpeedMeter();
+    meter.reset();
 
     const unlisten = await listen<DownloadEvent>("model-download-progress", (e) => {
       const ev = e.payload;
       if (ev.type === "started") {
-        download = { modelId, downloaded: 0, total: ev.total ?? 0, phase: "downloading" };
-      } else if (ev.type === "progress") {
+        meter.reset();
         download = {
           modelId,
-          downloaded: ev.downloaded ?? 0,
+          downloaded: 0,
           total: ev.total ?? 0,
           phase: "downloading",
+          speedBytesPerSec: 0,
+        };
+      } else if (ev.type === "progress") {
+        const downloaded = ev.downloaded ?? 0;
+        download = {
+          modelId,
+          downloaded,
+          total: ev.total ?? 0,
+          phase: "downloading",
+          speedBytesPerSec: meter.update(downloaded),
         };
       } else if (ev.type === "verifying") {
-        if (download) download = { ...download, phase: "verifying" };
+        if (download) download = { ...download, phase: "verifying", speedBytesPerSec: 0 };
       } else if (ev.type === "done") {
         download = null;
         unlisten();

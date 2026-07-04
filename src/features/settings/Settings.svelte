@@ -9,7 +9,7 @@
   import { open as openUrl } from "@tauri-apps/plugin-shell";
   import { settingsStore } from "$lib/stores/settings.svelte";
   import type { ApiServiceId } from "$lib/stores/settings.svelte";
-  import { modelsStore, formatBytes } from "$lib/stores/models.svelte";
+  import { modelsStore, formatBytes, formatSpeed, formatEta } from "$lib/stores/models.svelte";
   import { comfyInstallStore } from "$lib/stores/comfy-install.svelte";
   import { updaterStore } from "$lib/stores/updater.svelte";
   import { getVersion } from "@tauri-apps/api/app";
@@ -315,7 +315,7 @@
                     {#if modelsStore.download.phase === "verifying"}
                       {i18n.m.common.loading}
                     {:else}
-                      {formatBytes(modelsStore.download.downloaded)} / {formatBytes(modelsStore.download.total)}
+                      {formatBytes(modelsStore.download.downloaded)} / {formatBytes(modelsStore.download.total)}{#if modelsStore.download.speedBytesPerSec > 0} · {formatSpeed(modelsStore.download.speedBytesPerSec)}{#if formatEta(modelsStore.download.total - modelsStore.download.downloaded, modelsStore.download.speedBytesPerSec)} · ⏱ {formatEta(modelsStore.download.total - modelsStore.download.downloaded, modelsStore.download.speedBytesPerSec)}{/if}{/if}
                     {/if}
                   </span>
                 </div>
