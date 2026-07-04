@@ -62,4 +62,9 @@ pub trait LlmPort: Send + Sync {
     ) -> AppResult<()>;
 
     async fn list_available_models(&self) -> AppResult<Vec<String>>;
+
+    /// Uvolní model z paměti (VRAM), pokud nějaký drží. Vestavěná GPU
+    /// inference tím na dobu generování obrázku uvolní VRAM pro ComfyUI;
+    /// model se pak líně načte při další zprávě. Cloud/HTTP backendy no-op.
+    async fn unload(&self) {}
 }
