@@ -368,6 +368,42 @@
           onchange={() => generationSettingsStore.save()}
         />
       </div>
+
+      <div class="gen-section">{i18n.m.chat.genSettings.imageFidelity}</div>
+
+      <div class="gen-field">
+        <div class="gen-label-row">
+          <label for="gen-pulid">{i18n.m.chat.genSettings.pulidWeight}</label>
+          <span class="gen-value">{generationSettingsStore.pulidWeight.toFixed(2)}</span>
+        </div>
+        <input
+          id="gen-pulid"
+          type="range"
+          min="0.4"
+          max="1.4"
+          step="0.05"
+          value={generationSettingsStore.pulidWeight}
+          oninput={(e) =>
+            generationSettingsStore.setPulidWeight(Number((e.target as HTMLInputElement).value))}
+          onchange={() => generationSettingsStore.save()}
+        />
+        <p class="gen-hint">{i18n.m.chat.genSettings.pulidWeightHint}</p>
+      </div>
+
+      <div class="gen-field">
+        <label class="gen-toggle">
+          <input
+            type="checkbox"
+            checked={generationSettingsStore.faceDetailer}
+            onchange={(e) => {
+              generationSettingsStore.setFaceDetailer((e.target as HTMLInputElement).checked);
+              void generationSettingsStore.save();
+            }}
+          />
+          <span>{i18n.m.chat.genSettings.faceDetailer}</span>
+        </label>
+        <p class="gen-hint">{i18n.m.chat.genSettings.faceDetailerHint}</p>
+      </div>
     </div>
   {/if}
 
@@ -671,6 +707,39 @@
   .gen-field input[type="range"] {
     width: 100%;
     accent-color: var(--color-accent);
+  }
+
+  .gen-section {
+    flex: 1 1 100%;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-muted);
+    border-top: 1px solid var(--color-border);
+    padding-top: 0.6rem;
+    margin-top: -0.25rem;
+  }
+
+  .gen-hint {
+    margin: 0.3rem 0 0;
+    font-size: 0.7rem;
+    line-height: 1.3;
+    color: var(--color-text-muted);
+  }
+
+  .gen-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+    cursor: pointer;
+  }
+
+  .gen-toggle input[type="checkbox"] {
+    accent-color: var(--color-accent);
+    width: 1rem;
+    height: 1rem;
   }
 
   .messages {

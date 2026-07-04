@@ -148,15 +148,43 @@ impl ComfyUiClient {
             self.base_url
         )))
     }
+
+    /// Zná běžící ComfyUI daný typ uzlu (`/object_info/<class>`)? Slouží k
+    /// „graceful degradation" volitelných uzlů (FaceDetailer z Impact Packu) —
+    /// když chybí nebo je `/object_info` nedostupné, vrátíme `false` a workflow
+    /// se poskládá bez něj, místo aby /prompt spadl na neznámém uzlu.
+    async fn verify_node_available(&self, class_type: &str) -> bool {
+        let url = format!("{}/object_info/{class_type}", self.base_url);
+        let Ok(resp) = self.http.get(&url).send().await else {
+            return false;
+        };
+        if !resp.status().is_success() {
+            return false;
+        }
+        match resp.json::<serde_json::Value>().await {
+            Ok(info) => info.get(class_type).is_some(),
+            Err(_) => false,
+        }
+    }
 }
 
 #[async_trait]
 impl ImageGenPort for ComfyUiClient {
     async fn generate(
         &self,
-        request: ImageRequest,
+        mut request: ImageRequest,
         tx: mpsc::Sender<ImageProgress>,
     ) -> AppResult<()> {
+        // FaceDetailer (Impact Pack) je volitelný uzel — když ho běžící ComfyUI
+        // nezná (instalace ho ještě nemá), radši ho ze zadání shodíme, aby
+        // /prompt nespadl na neznámém uzlu. Ostatní kroky pipeline pokračují.
+        if request.face_detailer && !self.verify_node_available("FaceDetailer").await {
+            tracing::warn!(
+                "FaceDetailer uzel není v běžícím ComfyUI dostupný — generuji bez doladění obličeje"
+            );
+            request.face_detailer = false;
+        }
+
         // Referenční obrázky musí být nahrané do ComfyUI dřív, než na ně
         // může workflow (LoadImage uzly) odkázat jménem.
         let mut uploaded_references = Vec::with_capacity(request.reference_image_paths.len());
@@ -343,7 +371,76 @@ fn build_basic_workflow(
     if req.hires_fix {
         apply_hires_fix(&mut workflow, req);
     }
+    if req.face_detailer {
+        apply_face_detailer(&mut workflow, req);
+    }
     workflow
+}
+
+/// Doladí detekovaný obličej: `UltralyticsDetectorProvider` (uzel 40) najde
+/// tvář a `FaceDetailer` (uzel 41) ji vyřízne, přesampluje s nízkým denoise
+/// a vloží zpět — nejvíc pomůže očím, které bývají „divné". Vstupní obrázek
+/// bere z `VAEDecode` (6, tj. i po hi-res průchodu), `SaveImage` (7) pak čte
+/// z FaceDetaileru. Model/CLIP/podmínky přebírá z hlavního sampleru (5) a text
+/// encodéru (2), takže sedí i pro PuLID / LoRA / clip-skip varianty.
+///
+/// Volá se jen když je `FaceDetailer` v běžícím ComfyUI dostupný (Impact Pack) —
+/// dostupnost ověří `generate()` předem a jinak `req.face_detailer` shodí.
+fn apply_face_detailer(workflow: &mut serde_json::Value, req: &ImageRequest) {
+    let map = workflow.as_object_mut().expect("workflow je JSON objekt");
+    let model = map["5"]["inputs"]["model"].clone();
+    let positive = map["5"]["inputs"]["positive"].clone();
+    let negative = map["5"]["inputs"]["negative"].clone();
+    let clip = map["2"]["inputs"]["clip"].clone();
+    let seed = req.seed.unwrap_or(42);
+
+    map.insert(
+        "40".into(),
+        serde_json::json!({
+            "class_type": "UltralyticsDetectorProvider",
+            "inputs": { "model_name": crate::comfy_installer::FACE_DETECTOR_MODEL_NAME }
+        }),
+    );
+    map.insert(
+        "41".into(),
+        serde_json::json!({
+            "class_type": "FaceDetailer",
+            "inputs": {
+                "image": ["6", 0],
+                "model": model,
+                "clip": clip,
+                "vae": ["1", 2],
+                "positive": positive,
+                "negative": negative,
+                "bbox_detector": ["40", 0],
+                "guide_size": 512,
+                "guide_size_for": true,
+                "max_size": 1024,
+                "seed": seed,
+                "steps": 20,
+                "cfg": req.cfg_scale,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "denoise": 0.5,
+                "feather": 5,
+                "noise_mask": true,
+                "force_inpaint": true,
+                "bbox_threshold": 0.5,
+                "bbox_dilation": 10,
+                "bbox_crop_factor": 3.0,
+                "sam_detection_hint": "center-1",
+                "sam_dilation": 0,
+                "sam_threshold": 0.93,
+                "sam_bbox_expansion": 0,
+                "sam_mask_hint_threshold": 0.7,
+                "sam_mask_hint_use_negative": "False",
+                "drop_size": 10,
+                "wildcard": "",
+                "cycle": 1
+            }
+        }),
+    );
+    map["7"]["inputs"]["images"] = serde_json::json!(["41", 0]);
 }
 
 /// Hi-res průchod: latent z hlavního sampleru (5) se zvětší 1,5× (uzel 17)
@@ -613,8 +710,9 @@ fn build_pulid_workflow(req: &ImageRequest, uploaded_images: &[String]) -> serde
             "class_type": "PulidEvaClipLoader",
             "inputs": {}
         },
-        // fidelity/1.0/celý rozsah start_at..end_at — stejné hodnoty jako
-        // v ukázkových workflow z cubiq/PuLID_ComfyUI (nejbližší podobnost referenci).
+        // fidelity/celý rozsah start_at..end_at — jako v ukázkových workflow
+        // z cubiq/PuLID_ComfyUI. `weight` (síla podoby) je per-konverzace
+        // laditelná (posuvník v chatu), výchozí 1.0.
         "12": {
             "class_type": "ApplyPulid",
             "inputs": {
@@ -624,7 +722,7 @@ fn build_pulid_workflow(req: &ImageRequest, uploaded_images: &[String]) -> serde
                 "face_analysis": ["10", 0],
                 "image": ["8", 0],
                 "method": "fidelity",
-                "weight": 1.0,
+                "weight": req.pulid_weight,
                 "start_at": 0.0,
                 "end_at": 1.0
             }
@@ -769,6 +867,8 @@ mod tests {
             lora_file: None,
             init_image_path: None,
             hires_fix: false,
+            pulid_weight: 1.0,
+            face_detailer: false,
         }
     }
 
@@ -814,6 +914,73 @@ mod tests {
         let plain = build_basic_workflow(&sample_request(), &[], None);
         assert!(plain.get("17").is_none());
         assert_eq!(plain["6"]["inputs"]["samples"][0], "5");
+    }
+
+    #[test]
+    fn pulid_weight_from_request_drives_apply_pulid() {
+        let mut req = sample_request();
+        req.pulid_weight = 0.65;
+        let workflow = build_basic_workflow(&req, &["ref.png".into()], None);
+
+        assert_eq!(workflow["12"]["class_type"], "ApplyPulid");
+        let weight = workflow["12"]["inputs"]["weight"].as_f64().unwrap();
+        assert!((weight - 0.65).abs() < 1e-6, "weight = {weight}");
+        assert_eq!(workflow["12"]["inputs"]["method"], "fidelity");
+    }
+
+    #[test]
+    fn face_detailer_appends_detector_and_rewires_save() {
+        let mut req = sample_request();
+        req.face_detailer = true;
+        let workflow = build_basic_workflow(&req, &["ref.png".into()], None);
+
+        // Detektor (40) + FaceDetailer (41) existují a jsou správně propojené
+        assert_eq!(workflow["40"]["class_type"], "UltralyticsDetectorProvider");
+        assert_eq!(
+            workflow["40"]["inputs"]["model_name"],
+            crate::comfy_installer::FACE_DETECTOR_MODEL_NAME
+        );
+        assert_eq!(workflow["41"]["class_type"], "FaceDetailer");
+        assert_eq!(
+            workflow["41"]["inputs"]["image"],
+            serde_json::json!(["6", 0])
+        );
+        assert_eq!(
+            workflow["41"]["inputs"]["bbox_detector"],
+            serde_json::json!(["40", 0])
+        );
+        // U reference přebírá PuLID-patchnutý model (uzel 12) → drží podobu
+        assert_eq!(
+            workflow["41"]["inputs"]["model"],
+            serde_json::json!(["12", 0])
+        );
+        // SaveImage (7) teď čte z FaceDetaileru, ne přímo z decode (6)
+        assert_eq!(
+            workflow["7"]["inputs"]["images"],
+            serde_json::json!(["41", 0])
+        );
+
+        // Bez přepínače se nic nepřidá a SaveImage čte z decode (6)
+        let plain = build_basic_workflow(&sample_request(), &["ref.png".into()], None);
+        assert!(plain.get("40").is_none());
+        assert!(plain.get("41").is_none());
+        assert_eq!(plain["7"]["inputs"]["images"], serde_json::json!(["6", 0]));
+    }
+
+    #[test]
+    fn face_detailer_runs_after_hires_reads_final_decode() {
+        // Kombinace hi-res + FaceDetailer: decode (6) bere z hi-res sampleru (18),
+        // FaceDetailer bere hotový obrázek z decode (6).
+        let mut req = sample_request();
+        req.hires_fix = true;
+        req.face_detailer = true;
+        let workflow = build_basic_workflow(&req, &[], None);
+
+        assert_eq!(workflow["6"]["inputs"]["samples"][0], "18");
+        assert_eq!(
+            workflow["41"]["inputs"]["image"],
+            serde_json::json!(["6", 0])
+        );
     }
 
     #[test]
@@ -1233,6 +1400,29 @@ mod tests {
             .verify_checkpoint_available("RealVisXL_V5.0_fp16.safetensors")
             .await
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn verify_node_available_true_when_object_info_lists_it() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/object_info/FaceDetailer"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "FaceDetailer": { "input": { "required": {} } }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ComfyUiClient::new(server.uri());
+        assert!(client.verify_node_available("FaceDetailer").await);
+    }
+
+    #[tokio::test]
+    async fn verify_node_available_false_when_absent_or_unreachable() {
+        // 404 (uzel/instalace ho nezná) → false, workflow se poskládá bez něj
+        let server = MockServer::start().await;
+        let client = ComfyUiClient::new(server.uri());
+        assert!(!client.verify_node_available("FaceDetailer").await);
     }
 
     #[tokio::test]

@@ -84,6 +84,13 @@ const cs = {
       temperature: "Teplota (kreativita)",
       maxTokens: "Max. tokenů odpovědi",
       unlimited: "Neomezeno",
+      imageFidelity: "Věrnost podoby (obrázky)",
+      pulidWeight: "Síla podoby (PuLID)",
+      pulidWeightHint:
+        "Jak silně se drží referenční fotky. Výš = věrnější tvář, ale méně volnosti pro prompt (riziko artefaktů).",
+      faceDetailer: "Doladit obličej / oči",
+      faceDetailerHint:
+        "Druhý průchod přesampluje detekovaný obličej — nejvíc pomůže očím. Poprvé stáhne Impact Pack (~stovky MB) a přidá čas ke generování.",
     },
     contextMeter: {
       tooltip: "Odhad vyčerpání kontextového okna konverzace (~4 znaky na token)",

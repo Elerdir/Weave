@@ -376,14 +376,25 @@ impl SendMessageUseCase {
             }
         });
 
+        // Per-konverzační parametry (posuvníky v chatu) — použijí se pro text
+        // (kontext/teplota/tokeny) i pro obrázky (síla PuLID, FaceDetailer).
+        let gen = self.gen_settings_repo.get(&conversation_id).await?;
+
         // Úprava obrázku (init_image) je vždy generování obrázku, bez ohledu
         // na to, jak by heuristika klasifikovala samotný text instrukce.
         let is_image =
             init_image.is_some() || matches!(intent, weave_domain::model::Intent::ImageGeneration);
         let result = match is_image {
             true => {
-                self.handle_image(content, reference_image_paths, init_image, tee_tx)
-                    .await
+                self.handle_image(
+                    content,
+                    reference_image_paths,
+                    init_image,
+                    gen.pulid_weight_or_default(),
+                    gen.face_detailer_enabled(),
+                    tee_tx,
+                )
+                .await
             }
             false => {
                 let mut history = self.msg_repo.list_by_conversation(&conversation_id).await?;
@@ -400,9 +411,6 @@ impl SendMessageUseCase {
                 {
                     history.insert(0, Message::system(conversation_id.clone(), prompt));
                 }
-
-                // Per-konverzační parametry (posuvníky v chatu)
-                let gen = self.gen_settings_repo.get(&conversation_id).await?;
 
                 let model_id = Self::model_for_intent(&intent);
                 let request = ChatRequest {
@@ -476,11 +484,14 @@ impl SendMessageUseCase {
     /// doinstaluje ComfyUI, stáhne model podle stylu promptu, spustí server,
     /// vygeneruje, a nakonec server zastaví (uvolní VRAM — soubory modelů
     /// zůstávají na disku pro příště). Průběh hlásí přes ImageStage chunky.
+    #[allow(clippy::too_many_arguments)]
     async fn handle_image(
         &self,
         prompt: String,
         reference_image_paths: Vec<String>,
         init_image: Option<String>,
+        pulid_weight: f32,
+        face_detailer: bool,
         stream_tx: mpsc::Sender<StreamChunk>,
     ) -> AppResult<()> {
         use crate::ports::comfy_installer_port::ComfyStatus;
@@ -539,6 +550,26 @@ impl SendMessageUseCase {
             let result = self.comfy_installer.ensure_reference_assets(itx).await;
             let _ = fwd.await;
             result?;
+        }
+
+        // 2c. FaceDetailer (Impact Pack) — jen když si uživatel zapnul doladění
+        // obličeje. Musí se doinstalovat PŘED spuštěním serveru, jinak by
+        // ComfyUI nový uzel nenačetl. Když instalace selže, generuje se dál bez
+        // něj (comfyui klient si dostupnost uzlu ověří a případně ho vypustí).
+        if face_detailer {
+            let (itx, irx) = mpsc::channel(64);
+            let fwd = tokio::spawn(forward_install_progress(
+                ImageStage::DownloadingModel,
+                irx,
+                stream_tx.clone(),
+            ));
+            let result = self.comfy_installer.ensure_face_detailer_assets(itx).await;
+            let _ = fwd.await;
+            if let Err(e) = result {
+                tracing::warn!(
+                    "Instalace FaceDetaileru selhala ({e}) — generuji bez doladění obličeje"
+                );
+            }
         }
 
         // 3. Server
@@ -654,6 +685,9 @@ impl SendMessageUseCase {
             init_image_path: init_image,
             // Hi-res dolaďovací průchod hlavně kvůli obličeji u celé postavy.
             hires_fix: full_body,
+            // Síla PuLID podoby a doladění obličeje (per-konverzace, z posuvníků).
+            pulid_weight,
+            face_detailer,
         };
 
         // Generování běží v samostatné úloze a průběh vyprazdňujeme SOUBĚŽNĚ.
@@ -1340,6 +1374,7 @@ mod tests {
                     context_length: Some(16384),
                     temperature: Some(1.4),
                     max_tokens: Some(512),
+                    ..Default::default()
                 })
             })
         });
@@ -1548,6 +1583,96 @@ mod tests {
             "nakresli mě jako rytíře".into(),
             vec![],
             vec!["C:/fotky/ja.png".into()],
+            tx,
+        )
+        .await
+        .unwrap();
+
+        while let Some(chunk) = rx.recv().await {
+            if let StreamChunk::Error(e) = chunk {
+                panic!("necekana chyba: {e}");
+            }
+        }
+    }
+
+    /// Zapnutý FaceDetailer (per-konverzace) musí před generováním doinstalovat
+    /// Impact Pack assety a propsat sílu PuLID i příznak do ImageRequestu.
+    #[tokio::test]
+    async fn face_detailer_setting_installs_assets_and_reaches_request() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        // Per-konverzační nastavení: síla PuLID 0.7 + zapnutý FaceDetailer
+        let mut gen_repo = MockGenerationSettingsRepository::new();
+        gen_repo.expect_get().returning(|_| {
+            Box::pin(async {
+                Ok(weave_domain::generation_settings::GenerationSettings {
+                    pulid_weight: Some(0.7),
+                    face_detailer: Some(true),
+                    ..Default::default()
+                })
+            })
+        });
+
+        let mut installer = MockComfyInstallerPort::new();
+        installer
+            .expect_status()
+            .returning(|| Box::pin(async { Ok(ComfyStatus::Running) }));
+        installer
+            .expect_ensure_style_checkpoint()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        // Klíčové: FaceDetailer assety se musí doinstalovat právě jednou
+        installer
+            .expect_ensure_face_detailer_assets()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(()) }));
+        installer
+            .expect_stop_server()
+            .returning(|| Box::pin(async { Ok(()) }));
+
+        let mut image_gen = MockImageGenPort::new();
+        image_gen
+            .expect_generate()
+            .withf(|req: &ImageRequest, _tx| {
+                req.face_detailer && (req.pulid_weight - 0.7).abs() < 1e-6
+            })
+            .returning(|_req, tx| {
+                Box::pin(async move {
+                    let _ = tx
+                        .send(ImageProgress::Done {
+                            output_path: "/gallery/face.png".into(),
+                        })
+                        .await;
+                    Ok(())
+                })
+            });
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(image_prompt_llm()),
+            Arc::new(image_gen),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(gen_repo),
+            Arc::new(installer),
+            Arc::new(default_lora_catalog()),
+        );
+
+        let (tx, mut rx) = mpsc::channel(64);
+        uc.execute(
+            ConversationId::new(),
+            "nakresli mi portrét".into(),
+            vec![],
+            vec![],
             tx,
         )
         .await

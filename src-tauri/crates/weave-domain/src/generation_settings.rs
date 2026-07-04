@@ -10,12 +10,29 @@ pub struct GenerationSettings {
     pub temperature: Option<f32>,
     /// Strop délky odpovědi v tokenech. `None` = bez umělého omezení.
     pub max_tokens: Option<u32>,
+    /// Síla PuLID identity (ApplyPulid `weight`) při generování podle
+    /// referenční fotky. Vyšší = věrnější podoba, ale méně prostoru pro
+    /// prompt (přeučení, artefakty). `None` = výchozí 1.0.
+    pub pulid_weight: Option<f32>,
+    /// Doladit obličej/oči druhým průchodem FaceDetailer (ComfyUI Impact Pack).
+    /// Vyžaduje doinstalování Impact Packu; `None`/`Some(false)` = vypnuto.
+    pub face_detailer: Option<bool>,
 }
 
 impl GenerationSettings {
     /// Efektivní teplota s výchozí hodnotou aplikace.
     pub fn temperature_or_default(&self) -> f32 {
         self.temperature.unwrap_or(0.7)
+    }
+
+    /// Efektivní síla PuLID (výchozí 1.0 = jako v ukázkových workflow PuLID).
+    pub fn pulid_weight_or_default(&self) -> f32 {
+        self.pulid_weight.unwrap_or(1.0)
+    }
+
+    /// Je zapnuté doladění obličeje FaceDetailerem?
+    pub fn face_detailer_enabled(&self) -> bool {
+        self.face_detailer.unwrap_or(false)
     }
 }
 
@@ -29,7 +46,11 @@ mod tests {
         assert!(s.context_length.is_none());
         assert!(s.temperature.is_none());
         assert!(s.max_tokens.is_none());
+        assert!(s.pulid_weight.is_none());
+        assert!(s.face_detailer.is_none());
         assert_eq!(s.temperature_or_default(), 0.7);
+        assert_eq!(s.pulid_weight_or_default(), 1.0);
+        assert!(!s.face_detailer_enabled());
     }
 
     #[test]
@@ -39,5 +60,16 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(s.temperature_or_default(), 1.4);
+    }
+
+    #[test]
+    fn explicit_image_fidelity_fields_win_over_defaults() {
+        let s = GenerationSettings {
+            pulid_weight: Some(0.75),
+            face_detailer: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(s.pulid_weight_or_default(), 0.75);
+        assert!(s.face_detailer_enabled());
     }
 }

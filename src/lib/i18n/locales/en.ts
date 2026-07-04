@@ -86,6 +86,13 @@ const en: Messages = {
       temperature: "Temperature (creativity)",
       maxTokens: "Max response tokens",
       unlimited: "Unlimited",
+      imageFidelity: "Likeness fidelity (images)",
+      pulidWeight: "Likeness strength (PuLID)",
+      pulidWeightHint:
+        "How strongly the reference photos are followed. Higher = truer face, but less room for the prompt (risk of artifacts).",
+      faceDetailer: "Refine face / eyes",
+      faceDetailerHint:
+        "A second pass re-samples the detected face — helps the eyes most. First use downloads the Impact Pack (~hundreds of MB) and adds time to generation.",
     },
     contextMeter: {
       tooltip: "Estimated context window usage for this conversation (~4 chars per token)",
