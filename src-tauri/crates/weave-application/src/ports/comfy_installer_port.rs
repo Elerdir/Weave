@@ -46,6 +46,11 @@ pub trait ComfyInstallerPort: Send + Sync {
     /// verzí appky je mít nemusí. Co existuje, přeskočí; co chybí, stáhne
     /// (s průběhem přes `tx`).
     async fn ensure_reference_assets(&self, tx: mpsc::Sender<InstallProgress>) -> AppResult<()>;
+    /// Zajistí assety pro doladění obličeje FaceDetailerem (ComfyUI Impact
+    /// Pack + Impact Subpack custom nodes, `ultralytics` a detekční model
+    /// obličeje). Co existuje, přeskočí; co chybí, stáhne (průběh přes `tx`).
+    async fn ensure_face_detailer_assets(&self, tx: mpsc::Sender<InstallProgress>)
+        -> AppResult<()>;
     /// Zajistí LoRA soubor v `models/loras` — když chybí, stáhne ho
     /// (s průběhem přes `tx`). Když existuje, nedělá nic.
     async fn ensure_lora(

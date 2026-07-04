@@ -28,6 +28,18 @@ pub struct ImageRequest {
     /// je tvář malá. Zdvojnásobí čas generování.
     #[serde(default)]
     pub hires_fix: bool,
+    /// Síla PuLID identity (ApplyPulid `weight`). Uplatní se jen u generování
+    /// s referenční fotkou. Výchozí 1.0 = jako v ukázkových workflow PuLID.
+    #[serde(default = "default_pulid_weight")]
+    pub pulid_weight: f32,
+    /// Doladit detekovaný obličej druhým průchodem FaceDetailer (Impact Pack).
+    /// Zapojí se, jen když je uzel v běžícím ComfyUI k dispozici.
+    #[serde(default)]
+    pub face_detailer: bool,
+}
+
+fn default_pulid_weight() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

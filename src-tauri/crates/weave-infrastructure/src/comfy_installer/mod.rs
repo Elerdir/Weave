@@ -77,6 +77,19 @@ const PULID_WEIGHTS_URL: &str = "https://huggingface.co/huchenlei/ipadapter_puli
 const ANTELOPEV2_ZIP_URL: &str =
     "https://huggingface.co/MonsterMMORPG/tools/resolve/main/antelopev2.zip";
 
+/// ComfyUI Impact Pack (FaceDetailer uzel) a Impact Subpack
+/// (UltralyticsDetectorProvider) — volitelné doladění obličeje/očí.
+const IMPACT_PACK_REPO: &str = "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git";
+const IMPACT_SUBPACK_REPO: &str = "https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git";
+
+/// YOLO detektor obličeje pro `UltralyticsDetectorProvider`. Ukládá se do
+/// `models/ultralytics/bbox/`, uzel na něj odkazuje s prefixem podsložky
+/// (`bbox/…`) — proto ta hodnota v [`FACE_DETECTOR_MODEL_NAME`].
+pub const FACE_DETECTOR_MODEL_NAME: &str = "bbox/face_yolov8m.pt";
+const FACE_DETECTOR_FILENAME: &str = "face_yolov8m.pt";
+const FACE_DETECTOR_URL: &str =
+    "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt";
+
 pub struct LocalComfyInstaller {
     install_dir: PathBuf,
     server: Arc<Mutex<Option<Child>>>,
@@ -102,6 +115,22 @@ impl LocalComfyInstaller {
 
     fn pulid_dir(&self) -> PathBuf {
         self.custom_nodes_dir().join("PuLID_ComfyUI")
+    }
+
+    fn impact_pack_dir(&self) -> PathBuf {
+        self.custom_nodes_dir().join("ComfyUI-Impact-Pack")
+    }
+
+    fn impact_subpack_dir(&self) -> PathBuf {
+        self.custom_nodes_dir().join("ComfyUI-Impact-Subpack")
+    }
+
+    /// Složka detektorů obličeje pro `UltralyticsDetectorProvider`.
+    fn ultralytics_bbox_dir(&self) -> PathBuf {
+        self.install_dir
+            .join("models")
+            .join("ultralytics")
+            .join("bbox")
     }
 
     fn checkpoints_dir(&self) -> PathBuf {
@@ -224,6 +253,86 @@ impl LocalComfyInstaller {
         extract_zip(&zip_path, &insightface_dir)?;
         std::fs::remove_file(&zip_path).ok();
         Ok(())
+    }
+
+    /// Naklonuje custom node repozitář do `custom_nodes/`, pokud ještě chybí.
+    /// Vrátí `true`, když se klonovalo teď (volající pak doinstaluje pip deps).
+    async fn ensure_custom_node(
+        &self,
+        repo: &str,
+        dir: &std::path::Path,
+        label: &str,
+        tx: &mpsc::Sender<InstallProgress>,
+    ) -> AppResult<bool> {
+        if dir.exists() {
+            return Ok(false);
+        }
+        Self::step(tx, &format!("Stahuji {label} custom node")).await;
+        std::fs::create_dir_all(self.custom_nodes_dir())
+            .map_err(|e| AppError::ComfyUi(e.to_string()))?;
+        run_streamed("git", &["clone", repo, &dir.to_string_lossy()], None, tx).await?;
+        Ok(true)
+    }
+
+    /// Doinstaluje pip závislosti (`requirements.txt`) daného custom node uzlu
+    /// do ComfyUI venv. Selhání jen zaloguje (uzel může fungovat i bez všech
+    /// extras) — neshodí instalaci ComfyUI samotného.
+    async fn install_node_python_deps(
+        &self,
+        dir: &std::path::Path,
+        label: &str,
+        tx: &mpsc::Sender<InstallProgress>,
+    ) {
+        let requirements = dir.join("requirements.txt");
+        if !requirements.exists() {
+            return;
+        }
+        let venv_python = venv_python_path(&self.venv_dir());
+        if !venv_python.exists() {
+            return;
+        }
+        Self::step(tx, &format!("Instaluji závislosti {label}")).await;
+        if let Err(e) = run_streamed(
+            &venv_python.to_string_lossy(),
+            &[
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                &requirements.to_string_lossy(),
+            ],
+            None,
+            tx,
+        )
+        .await
+        {
+            let _ = tx
+                .send(InstallProgress::Output(format!(
+                    "Varování: instalace závislostí {label} selhala ({e}). Doladění obličeje \
+                     (FaceDetailer) nemusí fungovat; ostatní generování je v pořádku."
+                )))
+                .await;
+        }
+    }
+
+    /// Stáhne YOLO detektor obličeje pro `UltralyticsDetectorProvider`, pokud chybí.
+    async fn ensure_face_detector_model(
+        &self,
+        tx: &mpsc::Sender<InstallProgress>,
+    ) -> AppResult<()> {
+        let path = self.ultralytics_bbox_dir().join(FACE_DETECTOR_FILENAME);
+        if path.exists() {
+            return Ok(());
+        }
+        Self::step(tx, "Stahuji detektor obličeje (face_yolov8m ~52 MB)").await;
+        download_file(
+            &self.http,
+            FACE_DETECTOR_URL,
+            &path,
+            "detektor obličeje",
+            tx,
+        )
+        .await
     }
 }
 
@@ -385,6 +494,40 @@ impl ComfyInstallerPort for LocalComfyInstaller {
         }
         self.ensure_pulid_weights(&tx).await?;
         self.ensure_antelopev2(&tx).await
+    }
+
+    async fn ensure_face_detailer_assets(
+        &self,
+        tx: mpsc::Sender<InstallProgress>,
+    ) -> AppResult<()> {
+        // Impact Pack = FaceDetailer uzel; Impact Subpack = UltralyticsDetectorProvider.
+        if self
+            .ensure_custom_node(
+                IMPACT_PACK_REPO,
+                &self.impact_pack_dir(),
+                "Impact Pack",
+                &tx,
+            )
+            .await?
+        {
+            self.install_node_python_deps(&self.impact_pack_dir(), "Impact Pack", &tx)
+                .await;
+        }
+        if self
+            .ensure_custom_node(
+                IMPACT_SUBPACK_REPO,
+                &self.impact_subpack_dir(),
+                "Impact Subpack",
+                &tx,
+            )
+            .await?
+        {
+            self.install_node_python_deps(&self.impact_subpack_dir(), "Impact Subpack", &tx)
+                .await;
+        }
+        self.ensure_face_detector_model(&tx).await?;
+        let _ = tx.send(InstallProgress::Done).await;
+        Ok(())
     }
 
     async fn start_server(&self) -> AppResult<()> {
