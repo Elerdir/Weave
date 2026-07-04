@@ -23,6 +23,11 @@ pub struct ImageRequest {
     /// Výchozí obrázek pro img2img úpravu („uprav tento obrázek") —
     /// latent se místo prázdného plátna vezme z něj (denoise ~0.55).
     pub init_image_path: Option<String>,
+    /// Druhý „hi-res" průchod: latent se zvětší 1,5× a přesampluje s nízkým
+    /// denoise. Přidá detail hlavně obličeji/očím u záběrů celé postavy, kde
+    /// je tvář malá. Zdvojnásobí čas generování.
+    #[serde(default)]
+    pub hires_fix: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

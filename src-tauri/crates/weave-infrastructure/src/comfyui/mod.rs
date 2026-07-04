@@ -316,7 +316,57 @@ fn build_basic_workflow(
     if let Some(init) = uploaded_init {
         apply_init_image(&mut workflow, init);
     }
+    if req.hires_fix {
+        apply_hires_fix(&mut workflow, req);
+    }
     workflow
+}
+
+/// Hi-res průchod: latent z hlavního sampleru (5) se zvětší 1,5× (uzel 17)
+/// a přesampluje druhým KSamplerem (18) s nízkým denoise. Model i prompty
+/// se přebírají z uzlu 5 (už správně zapojené i pro PuLID/LoRA větev), takže
+/// funguje napříč variantami. VAEDecode (6) pak bere latent z 18.
+fn apply_hires_fix(workflow: &mut serde_json::Value, req: &ImageRequest) {
+    let map = workflow.as_object_mut().expect("workflow je JSON objekt");
+    let model = map["5"]["inputs"]["model"].clone();
+    let positive = map["5"]["inputs"]["positive"].clone();
+    let negative = map["5"]["inputs"]["negative"].clone();
+    let seed = req.seed.unwrap_or(42);
+    let hires_w = (req.width as f32 * 1.5) as u32;
+    let hires_h = (req.height as f32 * 1.5) as u32;
+
+    map.insert(
+        "17".into(),
+        serde_json::json!({
+            "class_type": "LatentUpscale",
+            "inputs": {
+                "samples": ["5", 0],
+                "upscale_method": "nearest-exact",
+                "width": hires_w,
+                "height": hires_h,
+                "crop": "disabled"
+            }
+        }),
+    );
+    map.insert(
+        "18".into(),
+        serde_json::json!({
+            "class_type": "KSampler",
+            "inputs": {
+                "model": model,
+                "positive": positive,
+                "negative": negative,
+                "latent_image": ["17", 0],
+                "steps": 15,
+                "cfg": req.cfg_scale,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "denoise": 0.45,
+                "seed": seed
+            }
+        }),
+    );
+    map["6"]["inputs"]["samples"] = serde_json::json!(["18", 0]);
 }
 
 /// Přepne workflow na img2img: latent se místo prázdného plátna vezme
@@ -666,7 +716,28 @@ mod tests {
             reference_image_paths: vec![],
             lora_file: None,
             init_image_path: None,
+            hires_fix: false,
         }
+    }
+
+    #[test]
+    fn hires_fix_adds_second_sampler_pass() {
+        let mut req = sample_request();
+        req.hires_fix = true;
+        let workflow = build_basic_workflow(&req, &[], None);
+
+        // Upscale (17) + druhý KSampler (18) existují a decode bere z 18.
+        assert_eq!(workflow["17"]["class_type"], "LatentUpscale");
+        assert_eq!(workflow["18"]["class_type"], "KSampler");
+        assert_eq!(workflow["18"]["inputs"]["latent_image"][0], "17");
+        assert_eq!(workflow["6"]["inputs"]["samples"][0], "18");
+        // Upscale zvětšuje 1,5× rozměry z requestu.
+        assert_eq!(workflow["17"]["inputs"]["width"], (1024.0 * 1.5) as u32);
+
+        // Bez hires_fix se nic nepřidá a decode bere z hlavního sampleru (5).
+        let plain = build_basic_workflow(&sample_request(), &[], None);
+        assert!(plain.get("17").is_none());
+        assert_eq!(plain["6"]["inputs"]["samples"][0], "5");
     }
 
     #[test]
