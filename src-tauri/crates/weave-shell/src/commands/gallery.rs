@@ -88,6 +88,33 @@ pub async fn delete_gallery_image(file_name: String, app: tauri::AppHandle) -> R
     std::fs::remove_file(&path).map_err(|e| format!("Smazání obrázku selhalo: {e}"))
 }
 
+/// Otevře obrázek v systémovém prohlížeči fotek (výchozí aplikace OS pro
+/// daný typ). `shell open` z frontendu na tohle nestačí — jeho scope povoluje
+/// jen URL, ne souborové cesty.
+#[tauri::command]
+pub fn open_image_external(path: String) -> Result<(), String> {
+    let result = {
+        #[cfg(target_os = "windows")]
+        {
+            // `cmd /C start "" "<cesta>"` — první "" je (prázdný) titulek okna.
+            std::process::Command::new("cmd")
+                .args(["/C", "start", "", &path])
+                .spawn()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open").arg(&path).spawn()
+        }
+        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+        {
+            std::process::Command::new("xdg-open").arg(&path).spawn()
+        }
+    };
+    result
+        .map(|_| ())
+        .map_err(|e| format!("Otevření obrázku selhalo: {e}"))
+}
+
 /// Otevře galerii v samostatném okně (nebo zaostří už otevřené).
 #[tauri::command]
 pub async fn open_gallery_window(app: tauri::AppHandle) -> Result<(), String> {

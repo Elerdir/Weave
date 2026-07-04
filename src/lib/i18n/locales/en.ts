@@ -107,6 +107,7 @@ const en: Messages = {
     prompt: "Prompt",
     negativePrompt: "Negative:",
     copyPrompt: "Copy prompt",
+    openExternal: "Open in photo viewer",
   },
   sidebar: {
     conversations: "Conversations",

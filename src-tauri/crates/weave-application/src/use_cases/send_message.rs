@@ -656,12 +656,14 @@ impl SendMessageUseCase {
             hires_fix: full_body,
         };
 
-        let gen_result = self.image_gen.generate(request, img_tx).await;
-        if gen_result.is_err() {
-            // I po chybě uvolníme VRAM — server by jinak zůstal běžet naprázdno
-            let _ = self.comfy_installer.stop_server().await;
-        }
-        gen_result?;
+        // Generování běží v samostatné úloze a průběh vyprazdňujeme SOUBĚŽNĚ.
+        // Kdyby se drainovalo až po návratu generate() (jako dřív), zaplnil by
+        // se bufferovaný kanál a generate() by se na plném kanálu zaseklo u
+        // delších workflow (PuLID + hi-res průchod = přes 32 zpráv). Obrázek
+        // se stihl uložit do galerie, ale Done do chatu nikdy nedorazil a UI
+        // viselo na „generuji".
+        let image_gen = self.image_gen.clone();
+        let gen_handle = tokio::spawn(async move { image_gen.generate(request, img_tx).await });
 
         while let Some(progress) = img_rx.recv().await {
             match progress {
@@ -692,7 +694,22 @@ impl SendMessageUseCase {
                 }
             }
         }
-        Ok(())
+
+        // Kanál se uzavřel = generate() skončilo (img_tx se dropnul). Vyzvedneme
+        // jeho výsledek; při chybě uvolníme VRAM.
+        match gen_handle.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => {
+                let _ = self.comfy_installer.stop_server().await;
+                Err(e)
+            }
+            Err(join_err) => {
+                let _ = self.comfy_installer.stop_server().await;
+                Err(AppError::ComfyUi(format!(
+                    "Generování obrázku spadlo: {join_err}"
+                )))
+            }
+        }
     }
 
     /// Převede požadavek uživatele (typicky česky) na anglický Stable
@@ -1101,6 +1118,73 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn image_generation_does_not_deadlock_on_many_progress_messages() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut image_gen = MockImageGenPort::new();
+        image_gen.expect_generate().returning(|_req, tx| {
+            Box::pin(async move {
+                // Víc průběhových zpráv, než je buffer kanálu (32) — dřív se
+                // tu generate() zaseklo na plném kanálu (drain běžel až potom).
+                for step in 1..=40u32 {
+                    let _ = tx.send(ImageProgress::Progress { step, total: 40 }).await;
+                }
+                let _ = tx
+                    .send(ImageProgress::Done {
+                        output_path: "/gallery/x.png".into(),
+                    })
+                    .await;
+                Ok(())
+            })
+        });
+
+        let uc = make_full_uc(
+            conv_repo,
+            msg_repo,
+            image_prompt_llm(),
+            image_gen,
+            MockAttachmentStorePort::new(),
+        );
+        let (tx, mut rx) = mpsc::channel(256);
+
+        // Timeout: při deadlocku by test jinak visel donekonečna.
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            uc.execute(
+                ConversationId::new(),
+                "nakresli hrad".into(),
+                vec![],
+                vec![],
+                tx,
+            ),
+        )
+        .await;
+        assert!(
+            res.is_ok(),
+            "handle_image se zaseklo (deadlock na plném kanálu)"
+        );
+        res.unwrap().unwrap();
+
+        // Obrázek dorazil do streamu jako Token s markdownem.
+        let mut got_image = false;
+        while let Ok(chunk) = rx.try_recv() {
+            if let StreamChunk::Token(t) = chunk {
+                if t.contains("/gallery/x.png") {
+                    got_image = true;
+                }
+            }
+        }
+        assert!(got_image, "obrázek se nedostal do streamu chatu");
     }
 
     #[tokio::test]
