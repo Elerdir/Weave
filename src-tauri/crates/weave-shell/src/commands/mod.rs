@@ -6,4 +6,5 @@ pub mod message;
 pub mod models;
 pub mod personas;
 pub mod settings;
+pub mod subjects;
 pub mod workspace;

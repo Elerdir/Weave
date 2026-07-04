@@ -5,7 +5,8 @@
   "windows": [
     "main",
     "logs",
-    "gallery"
+    "gallery",
+    "subjects"
   ],
   "permissions": [
     "core:default",

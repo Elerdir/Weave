@@ -5,4 +5,5 @@ pub mod message;
 pub mod model;
 pub mod persona;
 pub mod recommended_models;
+pub mod subject;
 pub mod workspace;
