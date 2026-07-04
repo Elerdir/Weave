@@ -624,7 +624,12 @@ impl SendMessageUseCase {
         let (width, height) = if full_body { (832, 1216) } else { (1024, 1024) };
         let mut negative_prompt = DEFAULT_NEGATIVE_PROMPT.to_string();
         if full_body {
-            sd_prompt.push_str(", full body, entire figure in frame, visible feet, standing");
+            // U celé postavy je obličej malý → tagy na oči + hi-res průchod,
+            // aby oči nevycházely rozmazané/„divné".
+            sd_prompt.push_str(
+                ", full body, entire figure in frame, visible feet, standing, detailed face, \
+                 detailed symmetric eyes",
+            );
             negative_prompt.push_str(", cropped, out of frame, cut off, close-up");
         }
 
@@ -641,6 +646,8 @@ impl SendMessageUseCase {
             reference_image_paths,
             lora_file,
             init_image_path: init_image,
+            // Hi-res dolaďovací průchod hlavně kvůli obličeji u celé postavy.
+            hires_fix: full_body,
         };
 
         let gen_result = self.image_gen.generate(request, img_tx).await;
