@@ -31,3 +31,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Lokální referenční obrázky (nepatří do repa)
+obr/
