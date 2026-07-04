@@ -95,6 +95,16 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
             recommended_gpu_layers: 999,
         },
         RecommendedModel {
+            id: "gemma-3-27b-it".into(),
+            name: "Gemma 3 27B Instruct".into(),
+            description: "Nejnovější Gemma od Googlu — 128K kontext, špičková vícejazyčnost \
+                (výborná čeština) a silné uvažování. Potřebuje ~18 GB VRAM."
+                .into(),
+            size_bytes: 16_546_688_736,
+            download_url: "https://huggingface.co/unsloth/gemma-3-27b-it-GGUF/resolve/main/gemma-3-27b-it-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
+        RecommendedModel {
             id: "qwen2.5-32b-instruct".into(),
             name: "Qwen2.5 32B Instruct".into(),
             description: "Vlajkový všestranný model — nejchytřejší z nabídky, skvělý na \
