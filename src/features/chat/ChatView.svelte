@@ -7,6 +7,7 @@
   import { filterNewImagePaths, IMAGE_EXTENSIONS } from "$lib/reference-images";
   import { referenceQueue } from "$lib/stores/reference-queue.svelte";
   import { editImageStore } from "$lib/stores/edit-image.svelte";
+  import { subjectsStore, type Subject } from "$lib/stores/subjects.svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { generationSettingsStore } from "$lib/stores/generation-settings.svelte";
   import {
@@ -50,6 +51,17 @@
 
   // Panel per-konverzačních parametrů generování (posuvníky)
   let showGenSettings = $state(false);
+
+  // Výběr referenčních postav (uložené sady fotek)
+  let showSubjects = $state(false);
+  $effect(() => {
+    void subjectsStore.load();
+  });
+
+  function attachSubject(subject: Subject) {
+    addReferenceImages(subject.images.map((i) => i.path));
+    showSubjects = false;
+  }
 
   // Uplynulý čas během přípravy/generování obrázku
   let elapsedSeconds = $state(0);
@@ -469,6 +481,31 @@
       </div>
     {/if}
 
+    {#if showSubjects}
+      <div class="subjects-popup" role="listbox">
+        {#if subjectsStore.subjects.length === 0}
+          <div class="subjects-empty">{i18n.m.subjects.emptyShort}</div>
+        {/if}
+        {#each subjectsStore.subjects as subject (subject.id)}
+          <button
+            class="subject-item"
+            disabled={subject.images.length === 0}
+            onclick={() => attachSubject(subject)}
+          >
+            {#if subject.images[0]}
+              <img class="subject-thumb" src={convertFileSrc(subject.images[0].path)} alt="" />
+            {/if}
+            <span class="subject-name">{subject.name}</span>
+            <span class="subject-count">{subject.images.length} 🖼</span>
+          </button>
+        {/each}
+        <button
+          class="subject-manage"
+          onclick={() => { showSubjects = false; invoke("open_subjects_window").catch((e) => console.warn(e)); }}
+        >⚙ {i18n.m.subjects.manage}</button>
+      </div>
+    {/if}
+
     <div class="input-area">
       <button
         class="attach-btn"
@@ -477,6 +514,14 @@
         title={i18n.m.chat.addReferenceImage}
         aria-label={i18n.m.chat.addReferenceImage}
       >🖼️</button>
+      <button
+        class="attach-btn"
+        onclick={() => (showSubjects = !showSubjects)}
+        class:active={showSubjects}
+        disabled={conversationStore.loading}
+        title={i18n.m.subjects.pickTitle}
+        aria-label={i18n.m.subjects.pickTitle}
+      >👤</button>
       <textarea
         class="chat-input"
         bind:this={inputEl}
@@ -929,6 +974,83 @@
     z-index: 30;
     max-height: 240px;
     overflow-y: auto;
+  }
+
+  .subjects-popup {
+    position: absolute;
+    bottom: 100%;
+    left: 1.25rem;
+    margin-bottom: 0.4rem;
+    min-width: 240px;
+    max-height: 300px;
+    overflow-y: auto;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+    z-index: 30;
+    padding: 0.3rem;
+  }
+  .subjects-empty {
+    padding: 0.6rem 0.7rem;
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+  }
+  .subject-item {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    background: transparent;
+    border: none;
+    padding: 0.4rem 0.5rem;
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--color-text);
+  }
+  .subject-item:hover:not(:disabled) {
+    background: var(--color-surface-2);
+  }
+  .subject-item:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .subject-thumb {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .subject-name {
+    flex: 1;
+    text-align: left;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .subject-count {
+    font-size: 0.72rem;
+    color: var(--color-text-muted);
+  }
+  .subject-manage {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-top: 1px solid var(--color-border);
+    margin-top: 0.3rem;
+    padding: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+    cursor: pointer;
+  }
+  .subject-manage:hover {
+    color: var(--color-accent);
+  }
+  .attach-btn.active {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
   }
 
   .mention-item {
