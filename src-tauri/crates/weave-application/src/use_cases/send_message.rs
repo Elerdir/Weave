@@ -71,6 +71,21 @@ fn wants_full_body(prompt: &str) -> bool {
     FULL_BODY_KEYWORDS.iter().any(|k| lower.contains(k))
 }
 
+/// Vypadá text jako hotový anglický SD prompt? (převážně ASCII, komma-
+/// separovaný výčet deskriptorů, dost dlouhý). Takový prompt pošleme do
+/// generátoru rovnou, bez LLM překladu — mj. aby ho cenzurovaný model
+/// neodmítl. Český požadavek („vygeneruj mi…") tímhle neprojde a přeloží se.
+fn is_ready_english_prompt(prompt: &str) -> bool {
+    let trimmed = prompt.trim();
+    let total = trimmed.chars().count();
+    if total < 30 {
+        return false;
+    }
+    let non_ascii = trimmed.chars().filter(|c| !c.is_ascii()).count();
+    let commas = trimmed.matches(',').count();
+    (non_ascii as f32 / total as f32) < 0.05 && commas >= 2
+}
+
 /// Ořízne text u prvního ChatML řídicího tokenu (`<|…`) a osekne uvozovky.
 /// Malé lokální modely (Qwen apod.) za odpovědí občas „ukecají" celou
 /// šablonu konverzace — vše od `<|` je smetí, ne prompt.
@@ -672,6 +687,13 @@ impl SendMessageUseCase {
     /// jakémkoli selhání LLM vrací původní text — horší prompt je lepší
     /// než spadlé generování.
     async fn enhance_image_prompt(&self, user_prompt: &str) -> (String, Option<String>) {
+        // Hotový anglický SD prompt vezmeme rovnou — nemá cenu ho posílat LLM
+        // (zbytečné přepisování a hlavně: cenzurované modely jako Mistral by
+        // explicitní/odhalený prompt odmítly přeložit a generování by spadlo).
+        if is_ready_english_prompt(user_prompt) {
+            return (user_prompt.to_string(), None);
+        }
+
         let conv = ConversationId::new();
         let messages = vec![
             Message::system(conv.clone(), IMAGE_PROMPT_SYSTEM),
@@ -1530,6 +1552,18 @@ mod tests {
         // case-insensitive prefix
         let (_, l5) = parse_prompt_enhancement("p\nlora: Sailor Moon style", "fb");
         assert_eq!(l5.as_deref(), Some("Sailor Moon style"));
+    }
+
+    #[test]
+    fn ready_english_prompt_is_detected() {
+        // Hotový anglický SD prompt → projde rovnou (bez LLM)
+        assert!(is_ready_english_prompt(
+            "a young woman, full body, photorealistic, natural lighting, highly detailed"
+        ));
+        // Krátký / český / bez čárek → potřebuje překlad
+        assert!(!is_ready_english_prompt("nahá žena v lese"));
+        assert!(!is_ready_english_prompt("vygeneruj mi obrázek dívky"));
+        assert!(!is_ready_english_prompt("cat"));
     }
 
     #[test]

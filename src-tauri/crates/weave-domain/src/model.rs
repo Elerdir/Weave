@@ -35,22 +35,65 @@ impl IntentClassifier {
     }
 
     fn matches_image(text: &str) -> bool {
-        let keywords = [
+        // Explicitní žádost o obrázek (verb/podstatné jméno, cz+en). „obrázek",
+        // „vygeneruj", „fotka" apod. samostatně — v této appce prakticky vždy
+        // znamenají generování obrázku, ne text.
+        const TRIGGERS: &[&str] = &[
             "nakresli",
-            "vygeneruj obrázek",
-            "vytvoř obrázek",
+            "namaluj",
+            "vygeneruj",
+            "vygenerovat",
+            "generuj",
+            "vytvoř obráz",
+            "vytvoř mi obráz",
+            "vyfoť",
+            "vyobraz",
+            "obrázek",
+            "obrázku",
+            "obrázok",
+            "fotka",
+            "fotku",
+            "fotografi",
+            "portrét",
             "generate image",
+            "generate an image",
+            "create image",
+            "make an image",
             "draw",
             "paint",
             "ilustruj",
             "foto",
-            "fotografie",
             "image of",
             "picture of",
+            "photo of",
             "render",
             "visualize",
+            "portrait",
         ];
-        keywords.iter().any(|kw| text.contains(kw))
+        if TRIGGERS.iter().any(|kw| text.contains(kw)) {
+            return true;
+        }
+
+        // Rozpoznání „hotového" Stable Diffusion promptu — komma-separovaný
+        // výčet vizuálních deskriptorů (uživatel často vloží přímo anglický
+        // prompt bez slovesa „vygeneruj"). Dva a víc signálů = obrázek.
+        const SD_HINTS: &[&str] = &[
+            "photorealistic",
+            "full body",
+            "full length",
+            "highly detailed",
+            "sharp focus",
+            "cinematic",
+            "bokeh",
+            "8k",
+            "dslr",
+            "studio lighting",
+            "natural lighting",
+            "photography",
+            "realistic skin",
+            "head to toe",
+        ];
+        SD_HINTS.iter().filter(|kw| text.contains(**kw)).count() >= 2
     }
 
     fn matches_code(text: &str) -> bool {
@@ -164,5 +207,21 @@ mod tests {
     #[test]
     fn defaults_to_text_chat() {
         assert_eq!(IntentClassifier::classify("jak se máš?"), Intent::TextChat);
+    }
+
+    #[test]
+    fn classifies_loose_and_pasted_image_requests() {
+        // Volnější česká formulace (dřív spadla do textu → cenzurované odmítnutí)
+        assert_eq!(
+            IntentClassifier::classify("vygeneruj mi obrázek nahé ženy v lese"),
+            Intent::ImageGeneration
+        );
+        // Rovnou vložený anglický SD prompt bez slovesa „vygeneruj"
+        assert_eq!(
+            IntentClassifier::classify(
+                "a young woman, full body, photorealistic, natural lighting, highly detailed"
+            ),
+            Intent::ImageGeneration
+        );
     }
 }
