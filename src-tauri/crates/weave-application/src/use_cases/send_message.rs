@@ -28,10 +28,13 @@ const IMAGE_PROMPT_SYSTEM: &str = "You convert user requests into English Stable
     prompts. Reply with EXACTLY two lines:\n\
     Line 1: comma-separated English descriptors (subject, appearance, setting, lighting, \
     style, quality tags like 'highly detailed, sharp focus'). Translate non-English requests. \
-    Keep every detail the user asked for, including names used for people.\n\
+    Keep every detail the user asked for, including names used for people. \
+    Always include an explicit shot framing tag: use 'full body shot, full length portrait, \
+    head to toe, standing' whenever the whole figure, outfit or pose matters (a person in \
+    described clothing, a character), otherwise a fitting one like 'portrait' or 'close-up'.\n\
     Line 2: 'LORA: <2-4 English words naming a specific character, celebrity, art style or \
     concept a LoRA model could exist for>' or 'LORA: none' when the request is generic.\n\
-    No explanations, no quotes.";
+    Output ONLY these two lines. Never repeat the conversation or add role markers.";
 
 /// Výchozí negative prompt — potlačuje typické artefakty SDXL. Oční
 /// artefakty (šilhání, deformované duhovky, asymetrie) jsou u PuLID
@@ -45,24 +48,42 @@ const DEFAULT_NEGATIVE_PROMPT: &str = "blurry, low quality, deformed, disfigured
 /// podle referenční fotky (PuLID = portrét osoby, kde oči nejvíc „táhnou").
 const EYE_QUALITY_TAGS: &str = "detailed symmetric eyes, natural eyes, sharp focus";
 
+/// Ořízne text u prvního ChatML řídicího tokenu (`<|…`) a osekne uvozovky.
+/// Malé lokální modely (Qwen apod.) za odpovědí občas „ukecají" celou
+/// šablonu konverzace — vše od `<|` je smetí, ne prompt.
+fn strip_chat_tokens(s: &str) -> &str {
+    s.split("<|").next().unwrap_or(s).trim().trim_matches('"')
+}
+
 /// Rozparsuje výstup LLM vylepšení promptu: řádky bez prefixu LORA: tvoří
 /// prompt, řádek `LORA: <koncept>` je dotaz pro katalog LoRA (`none`/prázdno
-/// = žádný). Když je prompt prázdný, vrací fallback.
+/// = žádný). Řídicí ChatML tokeny se odstraní. Prázdný prompt → fallback.
 fn parse_prompt_enhancement(raw: &str, fallback: &str) -> (String, Option<String>) {
-    let mut prompt_lines: Vec<&str> = Vec::new();
+    // Prompt bereme jen z části PŘED prvním ChatML tokenem — tím odpadne
+    // zopakovaná konverzace, kterou malé modely někdy přilepí.
+    let head = raw.split("<|").next().unwrap_or(raw);
+    let prompt = head
+        .lines()
+        .map(|l| l.trim().trim_matches('"'))
+        .filter(|l| !(l.len() >= 5 && l[..5].eq_ignore_ascii_case("lora:")))
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // LoRA řádek může přijít i za promptem, tak ho hledáme v celém výstupu;
+    // jeho hodnotu ale taky očistíme od případných tokenů.
     let mut lora = None;
     for line in raw.lines() {
         let trimmed = line.trim().trim_matches('"');
         if trimmed.len() >= 5 && trimmed[..5].eq_ignore_ascii_case("lora:") {
-            let value = trimmed[5..].trim().trim_matches('"');
+            let value = strip_chat_tokens(&trimmed[5..]);
             if !value.is_empty() && !value.eq_ignore_ascii_case("none") {
                 lora = Some(value.to_string());
             }
-        } else if !trimmed.is_empty() {
-            prompt_lines.push(trimmed);
+            break;
         }
     }
-    let prompt = prompt_lines.join(" ");
+
     if prompt.is_empty() {
         (fallback.to_string(), lora)
     } else {
@@ -1475,6 +1496,27 @@ mod tests {
         // case-insensitive prefix
         let (_, l5) = parse_prompt_enhancement("p\nlora: Sailor Moon style", "fb");
         assert_eq!(l5.as_deref(), Some("Sailor Moon style"));
+    }
+
+    #[test]
+    fn parse_enhancement_strips_chatml_garbage() {
+        // Reálný zašuměný výstup malého lokálního modelu: za odpovědí
+        // ukecal celou ChatML šablonu a zopakoval dotaz.
+        let raw = "Ahsoka Tano, Star Wars: The Clone Wars season 5, highly detailed, \
+             sharp focus <|im_start|>user vygeneruj obrázek<|im_end|> <|im_start|>assistant \
+             Ahsoka Tano<|im_\nLORA: Ahsoka Tano<|im_end|>";
+        let (prompt, lora) = parse_prompt_enhancement(raw, "fb");
+
+        assert_eq!(
+            prompt,
+            "Ahsoka Tano, Star Wars: The Clone Wars season 5, highly detailed, sharp focus"
+        );
+        assert!(
+            !prompt.contains("<|"),
+            "prompt nesmí obsahovat ChatML tokeny"
+        );
+        assert!(!prompt.contains("vygeneruj"), "prompt nesmí opakovat dotaz");
+        assert_eq!(lora.as_deref(), Some("Ahsoka Tano"));
     }
 
     /// Celá LoRA cesta: LLM navrhne koncept → katalog najde LoRA →
