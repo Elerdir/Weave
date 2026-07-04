@@ -9,6 +9,10 @@ pub struct GalleryImage {
     pub size_bytes: u64,
     /// Unix timestamp poslední změny — pro řazení od nejnovějších.
     pub modified_at: u64,
+    /// Pozitivní prompt použitý při generování (z PNG metadat), pokud je.
+    pub prompt: Option<String>,
+    /// Negativní prompt (z PNG metadat), pokud byl použit.
+    pub negative_prompt: Option<String>,
 }
 
 fn gallery_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -49,11 +53,23 @@ pub async fn list_gallery_images(app: tauri::AppHandle) -> Result<Vec<GalleryIma
                 .duration_since(std::time::UNIX_EPOCH)
                 .ok()?
                 .as_secs();
+            // Prompt čteme jen z PNG (jiné formáty tEXt chunky nemají).
+            let (prompt, negative_prompt) = if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("png"))
+            {
+                weave_infrastructure::image_stamp::read_prompt_metadata(&path)
+            } else {
+                (None, None)
+            };
             Some(GalleryImage {
                 path: path.to_string_lossy().into_owned(),
                 file_name: entry.file_name().to_string_lossy().into_owned(),
                 size_bytes: meta.len(),
                 modified_at,
+                prompt,
+                negative_prompt,
             })
         })
         .collect();

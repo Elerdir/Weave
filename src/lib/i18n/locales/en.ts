@@ -104,6 +104,9 @@ const en: Messages = {
     empty: "No generated images yet.",
     delete: "Delete image",
     deleteConfirm: "Delete {name} from the gallery? The file will be removed from disk.",
+    prompt: "Prompt",
+    negativePrompt: "Negative:",
+    copyPrompt: "Copy prompt",
   },
   sidebar: {
     conversations: "Conversations",

@@ -102,6 +102,9 @@ const cs = {
     empty: "Zatím žádné vygenerované obrázky.",
     delete: "Smazat obrázek",
     deleteConfirm: "Smazat {name} z galerie? Soubor se odstraní z disku.",
+    prompt: "Prompt",
+    negativePrompt: "Negativní:",
+    copyPrompt: "Kopírovat prompt",
   },
   sidebar: {
     conversations: "Konverzace",

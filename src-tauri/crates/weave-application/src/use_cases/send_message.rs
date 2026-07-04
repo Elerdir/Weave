@@ -33,9 +33,17 @@ const IMAGE_PROMPT_SYSTEM: &str = "You convert user requests into English Stable
     concept a LoRA model could exist for>' or 'LORA: none' when the request is generic.\n\
     No explanations, no quotes.";
 
-/// Výchozí negative prompt — potlačuje typické artefakty SDXL.
+/// Výchozí negative prompt — potlačuje typické artefakty SDXL. Oční
+/// artefakty (šilhání, deformované duhovky, asymetrie) jsou u PuLID
+/// obzvlášť časté, proto explicitně.
 const DEFAULT_NEGATIVE_PROMPT: &str = "blurry, low quality, deformed, disfigured, extra limbs, \
-    bad anatomy, bad hands, watermark, text, signature, jpeg artifacts";
+    bad anatomy, bad hands, watermark, text, signature, jpeg artifacts, \
+    bad eyes, deformed eyes, deformed iris, deformed pupils, extra pupils, \
+    cross-eyed, asymmetric eyes, misaligned eyes";
+
+/// Tagy pro věrné oči — přidávají se k pozitivnímu promptu u generování
+/// podle referenční fotky (PuLID = portrét osoby, kde oči nejvíc „táhnou").
+const EYE_QUALITY_TAGS: &str = "detailed symmetric eyes, natural eyes, sharp focus";
 
 /// Rozparsuje výstup LLM vylepšení promptu: řádky bez prefixu LORA: tvoří
 /// prompt, řádek `LORA: <koncept>` je dotaz pro katalog LoRA (`none`/prázdno
@@ -487,6 +495,13 @@ impl SendMessageUseCase {
         // zároveň navrhne koncept pro vyhledání LoRA.
         let _ = stream_tx.send(stage(ImageStage::PreparingPrompt)).await;
         let (mut sd_prompt, lora_query) = self.enhance_image_prompt(&prompt).await;
+
+        // U generování podle reference (PuLID) jde vždy o osobu — přidáme
+        // tagy na věrné oči, nejčastější zdroj „divných" výsledků.
+        if !reference_image_paths.is_empty() {
+            sd_prompt = format!("{sd_prompt}, {EYE_QUALITY_TAGS}");
+        }
+
         tracing::info!(original = %prompt, enhanced = %sd_prompt, ?lora_query,
             "Prompt pro generátor obrázků");
 
