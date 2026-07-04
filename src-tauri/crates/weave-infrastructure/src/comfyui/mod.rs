@@ -227,8 +227,22 @@ impl ImageGenPort for ComfyUiClient {
         let output_dir = self.gallery_dir.clone();
         std::fs::create_dir_all(&output_dir).ok();
 
+        // Backstop proti nekonečnému čekání, kdyby ComfyUI zamrzl bez odpovědi.
+        let started = std::time::Instant::now();
+        const GEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+            if started.elapsed() > GEN_TIMEOUT {
+                ws_task.abort();
+                return Err(AppError::ComfyUi(
+                    "Generování obrázku trvalo přes 10 minut a bylo přerušeno. Časté při \
+                     nedostatku VRAM — máš-li současně načtený velký lokální LLM, uvolni ho \
+                     (v Nastavení přepni backend nebo restartuj appku) a zkus to znovu."
+                        .into(),
+                ));
+            }
 
             let history: serde_json::Value = self
                 .http
@@ -241,6 +255,16 @@ impl ImageGenPort for ComfyUiClient {
                 .map_err(|e| AppError::ComfyUi(e.to_string()))?;
 
             if let Some(entry) = history.get(&prompt_id) {
+                // Běhová chyba ComfyUI (nejčastěji nedostatek VRAM u velkých
+                // workflow) → status "error" a žádné outputs. Bez téhle větve
+                // by se polling točil donekonečna a v UI se „nic nedělo".
+                if let Some(err) = extract_execution_error(entry) {
+                    ws_task.abort();
+                    return Err(AppError::ComfyUi(format!(
+                        "Generování v ComfyUI selhalo: {err}. Bývá to nedostatkem VRAM — \
+                         pokud máš načtený velký lokální model, uvolni ho a zkus znovu."
+                    )));
+                }
                 if let Some(outputs) = entry.get("outputs") {
                     if let Some(filename) = extract_output_filename(outputs) {
                         // Stáhni obrázek z ComfyUI
@@ -696,6 +720,34 @@ fn extract_output_filename(outputs: &serde_json::Value) -> Option<String> {
     })
 }
 
+/// Vytáhne z `/history` záznamu běhovou chybu ComfyUI, pokud nastala.
+/// ComfyUI u neúspěšného promptu nastaví `status.status_str = "error"` a do
+/// `status.messages` přidá dvojici `["execution_error", { exception_message, … }]`.
+/// Vrací krátký popis chyby, nebo `None` když prompt (zatím) neselhal.
+fn extract_execution_error(entry: &serde_json::Value) -> Option<String> {
+    let status = entry.get("status")?;
+    if status.get("status_str").and_then(|s| s.as_str()) != Some("error") {
+        return None;
+    }
+    let detail = status
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .and_then(|msgs| {
+            msgs.iter().find_map(|m| {
+                let arr = m.as_array()?;
+                if arr.first()?.as_str()? != "execution_error" {
+                    return None;
+                }
+                arr.get(1)?
+                    .get("exception_message")?
+                    .as_str()
+                    .map(|s| s.to_string())
+            })
+        })
+        .unwrap_or_else(|| "neznámá chyba".to_string());
+    Some(detail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -718,6 +770,30 @@ mod tests {
             init_image_path: None,
             hires_fix: false,
         }
+    }
+
+    #[test]
+    fn extract_execution_error_reads_status() {
+        // Neúspěch (OOM apod.) → vrátí popis chyby
+        let failed = serde_json::json!({
+            "status": {
+                "status_str": "error",
+                "messages": [
+                    ["execution_start", {}],
+                    ["execution_error", { "exception_message": "CUDA out of memory" }]
+                ]
+            }
+        });
+        assert_eq!(
+            extract_execution_error(&failed).as_deref(),
+            Some("CUDA out of memory")
+        );
+
+        // Úspěch / probíhající → None
+        let ok = serde_json::json!({ "status": { "status_str": "success" } });
+        assert!(extract_execution_error(&ok).is_none());
+        let running = serde_json::json!({ "outputs": {} });
+        assert!(extract_execution_error(&running).is_none());
     }
 
     #[test]
