@@ -46,35 +46,67 @@ pub fn stamp_ai_image(
         embed_lsb_marker(data, AI_MARKER);
     }
 
-    let out = std::fs::File::create(path).context("zápis PNG")?;
-    let mut encoder = png::Encoder::new(BufWriter::new(out), frame.width, frame.height);
-    encoder.set_color(frame.color_type);
-    encoder.set_depth(frame.bit_depth);
-    encoder
-        .add_text_chunk("AI-Generated".into(), "true".into())
-        .context("tEXt AI-Generated")?;
-    encoder
-        .add_text_chunk("Software".into(), "Weave (AI generated image)".into())
-        .context("tEXt Software")?;
-    encoder
-        .add_text_chunk("digitalsourcetype".into(), DIGITAL_SOURCE_TYPE.into())
-        .context("tEXt digitalsourcetype")?;
+    // Píšeme do dočasného souboru a originál přepíšeme až po úspěchu. Kdyby
+    // zápis (např. kódování tEXt) selhal, původní obrázek zůstane netknutý —
+    // jinak by `File::create` na cílové cestě nechal soubor prázdný.
+    let tmp_path = path.with_extension("weave-stamp-tmp");
+    let write_result = (|| -> anyhow::Result<()> {
+        let out = std::fs::File::create(&tmp_path).context("zápis PNG")?;
+        let mut encoder = png::Encoder::new(BufWriter::new(out), frame.width, frame.height);
+        encoder.set_color(frame.color_type);
+        encoder.set_depth(frame.bit_depth);
+        encoder
+            .add_text_chunk("AI-Generated".into(), "true".into())
+            .context("tEXt AI-Generated")?;
+        encoder
+            .add_text_chunk("Software".into(), "Weave (AI generated image)".into())
+            .context("tEXt Software")?;
+        encoder
+            .add_text_chunk("digitalsourcetype".into(), DIGITAL_SOURCE_TYPE.into())
+            .context("tEXt digitalsourcetype")?;
 
-    // Prompt(y) — jen když jsou. tEXt je latin1; ne-latin1 znaky (diakritika
-    // z LoRA trigger words) by zápis shodily, proto best-effort: neúspěch
-    // jen zalogujeme, označení AI původu tím netrpí.
-    for (key, value) in [(PROMPT_KEY, prompt), (NEGATIVE_PROMPT_KEY, negative_prompt)] {
-        if let Some(text) = value.filter(|t| !t.is_empty()) {
-            if let Err(e) = encoder.add_text_chunk(key.into(), text.into()) {
-                tracing::warn!("tEXt {key} se nepodařilo zapsat: {e}");
+        // Prompt(y) — jen když jsou. tEXt umí jen latin1, takže text nejdřív
+        // ořízneme na latin1 (ne-kódovatelné znaky → mezera); jinak by
+        // write_header spadl a znehodnotil obrázek.
+        for (key, value) in [(PROMPT_KEY, prompt), (NEGATIVE_PROMPT_KEY, negative_prompt)] {
+            if let Some(text) = value.map(to_latin1_lossy).filter(|t| !t.is_empty()) {
+                encoder
+                    .add_text_chunk(key.into(), text)
+                    .with_context(|| format!("tEXt {key}"))?;
             }
         }
-    }
 
-    let mut writer = encoder.write_header().context("PNG hlavička")?;
-    writer.write_image_data(data).context("PNG data")?;
-    writer.finish().context("dokončení PNG")?;
-    Ok(())
+        let mut writer = encoder.write_header().context("PNG hlavička")?;
+        writer.write_image_data(data).context("PNG data")?;
+        writer.finish().context("dokončení PNG")?;
+        Ok(())
+    })();
+
+    match write_result {
+        Ok(()) => std::fs::rename(&tmp_path, path).context("nahrazení PNG označenou verzí"),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            Err(e)
+        }
+    }
+}
+
+/// Ořízne text na tisknutelné latin1 (ASCII + latin1 doplněk); ostatní znaky
+/// (emoji, CJK, řídicí, ChatML tokeny apod.) nahradí mezerou a zkolabuje
+/// bílé znaky. tEXt chunky jiný rozsah nekódují.
+fn to_latin1_lossy(s: &str) -> String {
+    let mapped: String = s
+        .chars()
+        .map(|c| {
+            let u = c as u32;
+            if (0x20..=0x7E).contains(&u) || (0xA0..=0xFF).contains(&u) {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    mapped.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Ověří AI označení: LSB vodoznak v pixelech NEBO tEXt metadata.
@@ -251,6 +283,31 @@ mod tests {
             Some("a knight in shining armor, detailed")
         );
         assert_eq!(negative.as_deref(), Some("blurry, bad eyes"));
+    }
+
+    #[test]
+    fn non_latin1_prompt_does_not_destroy_image() {
+        let path = temp_png("emoji.png");
+        write_test_png(&path, 32, 32);
+
+        // Prompt s ne-latin1 znaky (emoji, ChatML token, CJK) — dřív shodil
+        // write_header a nechal soubor prázdný.
+        stamp_ai_image(&path, Some("kočka 🐱 <|im_start|> 龍 detailed"), None).unwrap();
+
+        // Obrázek je pořád platné PNG (nepřišel o data).
+        assert!(is_ai_stamped(&path));
+        let file = std::fs::File::open(&path).unwrap();
+        let mut reader = png::Decoder::new(BufReader::new(file)).read_info().unwrap();
+        let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
+        reader
+            .next_frame(&mut buf)
+            .expect("PNG musí zůstat dekódovatelné");
+
+        // Prompt se uložil (ořezaný na latin1 — emoji/CJK pryč).
+        let (prompt, _) = read_prompt_metadata(&path);
+        let prompt = prompt.unwrap();
+        assert!(prompt.contains("detailed"));
+        assert!(!prompt.contains('🐱') && !prompt.contains('龍'));
     }
 
     #[test]
