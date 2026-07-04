@@ -10,6 +10,8 @@
     file_name: string;
     size_bytes: number;
     modified_at: number;
+    prompt: string | null;
+    negative_prompt: string | null;
   }
 
   let images = $state<GalleryImage[]>([]);
@@ -47,6 +49,10 @@
     images = images.filter((i) => i.path !== img.path);
   }
 
+  async function copyPrompt(prompt: string) {
+    await navigator.clipboard.writeText(prompt);
+  }
+
   function formatSize(bytes: number): string {
     if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     return `${Math.ceil(bytes / 1024)} kB`;
@@ -70,6 +76,26 @@
             <span class="name" title={img.file_name}>{img.file_name}</span>
             <span class="size">{formatSize(img.size_bytes)}</span>
           </div>
+          {#if img.prompt}
+            <div class="prompt-box">
+              <div class="prompt-head">
+                <span class="prompt-label">{i18n.m.gallery.prompt}</span>
+                <button
+                  class="prompt-copy"
+                  onclick={() => copyPrompt(img.prompt ?? "")}
+                  title={i18n.m.gallery.copyPrompt}
+                  aria-label={i18n.m.gallery.copyPrompt}
+                >⎘</button>
+              </div>
+              <p class="prompt-text">{img.prompt}</p>
+              {#if img.negative_prompt}
+                <p class="prompt-neg" title={img.negative_prompt}>
+                  <span class="prompt-label">{i18n.m.gallery.negativePrompt}</span>
+                  {img.negative_prompt}
+                </p>
+              {/if}
+            </div>
+          {/if}
           <div class="card-actions">
             <button onclick={() => saveImage(img)} title={i18n.m.chat.saveImage}>💾</button>
             <button onclick={() => useAsReference(img)} title={i18n.m.chat.useAsReference}>🖼️</button>
@@ -169,6 +195,68 @@
   .size {
     flex-shrink: 0;
     font-variant-numeric: tabular-nums;
+  }
+
+  .prompt-box {
+    padding: 0 0.6rem 0.55rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .prompt-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .prompt-label {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-muted);
+    font-weight: 600;
+  }
+
+  .prompt-copy {
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 0.8rem;
+    padding: 0 0.15rem;
+    line-height: 1;
+  }
+  .prompt-copy:hover {
+    color: var(--color-text);
+  }
+
+  .prompt-text {
+    margin: 0;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    color: var(--color-text);
+    max-height: 4.5em;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .prompt-neg {
+    margin: 0.1rem 0 0;
+    font-size: 0.68rem;
+    line-height: 1.4;
+    color: var(--color-text-muted);
+    max-height: 3em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .prompt-neg .prompt-label {
+    margin-right: 0.3rem;
   }
 
   .card-actions {

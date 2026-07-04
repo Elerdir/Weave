@@ -203,9 +203,14 @@ impl ImageGenPort for ComfyUiClient {
 
                         ws_task.abort();
 
-                        // Označení AI původu (metadata + neviditelný vodoznak).
-                        // Selhání generování neshodí — obrázek už na disku je.
-                        if let Err(e) = crate::image_stamp::stamp_ai_image(&out_path) {
+                        // Označení AI původu (metadata + neviditelný vodoznak)
+                        // vč. promptu pro galerii. Selhání generování neshodí —
+                        // obrázek už na disku je.
+                        if let Err(e) = crate::image_stamp::stamp_ai_image(
+                            &out_path,
+                            Some(&request.prompt),
+                            request.negative_prompt.as_deref(),
+                        ) {
                             tracing::warn!("Označení AI obrázku selhalo: {e:#}");
                         }
 

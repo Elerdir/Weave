@@ -16,9 +16,19 @@ pub const AI_MARKER: &[u8] = b"WEAVE-AI";
 const DIGITAL_SOURCE_TYPE: &str =
     "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia";
 
-/// Přepíše PNG na místě: doplní metadata o AI původu a vloží neviditelný
-/// vodoznak. Pixely se změní nejvýš o 1 v LSB — okem nerozlišitelné.
-pub fn stamp_ai_image(path: &Path) -> anyhow::Result<()> {
+/// tEXt klíč s pozitivním promptem generování.
+const PROMPT_KEY: &str = "prompt";
+/// tEXt klíč s negativním promptem generování.
+const NEGATIVE_PROMPT_KEY: &str = "negative_prompt";
+
+/// Přepíše PNG na místě: doplní metadata o AI původu (vč. promptu, pokud je
+/// zadán) a vloží neviditelný vodoznak. Pixely se změní nejvýš o 1 v LSB —
+/// okem nerozlišitelné.
+pub fn stamp_ai_image(
+    path: &Path,
+    prompt: Option<&str>,
+    negative_prompt: Option<&str>,
+) -> anyhow::Result<()> {
     let file = std::fs::File::open(path).context("otevření PNG")?;
     let decoder = png::Decoder::new(BufReader::new(file));
     let mut reader = decoder.read_info().context("čtení PNG hlavičky")?;
@@ -50,6 +60,17 @@ pub fn stamp_ai_image(path: &Path) -> anyhow::Result<()> {
         .add_text_chunk("digitalsourcetype".into(), DIGITAL_SOURCE_TYPE.into())
         .context("tEXt digitalsourcetype")?;
 
+    // Prompt(y) — jen když jsou. tEXt je latin1; ne-latin1 znaky (diakritika
+    // z LoRA trigger words) by zápis shodily, proto best-effort: neúspěch
+    // jen zalogujeme, označení AI původu tím netrpí.
+    for (key, value) in [(PROMPT_KEY, prompt), (NEGATIVE_PROMPT_KEY, negative_prompt)] {
+        if let Some(text) = value.filter(|t| !t.is_empty()) {
+            if let Err(e) = encoder.add_text_chunk(key.into(), text.into()) {
+                tracing::warn!("tEXt {key} se nepodařilo zapsat: {e}");
+            }
+        }
+    }
+
     let mut writer = encoder.write_header().context("PNG hlavička")?;
     writer.write_image_data(data).context("PNG data")?;
     writer.finish().context("dokončení PNG")?;
@@ -80,6 +101,27 @@ pub fn is_ai_stamped(path: &Path) -> bool {
         return has_text_stamp;
     };
     has_text_stamp || extract_lsb_marker(&buf[..frame.buffer_size()], AI_MARKER.len()) == AI_MARKER
+}
+
+/// Přečte prompt a negativní prompt z PNG tEXt metadat (zapsaných při
+/// [`stamp_ai_image`]). Chybějící chunk = `None`.
+pub fn read_prompt_metadata(path: &Path) -> (Option<String>, Option<String>) {
+    let Ok(file) = std::fs::File::open(path) else {
+        return (None, None);
+    };
+    let decoder = png::Decoder::new(BufReader::new(file));
+    let Ok(reader) = decoder.read_info() else {
+        return (None, None);
+    };
+    let find = |key: &str| {
+        reader
+            .info()
+            .uncompressed_latin1_text
+            .iter()
+            .find(|c| c.keyword == key)
+            .map(|c| c.text.clone())
+    };
+    (find(PROMPT_KEY), find(NEGATIVE_PROMPT_KEY))
 }
 
 /// Vloží bity značky do LSB po sobě jdoucích bajtů obrazových dat.
@@ -143,7 +185,7 @@ mod tests {
         let original = write_test_png(&path, 64, 64);
 
         assert!(!is_ai_stamped(&path), "čerstvý PNG nesmí být označený");
-        stamp_ai_image(&path).unwrap();
+        stamp_ai_image(&path, None, None).unwrap();
         assert!(is_ai_stamped(&path), "po označení musí být detekovatelný");
 
         // Pixely se smí lišit nejvýš o 1 (LSB) — okem neviditelné
@@ -166,7 +208,7 @@ mod tests {
     fn stamp_writes_text_chunks() {
         let path = temp_png("meta.png");
         write_test_png(&path, 16, 16);
-        stamp_ai_image(&path).unwrap();
+        stamp_ai_image(&path, None, None).unwrap();
 
         let file = std::fs::File::open(&path).unwrap();
         let reader = png::Decoder::new(BufReader::new(file)).read_info().unwrap();
@@ -188,7 +230,36 @@ mod tests {
     fn tiny_image_still_gets_metadata() {
         let path = temp_png("mini.png");
         write_test_png(&path, 2, 2); // 12 bajtů dat < 64 bitů značky
-        stamp_ai_image(&path).unwrap();
+        stamp_ai_image(&path, None, None).unwrap();
         assert!(is_ai_stamped(&path), "metadata musí stačit i bez vodoznaku");
+    }
+
+    #[test]
+    fn stamp_roundtrips_prompt_metadata() {
+        let path = temp_png("prompt.png");
+        write_test_png(&path, 16, 16);
+        stamp_ai_image(
+            &path,
+            Some("a knight in shining armor, detailed"),
+            Some("blurry, bad eyes"),
+        )
+        .unwrap();
+
+        let (prompt, negative) = read_prompt_metadata(&path);
+        assert_eq!(
+            prompt.as_deref(),
+            Some("a knight in shining armor, detailed")
+        );
+        assert_eq!(negative.as_deref(), Some("blurry, bad eyes"));
+    }
+
+    #[test]
+    fn read_prompt_metadata_none_when_absent() {
+        let path = temp_png("noprompt.png");
+        write_test_png(&path, 16, 16);
+        stamp_ai_image(&path, None, None).unwrap();
+
+        let (prompt, negative) = read_prompt_metadata(&path);
+        assert!(prompt.is_none() && negative.is_none());
     }
 }
