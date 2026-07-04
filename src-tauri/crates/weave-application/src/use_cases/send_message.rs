@@ -48,6 +48,29 @@ const DEFAULT_NEGATIVE_PROMPT: &str = "blurry, low quality, deformed, disfigured
 /// podle referenční fotky (PuLID = portrét osoby, kde oči nejvíc „táhnou").
 const EYE_QUALITY_TAGS: &str = "detailed symmetric eyes, natural eyes, sharp focus";
 
+/// Klíčová slova (cz+en) značící požadavek na celou postavu. Když je prompt
+/// obsahuje, generuje se na výšku (SDXL jinak do čtverce postavu ořízne
+/// u stehen — to byl hlavní rozdíl oproti výsledkům à la ChatGPT).
+const FULL_BODY_KEYWORDS: &[&str] = &[
+    "full body",
+    "full length",
+    "head to toe",
+    "whole body",
+    "entire body",
+    "celá postava",
+    "cela postava",
+    "celé tělo",
+    "cele telo",
+    "od hlavy",
+    "na výšku",
+];
+
+/// Rozpozná záběr celé postavy (cz+en) v promptu.
+fn wants_full_body(prompt: &str) -> bool {
+    let lower = prompt.to_lowercase();
+    FULL_BODY_KEYWORDS.iter().any(|k| lower.contains(k))
+}
+
 /// Ořízne text u prvního ChatML řídicího tokenu (`<|…`) a osekne uvozovky.
 /// Malé lokální modely (Qwen apod.) za odpovědí občas „ukecají" celou
 /// šablonu konverzace — vše od `<|` je smetí, ne prompt.
@@ -579,12 +602,23 @@ impl SendMessageUseCase {
         // 4. Generování
         let _ = stream_tx.send(stage(ImageStage::Generating)).await;
 
+        // Formát podle záběru: celá postava → na výšku (do čtverce se figura
+        // nevejde a ořízne se u stehen), jinak čtverec. Rozhoduje původní
+        // dotaz i vylepšený prompt (ten „full body" doplňuje sám).
+        let full_body = wants_full_body(&prompt) || wants_full_body(&sd_prompt);
+        let (width, height) = if full_body { (832, 1216) } else { (1024, 1024) };
+        let mut negative_prompt = DEFAULT_NEGATIVE_PROMPT.to_string();
+        if full_body {
+            sd_prompt.push_str(", full body, entire figure in frame, visible feet, standing");
+            negative_prompt.push_str(", cropped, out of frame, cut off, close-up");
+        }
+
         let (img_tx, mut img_rx) = mpsc::channel(32);
         let request = ImageRequest {
             prompt: sd_prompt,
-            negative_prompt: Some(DEFAULT_NEGATIVE_PROMPT.to_string()),
-            width: 1024,
-            height: 1024,
+            negative_prompt: Some(negative_prompt),
+            width,
+            height,
             steps: 20,
             cfg_scale: 7.0,
             seed: None,
@@ -1496,6 +1530,17 @@ mod tests {
         // case-insensitive prefix
         let (_, l5) = parse_prompt_enhancement("p\nlora: Sailor Moon style", "fb");
         assert_eq!(l5.as_deref(), Some("Sailor Moon style"));
+    }
+
+    #[test]
+    fn wants_full_body_detects_cz_and_en() {
+        assert!(wants_full_body("full body shot, head to toe, a woman"));
+        assert!(wants_full_body(
+            "celá postava od hlavy k patě, žena v pralese"
+        ));
+        assert!(wants_full_body("full length portrait"));
+        assert!(!wants_full_body("portrait of a woman, close-up"));
+        assert!(!wants_full_body("fotka kočky na zahradě"));
     }
 
     #[test]
