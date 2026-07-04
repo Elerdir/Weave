@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { modelsStore, formatBytes } from "$lib/stores/models.svelte";
+import {
+  modelsStore,
+  formatBytes,
+  formatSpeed,
+  formatEta,
+} from "$lib/stores/models.svelte";
 
 const mockInvoke = vi.mocked(invoke);
 
@@ -16,6 +21,34 @@ describe("formatBytes", () => {
 
   it("nezáporné hraniční hodnoty", () => {
     expect(formatBytes(-5)).toBe("0 B");
+  });
+});
+
+describe("formatSpeed", () => {
+  it("přidá /s k velikosti", () => {
+    expect(formatSpeed(12.3 * 1024 * 1024)).toBe("12.3 MB/s");
+    expect(formatSpeed(1024)).toBe("1.0 KB/s");
+  });
+
+  it("nula nebo záporné = prázdné", () => {
+    expect(formatSpeed(0)).toBe("");
+    expect(formatSpeed(-1)).toBe("");
+  });
+});
+
+describe("formatEta", () => {
+  it("formátuje zbývající čas", () => {
+    // 10 MB zbývá při 1 MB/s = 10 s → 0:10
+    expect(formatEta(10 * 1024 * 1024, 1024 * 1024)).toBe("0:10");
+    // 150 s → 2:30
+    expect(formatEta(150 * 1024 * 1024, 1024 * 1024)).toBe("2:30");
+    // přes hodinu → h:mm:ss
+    expect(formatEta(3661 * 1024 * 1024, 1024 * 1024)).toBe("1:01:01");
+  });
+
+  it("bez rychlosti nebo zbytku = prázdné", () => {
+    expect(formatEta(1000, 0)).toBe("");
+    expect(formatEta(0, 1000)).toBe("");
   });
 });
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { i18n } from "$lib/i18n/index.svelte";
-  import { modelsStore, formatBytes } from "$lib/stores/models.svelte";
+  import { modelsStore, formatBytes, formatSpeed } from "$lib/stores/models.svelte";
 
   let skipped = $state(false);
 
@@ -48,7 +48,7 @@
                   {i18n.m.common.loading}
                 {:else}
                   {i18n.m.wizard.steps.models.downloading}
-                  {downloadPercent()}% ({formatBytes(modelsStore.download.downloaded)} / {formatBytes(modelsStore.download.total)})
+                  {downloadPercent()}% ({formatBytes(modelsStore.download.downloaded)} / {formatBytes(modelsStore.download.total)}{#if modelsStore.download.speedBytesPerSec > 0} · {formatSpeed(modelsStore.download.speedBytesPerSec)}{/if})
                 {/if}
               </span>
             {:else}

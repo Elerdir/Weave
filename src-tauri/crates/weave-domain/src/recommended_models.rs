@@ -84,6 +84,38 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
             download_url: "https://huggingface.co/bartowski/cognitivecomputations_Dolphin3.0-Mistral-24B-GGUF/resolve/main/cognitivecomputations_Dolphin3.0-Mistral-24B-Q4_K_M.gguf".into(),
             recommended_gpu_layers: 999,
         },
+        RecommendedModel {
+            id: "gemma-2-27b-it".into(),
+            name: "Gemma 2 27B Instruct".into(),
+            description: "Googlí model se špičkovou vícejazyčností (výborná čeština) a \
+                kultivovaným stylem. Vhodný na chat i psaní. Potřebuje ~18 GB VRAM."
+                .into(),
+            size_bytes: 16_645_381_632,
+            download_url: "https://huggingface.co/bartowski/gemma-2-27b-it-GGUF/resolve/main/gemma-2-27b-it-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
+        RecommendedModel {
+            id: "qwen2.5-32b-instruct".into(),
+            name: "Qwen2.5 32B Instruct".into(),
+            description: "Vlajkový všestranný model — nejchytřejší z nabídky, skvělý na \
+                znalosti, kód i vícejazyčný chat (i čeština). Potřebuje ~22 GB VRAM \
+                (sedne na 24GB kartu)."
+                .into(),
+            size_bytes: 19_851_336_576,
+            download_url: "https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF/resolve/main/Qwen2.5-32B-Instruct-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
+        RecommendedModel {
+            id: "qwq-32b".into(),
+            name: "QwQ 32B (reasoning)".into(),
+            description: "Přemýšlivý model — před odpovědí si nahlas rozmyslí postup, takže \
+                exceluje v logice, matematice a složitějších úlohách. Odpovídá pomaleji. \
+                Potřebuje ~22 GB VRAM."
+                .into(),
+            size_bytes: 19_851_336_512,
+            download_url: "https://huggingface.co/bartowski/Qwen_QwQ-32B-GGUF/resolve/main/Qwen_QwQ-32B-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
     ]
 }
 
