@@ -633,6 +633,12 @@ impl SendMessageUseCase {
             negative_prompt.push_str(", cropped, out of frame, cut off, close-up");
         }
 
+        // Uvolníme vestavěný LLM z VRAM — velký lokální model (např. 24B) a
+        // SDXL generování se na 24GB kartě nevejdou najednou. Prompt už máme
+        // připravený; model se líně načte při další textové zprávě. Cloud/HTTP
+        // backendy jsou no-op.
+        self.llm.unload().await;
+
         let (img_tx, mut img_rx) = mpsc::channel(32);
         let request = ImageRequest {
             prompt: sd_prompt,
@@ -815,6 +821,7 @@ mod tests {
                 Ok(())
             })
         });
+        llm.expect_unload().returning(|| Box::pin(async {}));
         llm
     }
 
@@ -1632,6 +1639,7 @@ mod tests {
                 Ok(())
             })
         });
+        llm.expect_unload().returning(|| Box::pin(async {}));
 
         let mut catalog = MockLoraCatalogPort::new();
         catalog
@@ -1731,6 +1739,7 @@ mod tests {
                 Ok(())
             })
         });
+        llm.expect_unload().returning(|| Box::pin(async {}));
 
         let mut image_gen = MockImageGenPort::new();
         image_gen.expect_generate().returning(|req, tx| {

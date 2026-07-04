@@ -39,15 +39,22 @@ struct WorkerRequest {
     tx: mpsc::Sender<StreamChunk>,
 }
 
+/// Zpráva pro worker vlákno: buď inference, nebo uvolnění modelu z VRAM.
+enum WorkerMsg {
+    Infer(WorkerRequest),
+    /// Uvolní model z paměti; `ack` se odešle, až je VRAM skutečně volná.
+    Unload(tokio::sync::oneshot::Sender<()>),
+}
+
 pub struct EmbeddedLlamaClient {
-    tx_req: Sender<WorkerRequest>,
+    tx_req: Sender<WorkerMsg>,
 }
 
 impl EmbeddedLlamaClient {
     /// Spustí worker vlákno, které načte model a obsluhuje požadavky.
     /// `n_gpu_layers` = kolik vrstev nahrát na GPU (velké číslo = všechny).
     pub fn new(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32) -> Self {
-        let (tx_req, rx_req) = std::sync::mpsc::channel::<WorkerRequest>();
+        let (tx_req, rx_req) = std::sync::mpsc::channel::<WorkerMsg>();
 
         std::thread::Builder::new()
             .name("llama-worker".into())
@@ -66,13 +73,33 @@ impl LlmPort for EmbeddedLlamaClient {
         tx: mpsc::Sender<StreamChunk>,
     ) -> AppResult<()> {
         self.tx_req
-            .send(WorkerRequest { request, tx })
+            .send(WorkerMsg::Infer(WorkerRequest { request, tx }))
             .map_err(|_| AppError::Llm("Llama worker není dostupný".into()))
     }
 
     async fn list_available_models(&self) -> AppResult<Vec<String>> {
         Ok(vec![])
     }
+
+    async fn unload(&self) {
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        // Počkáme na potvrzení, aby VRAM byla volná dřív, než se rozjede
+        // generování obrázku (ComfyUI běží ve zvláštním procesu).
+        if self.tx_req.send(WorkerMsg::Unload(ack_tx)).is_ok() {
+            let _ = ack_rx.await;
+        }
+    }
+}
+
+/// Načte model do (V)RAM. Oddělené, aby šlo znovu-načíst po `Unload`.
+fn load_model(
+    backend: &LlamaBackend,
+    model_path: &std::path::Path,
+    n_gpu_layers: u32,
+) -> Result<LlamaModel, String> {
+    let params = LlamaModelParams::default().with_n_gpu_layers(n_gpu_layers);
+    LlamaModel::load_from_file(backend, model_path, &params)
+        .map_err(|e| format!("Načtení modelu selhalo: {e}"))
 }
 
 /// Sestaví jednoduchý chat prompt z historie (obecný ChatML-like formát).
@@ -131,7 +158,7 @@ fn init_backend_with_retry() -> Result<LlamaBackend, String> {
     Err("Llama backend se neuvolnil (předchozí worker stále běží)".into())
 }
 
-fn worker_loop(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32, rx: Receiver<WorkerRequest>) {
+fn worker_loop(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32, rx: Receiver<WorkerMsg>) {
     let backend = match init_backend_with_retry() {
         Ok(b) => b,
         Err(e) => {
@@ -140,27 +167,61 @@ fn worker_loop(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32, rx: Receiver<
         }
     };
 
-    let model_params = LlamaModelParams::default().with_n_gpu_layers(n_gpu_layers);
-    let model = match LlamaModel::load_from_file(&backend, &model_path, &model_params) {
-        Ok(m) => m,
+    // Model načteme rovnou (předehřátí VRAM při startu). `Unload` ho dropne
+    // a `Infer` ho v případě potřeby zase líně načte — díky tomu se dá VRAM
+    // dočasně uvolnit pro generování obrázků, aniž by se rušil worker.
+    let mut model: Option<LlamaModel> = match load_model(&backend, &model_path, n_gpu_layers) {
+        Ok(m) => {
+            tracing::info!(?model_path, n_gpu_layers, "Vestavěný model načten (GPU)");
+            Some(m)
+        }
         Err(e) => {
-            drain_with_error(rx, &format!("Načtení modelu selhalo: {e}"));
-            return;
+            tracing::error!("{e}");
+            None
         }
     };
-    tracing::info!(?model_path, n_gpu_layers, "Vestavěný model načten (GPU)");
 
-    for req in rx {
-        if let Err(e) = run_inference(&backend, &model, n_ctx, &req) {
-            let _ = req.tx.blocking_send(StreamChunk::Error(e.to_string()));
+    for msg in rx {
+        match msg {
+            WorkerMsg::Unload(ack) => {
+                if model.take().is_some() {
+                    tracing::info!("Vestavěný model uvolněn z VRAM (uvolnění pro generování)");
+                }
+                let _ = ack.send(());
+            }
+            WorkerMsg::Infer(req) => {
+                if model.is_none() {
+                    match load_model(&backend, &model_path, n_gpu_layers) {
+                        Ok(m) => {
+                            tracing::info!("Vestavěný model znovu načten do VRAM");
+                            model = Some(m);
+                        }
+                        Err(e) => {
+                            let _ = req.tx.blocking_send(StreamChunk::Error(e));
+                            continue;
+                        }
+                    }
+                }
+                let loaded = model.as_ref().expect("model je načtený");
+                if let Err(e) = run_inference(&backend, loaded, n_ctx, &req) {
+                    let _ = req.tx.blocking_send(StreamChunk::Error(e.to_string()));
+                }
+            }
         }
     }
 }
 
 /// Když se worker nepodaří nastartovat, každému požadavku vrátíme chybu.
-fn drain_with_error(rx: Receiver<WorkerRequest>, msg: &str) {
-    for req in rx {
-        let _ = req.tx.blocking_send(StreamChunk::Error(msg.to_string()));
+fn drain_with_error(rx: Receiver<WorkerMsg>, msg: &str) {
+    for msg_in in rx {
+        match msg_in {
+            WorkerMsg::Infer(req) => {
+                let _ = req.tx.blocking_send(StreamChunk::Error(msg.to_string()));
+            }
+            WorkerMsg::Unload(ack) => {
+                let _ = ack.send(());
+            }
+        }
     }
 }
 
