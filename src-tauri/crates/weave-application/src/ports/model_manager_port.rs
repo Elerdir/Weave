@@ -27,6 +27,8 @@ pub enum DownloadProgress {
 pub struct GpuInfo {
     pub name: String,
     pub vram_mb: u64,
+    /// Volná (nevyužitá) VRAM v MB — 0, pokud ji nešlo zjistit (non-NVIDIA GPU).
+    pub free_vram_mb: u64,
     pub backend: GpuBackend,
 }
 

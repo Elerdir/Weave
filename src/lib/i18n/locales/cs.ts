@@ -24,6 +24,7 @@ const cs = {
         placeholder: "Vlož klíč zde...",
         skip: "Přeskočit, nastavím později",
         howToGet: "Jak získat klíč?",
+        saveFailed: "Uložení selhalo",
       },
       gpu: {
         title: "Detekce GPU",
@@ -205,6 +206,9 @@ const cs = {
       inUse: "Aktivní",
       activeModel: "Aktivní model:",
       advanced: "Pokročilé — vlastní .gguf soubor",
+      unloadVram: "Uvolnit z VRAM",
+      unloadVramHint: "Uvolní model z VRAM, dokud ho zase nepoužiješ (další zpráva ho tiše znovu nahraje).",
+      unloadedVram: "Model uvolněn z VRAM.",
     },
     notifications: {
       label: "Systémová oznámení",

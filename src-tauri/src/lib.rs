@@ -166,6 +166,8 @@ pub fn run() {
             commands::models::delete_model,
             commands::models::get_models_dir,
             commands::models::set_models_dir,
+            commands::models::recommend_gpu_layers_for_path,
+            commands::settings::unload_embedded_model,
             commands::personas::list_personas,
             commands::personas::create_persona,
             commands::personas::delete_persona,

@@ -149,6 +149,28 @@ function createSettingsStore() {
       await invoke("set_app_setting", { key: LLM_GPU_LAYERS_KEY, value: gpuLayers });
     },
 
+    /**
+     * Přepne aktivní model a zároveň dopočítá `gpu_layers` podle skutečně
+     * volné VRAM (max. 80 % — viz `recommend_gpu_layers_for_path` na backendu),
+     * ať model, co se nevejde, neskončí OOM/nepředvídatelně pomalým částečným
+     * GPU offloadem, ale rovnou běží celý v RAM.
+     */
+    async activateModel(path: string) {
+      this.setModelPath(path);
+      await this.saveModelPath();
+      try {
+        const layers = await invoke<number>("recommend_gpu_layers_for_path", { path });
+        this.setGpuLayers(String(layers));
+        await this.saveGpuLayers();
+      } catch (e) {
+        console.warn("Doporučení gpu_layers selhalo, ponechávám současnou hodnotu:", e);
+      }
+    },
+
+    async unloadEmbeddedModel() {
+      await invoke("unload_embedded_model");
+    },
+
     setContextLength(value: string) {
       contextLength = value;
     },

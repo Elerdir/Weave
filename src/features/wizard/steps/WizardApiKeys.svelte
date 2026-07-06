@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openUrl } from "@tauri-apps/plugin-shell";
   import { i18n } from "$lib/i18n/index.svelte";
@@ -11,13 +12,28 @@
     value: string;
     saving: boolean;
     saved: boolean;
+    error: string | null;
   }
 
   let fields = $state<KeyField[]>([
-    { service: "mistral", label: "", value: "", saving: false, saved: false },
-    { service: "civitai", label: "", value: "", saving: false, saved: false },
-    { service: "huggingface", label: "", value: "", saving: false, saved: false },
+    { service: "mistral", label: "", value: "", saving: false, saved: false, error: null },
+    { service: "civitai", label: "", value: "", saving: false, saved: false, error: null },
+    { service: "huggingface", label: "", value: "", saving: false, saved: false, error: null },
   ]);
+
+  onMount(async () => {
+    // Krok jde ve wizardu navštívit opakovaně (zpět/vpřed) — bez tohohle by
+    // se checkmark po každém návratu vynuloval, i kdyby byl klíč reálně uložený.
+    await Promise.all(
+      fields.map(async (field) => {
+        try {
+          field.saved = await invoke<boolean>("get_api_key_status", { service: field.service });
+        } catch (e) {
+          console.warn(`Nepodařilo se zjistit stav klíče ${field.service}:`, e);
+        }
+      }),
+    );
+  });
 
   async function openTokenPage(service: Service) {
     try {
@@ -36,10 +52,15 @@
   async function save(field: KeyField) {
     if (!field.value.trim()) return;
     field.saving = true;
+    field.error = null;
     try {
       await invoke("store_api_key", { service: field.service, token: field.value.trim() });
       field.saved = true;
       field.value = "";
+    } catch (e) {
+      // Dřív se chyba jen tiše zahodila (unhandled rejection) — uživatel
+      // neměl žádnou zpětnou vazbu, jestli se klíč vůbec uložil.
+      field.error = String(e);
     } finally {
       field.saving = false;
     }
@@ -86,7 +107,9 @@
             {/if}
           </button>
         </div>
-        {#if field.saved}
+        {#if field.error}
+          <span class="error-hint">{i18n.m.wizard.steps.apiKeys.saveFailed}: {field.error}</span>
+        {:else if field.saved}
           <span class="saved-hint">{i18n.m.settings.apiKeys.stored}</span>
         {/if}
       </div>
@@ -189,5 +212,10 @@
   .saved-hint {
     font-size: 0.78rem;
     color: var(--color-success);
+  }
+
+  .error-hint {
+    font-size: 0.78rem;
+    color: var(--color-error);
   }
 </style>

@@ -85,4 +85,40 @@ describe("settingsStore", () => {
     await settingsStore.testLocal();
     expect(settingsStore.localStatus).toBe("connected");
   });
+
+  it("activateModel() uloží cestu a dopočítané gpu_layers z backendu", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "recommend_gpu_layers_for_path") return 0;
+      return undefined;
+    });
+
+    await settingsStore.activateModel("C:\\models\\big-model.gguf");
+
+    expect(mockInvoke).toHaveBeenCalledWith("set_app_setting", {
+      key: "llm.model_path",
+      value: "C:\\models\\big-model.gguf",
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("recommend_gpu_layers_for_path", {
+      path: "C:\\models\\big-model.gguf",
+    });
+    expect(settingsStore.gpuLayers).toBe("0");
+  });
+
+  it("activateModel() ponechá současné gpu_layers, když doporučení selže", async () => {
+    const previousLayers = settingsStore.gpuLayers;
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "recommend_gpu_layers_for_path") throw new Error("no such file");
+      return undefined;
+    });
+
+    await settingsStore.activateModel("C:\\models\\missing.gguf");
+
+    expect(settingsStore.gpuLayers).toBe(previousLayers);
+  });
+
+  it("unloadEmbeddedModel() zavolá backend příkaz", async () => {
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await settingsStore.unloadEmbeddedModel();
+    expect(mockInvoke).toHaveBeenCalledWith("unload_embedded_model");
+  });
 });

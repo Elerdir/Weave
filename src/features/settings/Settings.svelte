@@ -22,8 +22,21 @@
       filters: [{ name: "GGUF model", extensions: ["gguf"] }],
     });
     if (typeof path === "string") {
-      settingsStore.setModelPath(path);
-      await settingsStore.saveModelPath();
+      await settingsStore.activateModel(path);
+    }
+  }
+
+  let unloadingVram = $state(false);
+  let vramUnloaded = $state(false);
+
+  async function unloadVram() {
+    unloadingVram = true;
+    vramUnloaded = false;
+    try {
+      await settingsStore.unloadEmbeddedModel();
+      vramUnloaded = true;
+    } finally {
+      unloadingVram = false;
     }
   }
 
@@ -259,7 +272,18 @@
               <div class="active-model">
                 <span class="active-model-label">{i18n.m.settings.llm.activeModel}</span>
                 <span class="active-model-path">{settingsStore.modelPath.split(/[\\/]/).pop()}</span>
+                <button
+                  class="btn-sm"
+                  title={i18n.m.settings.llm.unloadVramHint}
+                  disabled={unloadingVram}
+                  onclick={unloadVram}
+                >
+                  {i18n.m.settings.llm.unloadVram}
+                </button>
               </div>
+              {#if vramUnloaded}
+                <span class="conn-status connected">{i18n.m.settings.llm.unloadedVram}</span>
+              {/if}
             {/if}
 
             <h4 class="sub-heading">{i18n.m.settings.llm.recommendedTitle}</h4>
@@ -283,8 +307,8 @@
                         class:primary={!isActive}
                         disabled={isActive}
                         onclick={() => {
-                          settingsStore.setModelPath(modelsStore.models.find((m) => m.id === rec.id)?.path ?? "");
-                          settingsStore.saveModelPath();
+                          const path = modelsStore.models.find((m) => m.id === rec.id)?.path ?? "";
+                          settingsStore.activateModel(path);
                         }}
                       >
                         {isActive ? i18n.m.settings.llm.inUse : i18n.m.settings.llm.activate}

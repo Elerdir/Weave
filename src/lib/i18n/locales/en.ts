@@ -26,6 +26,7 @@ const en: Messages = {
         placeholder: "Paste key here...",
         skip: "Skip, I'll configure later",
         howToGet: "How to get a key?",
+        saveFailed: "Save failed",
       },
       gpu: {
         title: "GPU Detection",
@@ -207,6 +208,9 @@ const en: Messages = {
       inUse: "Active",
       activeModel: "Active model:",
       advanced: "Advanced — custom .gguf file",
+      unloadVram: "Unload from VRAM",
+      unloadVramHint: "Frees the model from VRAM until you use it again (the next message quietly reloads it).",
+      unloadedVram: "Model unloaded from VRAM.",
     },
     notifications: {
       label: "System notifications",
