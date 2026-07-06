@@ -164,6 +164,8 @@ pub fn run() {
             commands::models::download_model,
             commands::models::download_recommended_model,
             commands::models::delete_model,
+            commands::models::get_models_dir,
+            commands::models::set_models_dir,
             commands::personas::list_personas,
             commands::personas::create_persona,
             commands::personas::delete_persona,

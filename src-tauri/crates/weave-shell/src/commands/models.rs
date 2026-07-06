@@ -5,6 +5,10 @@ use weave_domain::recommended_models::{recommended_models, RecommendedModel};
 
 use crate::state::AppState;
 
+/// Klíč v `app_config`, pod kterým se pamatuje uživatelem zvolená složka pro
+/// stahování modelů (aby se použila i po restartu appky).
+pub const MODELS_DIR_KEY: &str = "models.directory";
+
 #[tauri::command]
 pub async fn list_local_models(state: State<'_, AppState>) -> Result<Vec<LocalModel>, String> {
     state
@@ -80,6 +84,35 @@ pub async fn delete_model(model_id: String, state: State<'_, AppState>) -> Resul
     state
         .model_manager
         .delete(&model_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Vrátí aktuální složku pro stahování modelů.
+#[tauri::command]
+pub async fn get_models_dir(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .model_manager
+        .models_dir()
+        .await
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| e.to_string())
+}
+
+/// Změní složku pro stahování modelů — existující modely se do ní přesunou,
+/// takže je uživatel po přepnutí nemusí stahovat znovu. Uloží se i do
+/// `app_config`, ať se použije i po restartu appky.
+#[tauri::command]
+pub async fn set_models_dir(dir: String, state: State<'_, AppState>) -> Result<(), String> {
+    use weave_infrastructure::db::app_config;
+
+    state
+        .model_manager
+        .set_models_dir(std::path::PathBuf::from(&dir))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    app_config::set(&state.pool, MODELS_DIR_KEY, &dir)
         .await
         .map_err(|e| e.to_string())
 }

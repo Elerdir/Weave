@@ -126,63 +126,46 @@ pub async fn download_file(
     label: &str,
     tx: &mpsc::Sender<InstallProgress>,
 ) -> AppResult<()> {
-    use futures_util::StreamExt;
-    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
 
     if dest.exists() {
         return Ok(());
     }
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| AppError::ComfyUi(e.to_string()))?;
-    }
 
-    let response = http
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| AppError::ComfyUi(format!("Stažení {label} selhalo: {e}")))?;
-
-    if !response.status().is_success() {
-        return Err(AppError::ComfyUi(format!(
-            "Stažení {label} selhalo: server vrátil {}",
-            response.status()
-        )));
-    }
-
-    let total = response.content_length().unwrap_or(0);
     let tmp_dest = dest.with_extension("part");
-    let mut file =
-        std::fs::File::create(&tmp_dest).map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    let tx = tx.clone();
+    let label = label.to_string();
+    let last_bucket = AtomicU64::new(u64::MAX);
+    // Fallback pro servery bez Content-Length (`total == 0`): bez něj se
+    // procentuální report nikdy nespustí a stahování vypadá jako zaseklé,
+    // proto hlásíme aspoň průběžně stažené MB podle času.
+    let last_text_report = Mutex::new(Instant::now() - Duration::from_secs(2));
 
-    let mut downloaded = 0u64;
-    let mut last_reported_bucket = u64::MAX;
-    let mut stream = response.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        let bytes =
-            chunk.map_err(|e| AppError::ComfyUi(format!("Stažení {label} selhalo: {e}")))?;
-        file.write_all(&bytes)
-            .map_err(|e| AppError::ComfyUi(e.to_string()))?;
-        downloaded += bytes.len() as u64;
-
-        if let Some(pct) = downloaded
-            .checked_mul(100)
-            .and_then(|n| n.checked_div(total))
-        {
+    crate::parallel_download::download(http, url, &tmp_dest, move |downloaded, total| {
+        if let Some(pct) = downloaded.checked_mul(100).and_then(|n| n.checked_div(total)) {
             let bucket = pct / 5;
-            if bucket != last_reported_bucket {
-                last_reported_bucket = bucket;
-                let _ = tx
-                    .send(InstallProgress::Output(format!(
-                        "{label}: {pct}% ({:.1}/{:.1} GB)",
-                        downloaded as f64 / 1e9,
-                        total as f64 / 1e9
-                    )))
-                    .await;
+            if last_bucket.swap(bucket, Ordering::Relaxed) != bucket {
+                let _ = tx.try_send(InstallProgress::Output(format!(
+                    "{label}: {pct}% ({:.1}/{:.1} GB)",
+                    downloaded as f64 / 1e9,
+                    total as f64 / 1e9
+                )));
+            }
+        } else {
+            let mut last = last_text_report.lock().expect("last_text_report poisoned");
+            if last.elapsed() >= Duration::from_secs(2) {
+                *last = Instant::now();
+                let _ = tx.try_send(InstallProgress::Output(format!(
+                    "{label}: {:.1} GB staženo",
+                    downloaded as f64 / 1e9
+                )));
             }
         }
-    }
-    drop(file);
+    })
+    .await
+    .map_err(AppError::ComfyUi)?;
 
     std::fs::rename(&tmp_dest, dest).map_err(|e| AppError::ComfyUi(e.to_string()))?;
     Ok(())

@@ -27,6 +27,13 @@
     }
   }
 
+  async function pickModelsDir() {
+    const dir = await openFilePicker({ directory: true, multiple: false });
+    if (typeof dir === "string") {
+      await modelsStore.setModelsDir(dir);
+    }
+  }
+
   async function openTokenPage(service: ApiServiceId) {
     try {
       await openUrl(TOKEN_URLS[service]);
@@ -483,6 +490,21 @@
           {/if}
         {:else if section === "models"}
           <h3>{i18n.m.settings.models.title}</h3>
+
+          <label class="field-label" for="models-dir">{i18n.m.settings.models.dirLabel}</label>
+          <div class="comfyui-row">
+            <input id="models-dir" type="text" readonly value={modelsStore.modelsDir} />
+            <button
+              class="btn-sm primary"
+              disabled={modelsStore.movingModelsDir}
+              onclick={pickModelsDir}
+            >
+              {i18n.m.settings.models.dirBrowse}
+            </button>
+          </div>
+          {#if modelsStore.movingModelsDir}
+            <p class="hint">{i18n.m.settings.models.dirMoving}</p>
+          {/if}
 
           {#if modelsStore.gpu}
             <div class="gpu-info">

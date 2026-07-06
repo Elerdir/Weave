@@ -31,7 +31,12 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
         .unwrap_or(None)
         .unwrap_or_default();
 
-    let models_dir = data_dir.join("models");
+    // Uživatel může v nastavení/wizardu přesměrovat stahování modelů jinam
+    // než na výchozí app-data disk (typicky C:) — pokud je uloženo, použije se.
+    let models_dir = match db::app_config::get(&pool, commands::models::MODELS_DIR_KEY).await {
+        Ok(Some(custom)) if !custom.is_empty() => std::path::PathBuf::from(custom),
+        _ => data_dir.join("models"),
+    };
     // Musí odpovídat portu, na kterém LocalComfyInstaller spouští server.
     let comfyui_url = format!(
         "http://localhost:{}",
