@@ -106,6 +106,8 @@ function createModelsStore() {
   let gpu = $state<GpuInfo | null>(null);
   let download = $state<DownloadState | null>(null);
   let error = $state<string | null>(null);
+  let modelsDir = $state<string>("");
+  let movingModelsDir = $state(false);
 
   return {
     get models() {
@@ -123,6 +125,12 @@ function createModelsStore() {
     get error() {
       return error;
     },
+    get modelsDir() {
+      return modelsDir;
+    },
+    get movingModelsDir() {
+      return movingModelsDir;
+    },
 
     isDownloaded(id: string) {
       return models.some((m) => m.id === id);
@@ -132,6 +140,22 @@ function createModelsStore() {
       models = await invoke<LocalModel[]>("list_local_models");
       recommended = await invoke<RecommendedModel[]>("list_recommended_models");
       gpu = await invoke<GpuInfo | null>("detect_gpu");
+      modelsDir = await invoke<string>("get_models_dir");
+    },
+
+    /** Přesune stahování (i existující modely) do jiné složky. */
+    async setModelsDir(dir: string) {
+      movingModelsDir = true;
+      error = null;
+      try {
+        await invoke("set_models_dir", { dir });
+        modelsDir = dir;
+        models = await invoke<LocalModel[]>("list_local_models");
+      } catch (err) {
+        error = String(err);
+      } finally {
+        movingModelsDir = false;
+      }
     },
 
     async deleteModel(modelId: string) {

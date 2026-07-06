@@ -31,6 +31,22 @@ echo CUDA_PATH=%CUDA_PATH%
 echo CMAKE_CUDA_ARCHITECTURES=%CMAKE_CUDA_ARCHITECTURES%
 echo.
 
-call pnpm tauri dev --features llm-cuda
+where pnpm >nul 2>&1
+if errorlevel 1 (
+    echo CHYBA: 'pnpm' nebyl nalezen v PATH.
+    echo Zavri toto okno, zavri VSECHNY terminaly/okna a otevri novy terminal
+    echo ^(PATH se nacita jen pri otevreni okna^), pak to zkus znovu.
+    pause
+    endlocal
+    exit /b 1
+)
 
+call pnpm tauri dev --features llm-cuda
+if errorlevel 1 (
+    echo.
+    echo === Build/spusteni selhalo ^(kod %errorlevel%^) — viz vypis vyse ===
+)
+
+echo.
+pause
 endlocal

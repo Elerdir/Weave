@@ -127,7 +127,8 @@ pub async fn download_file(
     tx: &mpsc::Sender<InstallProgress>,
 ) -> AppResult<()> {
     use futures_util::StreamExt;
-    use std::io::Write;
+    use std::io::{BufWriter, Write};
+    use tokio::time::Instant;
 
     if dest.exists() {
         return Ok(());
@@ -151,11 +152,16 @@ pub async fn download_file(
 
     let total = response.content_length().unwrap_or(0);
     let tmp_dest = dest.with_extension("part");
-    let mut file =
-        std::fs::File::create(&tmp_dest).map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    let file = std::fs::File::create(&tmp_dest).map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    // BufWriter místo zápisu syscallem po každém chunku ze streamu.
+    let mut file = BufWriter::with_capacity(256 * 1024, file);
 
     let mut downloaded = 0u64;
     let mut last_reported_bucket = u64::MAX;
+    // Fallback pro servery bez Content-Length (`total == 0`): bez něj se
+    // procentuální report nikdy nespustí a stahování vypadá jako zaseklé,
+    // proto hlásíme aspoň průběžně stažené MB podle času.
+    let mut last_report = Instant::now();
     let mut stream = response.bytes_stream();
 
     while let Some(chunk) = stream.next().await {
@@ -180,8 +186,17 @@ pub async fn download_file(
                     )))
                     .await;
             }
+        } else if last_report.elapsed().as_secs() >= 2 {
+            last_report = Instant::now();
+            let _ = tx
+                .send(InstallProgress::Output(format!(
+                    "{label}: {:.1} GB staženo",
+                    downloaded as f64 / 1e9
+                )))
+                .await;
         }
     }
+    file.flush().map_err(|e| AppError::ComfyUi(e.to_string()))?;
     drop(file);
 
     std::fs::rename(&tmp_dest, dest).map_err(|e| AppError::ComfyUi(e.to_string()))?;

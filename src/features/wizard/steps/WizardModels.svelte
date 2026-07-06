@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
   import { i18n } from "$lib/i18n/index.svelte";
   import { modelsStore, formatBytes, formatSpeed } from "$lib/stores/models.svelte";
 
@@ -14,6 +15,13 @@
     if (!d || d.total === 0) return 0;
     return Math.round((d.downloaded / d.total) * 100);
   }
+
+  async function pickModelsDir() {
+    const dir = await openFolderPicker({ directory: true, multiple: false });
+    if (typeof dir === "string") {
+      await modelsStore.setModelsDir(dir);
+    }
+  }
 </script>
 
 <div class="step">
@@ -21,6 +29,23 @@
   <p class="description">{i18n.m.wizard.steps.models.description}</p>
 
   {#if !skipped}
+    <div class="dir-picker">
+      <span class="dir-label">{i18n.m.wizard.steps.models.dirLabel}</span>
+      <div class="dir-row">
+        <input type="text" readonly value={modelsStore.modelsDir} />
+        <button
+          class="btn-skip"
+          disabled={modelsStore.movingModelsDir}
+          onclick={pickModelsDir}
+        >
+          {i18n.m.wizard.steps.models.dirBrowse}
+        </button>
+      </div>
+      {#if modelsStore.movingModelsDir}
+        <span class="progress-text">{i18n.m.wizard.steps.models.dirMoving}</span>
+      {/if}
+    </div>
+
     {#if modelsStore.recommended.length === 0}
       <p class="loading-hint">{i18n.m.common.loading}</p>
     {:else}
@@ -86,6 +111,19 @@
   h2 { font-size: 1.25rem; font-weight: 600; }
   .description { color: var(--color-text-muted); line-height: 1.7; font-size: 0.875rem; }
   .loading-hint { color: var(--color-text-muted); font-size: 0.875rem; }
+
+  .dir-picker { display: flex; flex-direction: column; gap: 0.4rem; }
+  .dir-label { font-size: 0.8rem; color: var(--color-text-muted); }
+  .dir-row { display: flex; gap: 0.5rem; }
+  .dir-row input {
+    flex: 1;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8rem;
+    color: var(--color-text);
+  }
 
   .model-list {
     display: flex;

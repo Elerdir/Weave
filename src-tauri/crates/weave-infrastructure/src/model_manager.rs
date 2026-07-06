@@ -8,20 +8,27 @@ use weave_application::{
 };
 
 pub struct LocalModelManager {
-    models_dir: std::path::PathBuf,
+    models_dir: std::sync::RwLock<std::path::PathBuf>,
     http: reqwest::Client,
 }
 
 impl LocalModelManager {
     pub fn new(models_dir: impl Into<std::path::PathBuf>) -> Self {
         Self {
-            models_dir: models_dir.into(),
+            models_dir: std::sync::RwLock::new(models_dir.into()),
             http: reqwest::Client::new(),
         }
     }
 
+    fn dir(&self) -> std::path::PathBuf {
+        self.models_dir
+            .read()
+            .expect("models_dir lock poisoned")
+            .clone()
+    }
+
     fn manifest_path(&self) -> std::path::PathBuf {
-        self.models_dir.join("manifest.json")
+        self.dir().join("manifest.json")
     }
 
     fn read_manifest(&self) -> AppResult<Vec<LocalModel>> {
@@ -35,11 +42,12 @@ impl LocalModelManager {
     }
 
     fn write_manifest(&self, models: &[LocalModel]) -> AppResult<()> {
-        std::fs::create_dir_all(&self.models_dir)
-            .map_err(|e| AppError::Repository(e.to_string()))?;
+        let dir = self.dir();
+        std::fs::create_dir_all(&dir).map_err(|e| AppError::Repository(e.to_string()))?;
         let data = serde_json::to_string_pretty(models)
             .map_err(|e| AppError::Repository(e.to_string()))?;
-        std::fs::write(self.manifest_path(), data).map_err(|e| AppError::Repository(e.to_string()))
+        std::fs::write(dir.join("manifest.json"), data)
+            .map_err(|e| AppError::Repository(e.to_string()))
     }
 }
 
@@ -56,7 +64,8 @@ impl ModelManagerPort for LocalModelManager {
         tx: mpsc::Sender<DownloadProgress>,
     ) -> AppResult<()> {
         use futures_util::StreamExt;
-        use std::io::Write;
+        use std::io::{BufWriter, Write};
+        use tokio::time::Instant;
 
         let response = self
             .http
@@ -73,25 +82,47 @@ impl ModelManagerPort for LocalModelManager {
             })
             .await;
 
-        let dest = self.models_dir.join(format!("{model_id}.gguf"));
-        std::fs::create_dir_all(&self.models_dir)
-            .map_err(|e| AppError::Repository(e.to_string()))?;
+        let dir = self.dir();
+        let dest = dir.join(format!("{model_id}.gguf"));
+        std::fs::create_dir_all(&dir).map_err(|e| AppError::Repository(e.to_string()))?;
 
-        let mut file =
+        // BufWriter, aby se na disk nezapisovalo syscallem po každém (typicky
+        // pár KB velkém) chunku ze streamu — velké modely by jinak dělaly
+        // statisíce malých zápisů.
+        let file =
             std::fs::File::create(&dest).map_err(|e| AppError::Repository(e.to_string()))?;
+        let mut file = BufWriter::with_capacity(256 * 1024, file);
         let mut downloaded = 0u64;
         let mut stream = response.bytes_stream();
+
+        // Progress se dřív posílal po každém chunku (klidně statisíce eventů
+        // u vícegigového modelu) — kanál má kapacitu jen 64, takže `tx.send`
+        // čekal na pomalé zpracování na frontendu a reálně brzdil samotné
+        // stahování (backpressure). Teď se reportuje nejvýš ~5x/s.
+        let mut last_report = Instant::now();
+        const REPORT_INTERVAL_MS: u128 = 200;
 
         while let Some(chunk) = stream.next().await {
             let bytes = chunk.map_err(|e| AppError::Repository(e.to_string()))?;
             file.write_all(&bytes)
                 .map_err(|e| AppError::Repository(e.to_string()))?;
             downloaded += bytes.len() as u64;
-            let _ = tx
-                .send(DownloadProgress::Progress { downloaded, total })
-                .await;
-        }
 
+            if last_report.elapsed().as_millis() >= REPORT_INTERVAL_MS {
+                last_report = Instant::now();
+                let _ = tx
+                    .send(DownloadProgress::Progress { downloaded, total })
+                    .await;
+            }
+        }
+        file.flush()
+            .map_err(|e| AppError::Repository(e.to_string()))?;
+        drop(file);
+
+        // Finální stav vždy pošleme, i kdyby padl do posledního throttle okna.
+        let _ = tx
+            .send(DownloadProgress::Progress { downloaded, total })
+            .await;
         let _ = tx.send(DownloadProgress::Verifying).await;
         // TODO: SHA256 checksum ověření
 
@@ -116,7 +147,7 @@ impl ModelManagerPort for LocalModelManager {
     }
 
     async fn delete(&self, model_id: &str) -> AppResult<()> {
-        let path = self.models_dir.join(format!("{model_id}.gguf"));
+        let path = self.dir().join(format!("{model_id}.gguf"));
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| AppError::Repository(e.to_string()))?;
         }
@@ -170,6 +201,42 @@ impl ModelManagerPort for LocalModelManager {
         // Placeholder — produkčně dotaz na HuggingFace API
         Ok(vec![])
     }
+
+    async fn models_dir(&self) -> AppResult<std::path::PathBuf> {
+        Ok(self.dir())
+    }
+
+    async fn set_models_dir(&self, new_dir: std::path::PathBuf) -> AppResult<()> {
+        let old_dir = self.dir();
+        if old_dir == new_dir {
+            return Ok(());
+        }
+
+        std::fs::create_dir_all(&new_dir).map_err(|e| AppError::Repository(e.to_string()))?;
+
+        // Existující modely (a manifest) přesuneme, ať uživatel po přepnutí
+        // složky nemusí nic stahovat znovu. `rename` funguje jen v rámci
+        // stejného disku — přes disky (C: → D:) je potřeba kopie + smazání.
+        if old_dir.exists() {
+            for entry in
+                std::fs::read_dir(&old_dir).map_err(|e| AppError::Repository(e.to_string()))?
+            {
+                let entry = entry.map_err(|e| AppError::Repository(e.to_string()))?;
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let dest = new_dir.join(entry.file_name());
+                if std::fs::rename(&path, &dest).is_err() {
+                    std::fs::copy(&path, &dest).map_err(|e| AppError::Repository(e.to_string()))?;
+                    std::fs::remove_file(&path).map_err(|e| AppError::Repository(e.to_string()))?;
+                }
+            }
+        }
+
+        *self.models_dir.write().expect("models_dir lock poisoned") = new_dir;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +276,38 @@ mod tests {
         assert_eq!(loaded[0].id, "test-model");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn set_models_dir_moves_existing_models_and_manifest() {
+        let (mgr, old_dir) = tmp_manager();
+        let new_dir =
+            std::env::temp_dir().join(format!("weave_model_mgr_new_{}", uuid::Uuid::new_v4()));
+
+        let model = LocalModel {
+            id: "movable".into(),
+            name: "movable".into(),
+            version: "latest".into(),
+            size_bytes: 5,
+            path: old_dir.join("movable.gguf").to_string_lossy().into_owned(),
+            checksum: String::new(),
+        };
+        mgr.write_manifest(std::slice::from_ref(&model)).unwrap();
+        std::fs::write(old_dir.join("movable.gguf"), b"hello").unwrap();
+
+        mgr.set_models_dir(new_dir.clone()).await.unwrap();
+
+        assert_eq!(mgr.models_dir().await.unwrap(), new_dir);
+        assert!(new_dir.join("movable.gguf").exists());
+        assert!(new_dir.join("manifest.json").exists());
+        assert!(!old_dir.join("movable.gguf").exists());
+
+        let loaded = mgr.list_local().await.unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "movable");
+
+        let _ = std::fs::remove_dir_all(&old_dir);
+        let _ = std::fs::remove_dir_all(&new_dir);
     }
 
     #[tokio::test]

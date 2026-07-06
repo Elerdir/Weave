@@ -52,4 +52,9 @@ pub trait ModelManagerPort: Send + Sync {
     async fn delete(&self, model_id: &str) -> AppResult<()>;
     async fn detect_gpu(&self) -> AppResult<Option<GpuInfo>>;
     async fn check_for_updates(&self) -> AppResult<Vec<String>>;
+    /// Aktuální složka, do které se stahují modely.
+    async fn models_dir(&self) -> AppResult<std::path::PathBuf>;
+    /// Přesune existující modely (manifest + `.gguf` soubory) do nové složky
+    /// a od té chvíle do ní stahuje i vše nové — bez nutnosti restartu appky.
+    async fn set_models_dir(&self, new_dir: std::path::PathBuf) -> AppResult<()>;
 }
