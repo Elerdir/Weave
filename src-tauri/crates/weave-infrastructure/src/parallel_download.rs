@@ -38,7 +38,15 @@ pub async fn download(
         .await
         .map_err(|e| format!("HEAD požadavek selhal: {e}"))?;
 
-    let total = probe.content_length().unwrap_or(0);
+    // Response::content_length() se u HEAD odpovědi odvozuje od skutečného
+    // (prázdného) těla, ne od hlavičky — vrátí vždy 0 bez ohledu na to, co
+    // hlásí Content-Length. Proto ji čteme napřímo z hlaviček.
+    let total = probe
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
     let supports_range = probe
         .headers()
         .get(ACCEPT_RANGES)
