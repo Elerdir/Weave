@@ -8,5 +8,6 @@ pub mod keychain;
 pub mod llm;
 pub mod logs;
 pub mod model_manager;
+pub mod parallel_download;
 pub mod pdf;
 pub mod workspace;

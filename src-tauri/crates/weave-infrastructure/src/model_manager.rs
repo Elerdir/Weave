@@ -63,22 +63,21 @@ impl ModelManagerPort for LocalModelManager {
         source_url: &str,
         tx: mpsc::Sender<DownloadProgress>,
     ) -> AppResult<()> {
-        use futures_util::StreamExt;
-        use std::io::{BufWriter, Write};
-        use tokio::time::Instant;
-
-        let response = self
+        // Odhad velikosti jen pro "Started" event — samotné stahování (níže) si
+        // Content-Length/Accept-Ranges zjišťuje znovu, ať zvolí sekvenční nebo
+        // paralelní (segmentovaný) režim.
+        let total_hint = self
             .http
-            .get(source_url)
+            .head(source_url)
             .send()
             .await
-            .map_err(|e| AppError::Repository(e.to_string()))?;
-
-        let total = response.content_length().unwrap_or(0);
+            .ok()
+            .and_then(|r| r.content_length())
+            .unwrap_or(0);
         let _ = tx
             .send(DownloadProgress::Started {
                 model_id: model_id.to_string(),
-                total_bytes: total,
+                total_bytes: total_hint,
             })
             .await;
 
@@ -86,43 +85,23 @@ impl ModelManagerPort for LocalModelManager {
         let dest = dir.join(format!("{model_id}.gguf"));
         std::fs::create_dir_all(&dir).map_err(|e| AppError::Repository(e.to_string()))?;
 
-        // BufWriter, aby se na disk nezapisovalo syscallem po každém (typicky
-        // pár KB velkém) chunku ze streamu — velké modely by jinak dělaly
-        // statisíce malých zápisů.
-        let file =
-            std::fs::File::create(&dest).map_err(|e| AppError::Repository(e.to_string()))?;
-        let mut file = BufWriter::with_capacity(256 * 1024, file);
-        let mut downloaded = 0u64;
-        let mut stream = response.bytes_stream();
+        // Jedno TCP spojení bývá na CDN throughput-limitované výrazně pod reálnou
+        // šířku pásma — u velkých souborů s podporou HTTP Range se proto stahuje
+        // paralelně přes víc segmentů (viz `parallel_download`). Progress se
+        // reportuje throttlovaně (~5x/s); `try_send` místo `send().await`, aby šlo
+        // volat i ze sync callbacku volaného souběžnými segmenty.
+        let progress_tx = tx.clone();
+        let downloaded = crate::parallel_download::download(
+            &self.http,
+            source_url,
+            &dest,
+            move |downloaded, total| {
+                let _ = progress_tx.try_send(DownloadProgress::Progress { downloaded, total });
+            },
+        )
+        .await
+        .map_err(AppError::Repository)?;
 
-        // Progress se dřív posílal po každém chunku (klidně statisíce eventů
-        // u vícegigového modelu) — kanál má kapacitu jen 64, takže `tx.send`
-        // čekal na pomalé zpracování na frontendu a reálně brzdil samotné
-        // stahování (backpressure). Teď se reportuje nejvýš ~5x/s.
-        let mut last_report = Instant::now();
-        const REPORT_INTERVAL_MS: u128 = 200;
-
-        while let Some(chunk) = stream.next().await {
-            let bytes = chunk.map_err(|e| AppError::Repository(e.to_string()))?;
-            file.write_all(&bytes)
-                .map_err(|e| AppError::Repository(e.to_string()))?;
-            downloaded += bytes.len() as u64;
-
-            if last_report.elapsed().as_millis() >= REPORT_INTERVAL_MS {
-                last_report = Instant::now();
-                let _ = tx
-                    .send(DownloadProgress::Progress { downloaded, total })
-                    .await;
-            }
-        }
-        file.flush()
-            .map_err(|e| AppError::Repository(e.to_string()))?;
-        drop(file);
-
-        // Finální stav vždy pošleme, i kdyby padl do posledního throttle okna.
-        let _ = tx
-            .send(DownloadProgress::Progress { downloaded, total })
-            .await;
         let _ = tx.send(DownloadProgress::Verifying).await;
         // TODO: SHA256 checksum ověření
 
