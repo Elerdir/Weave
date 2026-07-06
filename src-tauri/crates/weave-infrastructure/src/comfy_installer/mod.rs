@@ -394,7 +394,10 @@ impl ComfyInstallerPort for LocalComfyInstaller {
         }
         let venv_python = venv_python_path(&venv_dir).to_string_lossy().into_owned();
 
-        // 4. PyTorch — CUDA build pokud je NVIDIA GPU, jinak CPU/výchozí
+        // 4. PyTorch — CUDA build pokud je NVIDIA GPU, jinak CPU/výchozí.
+        // Index se čas od času posouvá dál (PyTorch přestává pro starší CUDA
+        // verze stavět wheely pro nové verze Pythonu) — cu124 přestal mít
+        // wheely pro Python 3.14, cu126 v době psaní funguje pro 3.9-3.14.
         Self::step(&tx, "Instaluji PyTorch (může trvat několik minut)").await;
         if has_nvidia_gpu() {
             run_streamed(
@@ -407,7 +410,7 @@ impl ComfyInstallerPort for LocalComfyInstaller {
                     "torchvision",
                     "torchaudio",
                     "--index-url",
-                    "https://download.pytorch.org/whl/cu124",
+                    "https://download.pytorch.org/whl/cu126",
                 ],
                 None,
                 &tx,

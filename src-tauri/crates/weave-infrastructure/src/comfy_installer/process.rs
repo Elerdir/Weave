@@ -1,3 +1,6 @@
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -5,6 +8,12 @@ use weave_application::{
     error::{AppError, AppResult},
     ports::comfy_installer_port::InstallProgress,
 };
+
+/// Kolik posledních řádků stdout+stderr přiložit k chybě při selhání příkazu —
+/// dřív se hlásil jen exit kód (např. "pip install torch ... kód 1") bez
+/// skutečné pip chybové hlášky, což selhání nešlo diagnostikovat bez ručního
+/// zopakování příkazu.
+const ERROR_TAIL_LINES: usize = 20;
 
 /// Spustí příkaz, streamuje stdout+stderr řádek po řádku do `tx` jako
 /// `InstallProgress::Output` (dlouhotrvající kroky typu `pip install torch`
@@ -30,18 +39,25 @@ pub async fn run_streamed(
     let stdout = child.stdout.take().expect("stdout je piped");
     let stderr = child.stderr.take().expect("stderr je piped");
 
+    let tail: Arc<Mutex<VecDeque<String>>> =
+        Arc::new(Mutex::new(VecDeque::with_capacity(ERROR_TAIL_LINES + 1)));
+
     let tx_out = tx.clone();
+    let tail_out = tail.clone();
     let out_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            push_tail(&tail_out, &line);
             let _ = tx_out.send(InstallProgress::Output(line)).await;
         }
     });
 
     let tx_err = tx.clone();
+    let tail_err = tail.clone();
     let err_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            push_tail(&tail_err, &line);
             let _ = tx_err.send(InstallProgress::Output(line)).await;
         }
     });
@@ -54,13 +70,27 @@ pub async fn run_streamed(
     let _ = err_task.await;
 
     if !status.success() {
+        let context: Vec<String> = tail.lock().expect("tail mutex poisoned").iter().cloned().collect();
+        let suffix = if context.is_empty() {
+            String::new()
+        } else {
+            format!("\n---\n{}", context.join("\n"))
+        };
         return Err(AppError::ComfyUi(format!(
-            "{program} {} skončil s chybou (kód {:?})",
+            "{program} {} skončil s chybou (kód {:?}){suffix}",
             args.join(" "),
-            status.code()
+            status.code(),
         )));
     }
     Ok(())
+}
+
+fn push_tail(tail: &Arc<Mutex<VecDeque<String>>>, line: &str) {
+    let mut guard = tail.lock().expect("tail mutex poisoned");
+    if guard.len() >= ERROR_TAIL_LINES {
+        guard.pop_front();
+    }
+    guard.push_back(line.to_string());
 }
 
 /// Najde funkční Python 3 interpret (python / python3 / launcher `py -3`).
