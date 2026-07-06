@@ -95,6 +95,25 @@ pub async fn test_local_llm_connection(url: String) -> Result<bool, String> {
     Ok(client.is_available().await)
 }
 
+/// Uvolní vestavěný model z VRAM, pokud je zrovna načtený (kešovaný v
+/// `AppState.embedded_llm`) — bez tohle by uživatel musel čekat na další
+/// akci, co si o uvolnění řekne sama (generování obrázku, přepnutí backendu).
+/// Kešovaný záznam v mapě necháváme, model se líně nahraje zpět při další zprávě.
+#[tauri::command]
+pub async fn unload_embedded_model(state: State<'_, AppState>) -> Result<(), String> {
+    let client = {
+        let cache = state
+            .embedded_llm
+            .lock()
+            .expect("embedded_llm mutex poisoned");
+        cache.as_ref().map(|(_, client)| client.clone())
+    };
+    if let Some(client) = client {
+        client.unload().await;
+    }
+    Ok(())
+}
+
 pub const LLM_BACKEND_KEY: &str = "llm.backend";
 pub const LLM_LOCAL_URL_KEY: &str = "llm.local_url";
 pub const DEFAULT_LOCAL_URL: &str = "http://localhost:8080";

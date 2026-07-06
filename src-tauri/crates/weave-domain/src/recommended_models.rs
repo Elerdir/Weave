@@ -1,5 +1,29 @@
 use serde::{Deserialize, Serialize};
 
+/// Kolik z volné VRAM smí model maximálně zabrat — zbytek je rezerva pro KV
+/// cache, aktivace a další appky (prohlížeč, ComfyUI...).
+pub const GPU_VRAM_BUDGET_FRACTION: f64 = 0.8;
+
+/// Doporučí `gpu_layers` podle toho, jestli se celý model (odhadem podle
+/// velikosti .gguf souboru — v praxi dobrá aproximace VRAM nároku při plném
+/// GPU offloadu) vejde do rozpočtu volné VRAM. Když ne, vrátí 0 (celý model
+/// do RAM) — částečný offload, který stejně skončí OOM nebo je nepředvídatelně
+/// pomalý, je horší než čisté CPU/RAM řešení.
+///
+/// `free_vram_mb == 0` znamená neznámou VRAM (např. detekce selhala nebo jde
+/// o non-NVIDIA GPU) — chování zůstává beze změny (999 = všechny vrstvy).
+pub fn recommend_gpu_layers(model_size_bytes: u64, free_vram_mb: u64) -> u32 {
+    if free_vram_mb == 0 {
+        return 999;
+    }
+    let budget_bytes = (free_vram_mb as f64 * 1024.0 * 1024.0 * GPU_VRAM_BUDGET_FRACTION) as u64;
+    if model_size_bytes <= budget_bytes {
+        999
+    } else {
+        0
+    }
+}
+
 /// Doporučený model k jednoklikovému stažení pro vestavěnou GPU inferenci.
 /// URL vede přímo na .gguf soubor na veřejně dostupném HuggingFace repu
 /// (bez nutnosti přihlášení/tokenu).
@@ -132,6 +156,27 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recommend_gpu_layers_uses_all_gpu_when_model_fits_budget() {
+        // 10 GB volné VRAM * 0.8 = 8 GB rozpočet; 7 GB model se vejde.
+        let free_vram_mb = 10 * 1024;
+        let model_size = 7 * 1024 * 1024 * 1024u64;
+        assert_eq!(recommend_gpu_layers(model_size, free_vram_mb), 999);
+    }
+
+    #[test]
+    fn recommend_gpu_layers_falls_back_to_ram_when_over_budget() {
+        // 10 GB volné VRAM * 0.8 = 8 GB rozpočet; 9 GB model se nevejde.
+        let free_vram_mb = 10 * 1024;
+        let model_size = 9 * 1024 * 1024 * 1024u64;
+        assert_eq!(recommend_gpu_layers(model_size, free_vram_mb), 0);
+    }
+
+    #[test]
+    fn recommend_gpu_layers_defaults_to_all_when_vram_unknown() {
+        assert_eq!(recommend_gpu_layers(50 * 1024 * 1024 * 1024, 0), 999);
+    }
 
     #[test]
     fn all_recommended_models_have_valid_data() {

@@ -1,7 +1,7 @@
 use tauri::{Emitter, State, Window};
 use tokio::sync::mpsc;
 use weave_application::ports::model_manager_port::{DownloadProgress, GpuInfo, LocalModel};
-use weave_domain::recommended_models::{recommended_models, RecommendedModel};
+use weave_domain::recommended_models::{recommend_gpu_layers, recommended_models, RecommendedModel};
 
 use crate::state::AppState;
 
@@ -179,6 +179,18 @@ pub async fn download_recommended_model(
         .find(|m| m.id == recommended.id)
         .ok_or_else(|| "Model se stáhl, ale nenašel se v manifestu".to_string())?;
 
+    // Kolik vrstev na GPU podle skutečně volné VRAM — ne slepě "všechny",
+    // ať model, co se nevejde, neskončí OOM/nepředvídatelně pomalým částečným
+    // offloadem, ale rovnou celý v RAM.
+    let free_vram_mb = state
+        .model_manager
+        .detect_gpu()
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|gpu| gpu.free_vram_mb)
+        .unwrap_or(0);
+    let gpu_layers = recommend_gpu_layers(recommended.size_bytes, free_vram_mb);
+
     app_config::set(&state.pool, super::settings::LLM_BACKEND_KEY, "embedded")
         .await
         .map_err(|e| e.to_string())?;
@@ -192,10 +204,33 @@ pub async fn download_recommended_model(
     app_config::set(
         &state.pool,
         super::settings::LLM_GPU_LAYERS_KEY,
-        &recommended.recommended_gpu_layers.to_string(),
+        &gpu_layers.to_string(),
     )
     .await
     .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+/// Doporučí `gpu_layers` pro libovolný `.gguf` soubor podle jeho velikosti na
+/// disku a aktuálně volné VRAM — používá se při ručním přepnutí na jiný
+/// stažený model nebo výběru vlastního souboru, ať mají stejnou VRAM-aware
+/// logiku jako jednoklikové stažení doporučeného modelu.
+#[tauri::command]
+pub async fn recommend_gpu_layers_for_path(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let size_bytes = tokio::fs::metadata(&path)
+        .await
+        .map_err(|e| format!("Nelze přečíst velikost souboru {path}: {e}"))?
+        .len();
+    let free_vram_mb = state
+        .model_manager
+        .detect_gpu()
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|gpu| gpu.free_vram_mb)
+        .unwrap_or(0);
+    Ok(recommend_gpu_layers(size_bytes, free_vram_mb))
 }

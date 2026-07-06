@@ -143,6 +143,9 @@ impl ModelManagerPort for LocalModelManager {
         return Ok(Some(GpuInfo {
             name: "Apple Silicon GPU".to_string(),
             vram_mb: 0,
+            // Unified memory — volnou VRAM přes nvidia-smi zjistit nejde a
+            // nemáme (zatím) jinou metodu, 0 = "neznámá" (viz recommend_gpu_layers).
+            free_vram_mb: 0,
             backend: GpuBackend::Metal,
         }));
 
@@ -150,7 +153,10 @@ impl ModelManagerPort for LocalModelManager {
         {
             // Zkusíme CUDA přes nvidia-smi
             if let Ok(output) = std::process::Command::new("nvidia-smi")
-                .args(["--query-gpu=name,memory.total", "--format=csv,noheader"])
+                .args([
+                    "--query-gpu=name,memory.total,memory.free",
+                    "--format=csv,noheader",
+                ])
                 .output()
             {
                 if output.status.success() {
@@ -165,9 +171,15 @@ impl ModelManagerPort for LocalModelManager {
                         .and_then(|s| s.split_whitespace().next())
                         .and_then(|s| s.parse::<u64>().ok())
                         .unwrap_or(0);
+                    let free_vram = parts
+                        .get(2)
+                        .and_then(|s| s.split_whitespace().next())
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
                     return Ok(Some(GpuInfo {
                         name,
                         vram_mb: vram,
+                        free_vram_mb: free_vram,
                         backend: GpuBackend::Cuda,
                     }));
                 }
