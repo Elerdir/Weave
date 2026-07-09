@@ -84,11 +84,20 @@ pub async fn download(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    if !supports_range || total < MIN_PARALLEL_SIZE {
-        return download_sequential(http, url, dest, total, on_progress).await;
-    }
+    let result = if !supports_range || total < MIN_PARALLEL_SIZE {
+        download_sequential(http, url, dest, total, on_progress).await
+    } else {
+        download_segmented(http, url, dest, total, on_progress).await
+    };
 
-    download_segmented(http, url, dest, total, on_progress).await
+    // Po selhání rozpracovaný soubor smažeme — segmentovaný režim ho
+    // předalokuje na plnou velikost, takže by se soubor s dírami tvářil
+    // jako kompletní (a např. llama.cpp by na něm spadl). Resume neumíme,
+    // částečný soubor nemá hodnotu.
+    if result.is_err() {
+        let _ = std::fs::remove_file(dest);
+    }
+    result
 }
 
 async fn download_sequential(
@@ -181,14 +190,30 @@ async fn download_segmented(
         }));
     }
 
+    // Výsledky sbíráme ze VŠECH segmentů bez předčasného návratu — ticker
+    // se musí ukončit vždy. (Dřív se při chybě segmentu `?` vrátil rovnou,
+    // JoinHandle tickeru se jen dropnul a jeho smyčka běžela navěky, protože
+    // `downloaded` už nikdy nedosáhlo `total`.)
+    let mut result: Result<(), String> = Ok(());
     for task in tasks {
-        task.await.map_err(|e| e.to_string())??;
+        let outcome = match task.await {
+            Ok(r) => r,
+            Err(join_err) => Err(join_err.to_string()),
+        };
+        if let (Ok(()), Err(e)) = (&result, outcome) {
+            result = Err(e);
+        }
     }
-
     ticker.abort();
+
+    result?;
     on_progress(total, total);
     Ok(total)
 }
+
+/// Kolikrát zkusit segment znovu — velké soubory (10+ GB) běží desítky minut
+/// a jeden přechodný síťový výpadek by jinak zahodil celé stahování.
+const SEGMENT_ATTEMPTS: u32 = 3;
 
 async fn download_range(
     http: &reqwest::Client,
@@ -198,37 +223,79 @@ async fn download_range(
     end: u64,
     downloaded: &AtomicU64,
 ) -> Result<(), String> {
-    let response = http
-        .get(url)
-        .header(RANGE, format!("bytes={start}-{end}"))
-        .send()
-        .await
-        .map_err(|e| format!("Segment {start}-{end} selhal: {e}"))?;
-
-    if response.status() != StatusCode::PARTIAL_CONTENT {
-        return Err(format!(
-            "Segment {start}-{end}: server vrátil {}",
-            response.status()
-        ));
+    let mut last_err = String::new();
+    for attempt in 1..=SEGMENT_ATTEMPTS {
+        match download_range_once(http, url, dest, start, end, downloaded).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                tracing::warn!(
+                    segment = format!("{start}-{end}"),
+                    attempt,
+                    error = %e,
+                    "Segment stahování selhal"
+                );
+                last_err = e;
+                if attempt < SEGMENT_ATTEMPTS {
+                    tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt))).await;
+                }
+            }
+        }
     }
+    Err(format!("po {SEGMENT_ATTEMPTS} pokusech: {last_err}"))
+}
 
-    let mut file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .open(dest)
-        .await
-        .map_err(|e| e.to_string())?;
-    file.seek(std::io::SeekFrom::Start(start))
-        .await
-        .map_err(|e| e.to_string())?;
+/// Jeden pokus o segment. Při chybě vrátí čítač `downloaded` o bajty tohoto
+/// pokusu zpět, aby je opakování nezapočítalo dvakrát (progress by přeskočil
+/// přes 100 %). Zápis jde na pevný offset, takže opakování je bezpečné.
+async fn download_range_once(
+    http: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    start: u64,
+    end: u64,
+    downloaded: &AtomicU64,
+) -> Result<(), String> {
+    let mut written = 0u64;
+    let result = async {
+        let response = http
+            .get(url)
+            .header(RANGE, format!("bytes={start}-{end}"))
+            .send()
+            .await
+            .map_err(|e| format!("Segment {start}-{end} selhal: {e}"))?;
 
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let bytes = chunk.map_err(|e| format!("Segment {start}-{end} selhal: {e}"))?;
-        file.write_all(&bytes).await.map_err(|e| e.to_string())?;
-        downloaded.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        if response.status() != StatusCode::PARTIAL_CONTENT {
+            return Err(format!(
+                "Segment {start}-{end}: server vrátil {}",
+                response.status()
+            ));
+        }
+
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(dest)
+            .await
+            .map_err(|e| e.to_string())?;
+        file.seek(std::io::SeekFrom::Start(start))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk.map_err(|e| format!("Segment {start}-{end} selhal: {e}"))?;
+            file.write_all(&bytes).await.map_err(|e| e.to_string())?;
+            written += bytes.len() as u64;
+            downloaded.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        }
+        file.flush().await.map_err(|e| e.to_string())?;
+        Ok(())
     }
-    file.flush().await.map_err(|e| e.to_string())?;
-    Ok(())
+    .await;
+
+    if result.is_err() && written > 0 {
+        downloaded.fetch_sub(written, Ordering::Relaxed);
+    }
+    result
 }
 
 fn max_segments() -> u64 {
@@ -294,6 +361,78 @@ mod tests {
 
         assert_eq!(downloaded, body.len() as u64);
         assert_eq!(std::fs::read(&dest).unwrap(), body);
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[tokio::test]
+    async fn failed_segmented_download_removes_preallocated_file() {
+        let server = MockServer::start().await;
+        let total_size = 40 * 1024 * 1024u64;
+
+        Mock::given(method("HEAD"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-length", total_size.to_string())
+                    .insert_header("accept-ranges", "bytes"),
+            )
+            .mount(&server)
+            .await;
+        // Všechny segmenty trvale selžou (i po retry)
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let dest = tmp_dest("failed_cleanup");
+        let result = download(&reqwest::Client::new(), &server.uri(), &dest, |_, _| {}).await;
+
+        assert!(result.is_err());
+        // Předalokovaný soubor s dírami NESMÍ zůstat na disku — tvářil by se
+        // jako kompletní model.
+        assert!(!dest.exists(), "po chybě nesmí zůstat rozpracovaný soubor");
+    }
+
+    #[tokio::test]
+    async fn segment_retry_recovers_from_transient_error() {
+        let server = MockServer::start().await;
+        let total_size = 40 * 1024 * 1024u64;
+        let full_body: Vec<u8> = (0..total_size).map(|i| (i % 256) as u8).collect();
+
+        Mock::given(method("HEAD"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-length", total_size.to_string())
+                    .insert_header("accept-ranges", "bytes"),
+            )
+            .mount(&server)
+            .await;
+
+        // První GET selže (přechodný výpadek), další už vrací správné slices.
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        let body_for_mock = full_body.clone();
+        Mock::given(method("GET"))
+            .respond_with(move |req: &wiremock::Request| {
+                let range = req.headers.get("range").unwrap().to_str().unwrap();
+                let spec = range.strip_prefix("bytes=").unwrap();
+                let (start, end) = spec.split_once('-').unwrap();
+                let start: usize = start.parse().unwrap();
+                let end: usize = end.parse().unwrap();
+                ResponseTemplate::new(206).set_body_bytes(body_for_mock[start..=end].to_vec())
+            })
+            .mount(&server)
+            .await;
+
+        let dest = tmp_dest("retry");
+        let downloaded = download(&reqwest::Client::new(), &server.uri(), &dest, |_, _| {})
+            .await
+            .unwrap();
+
+        assert_eq!(downloaded, total_size);
+        assert_eq!(std::fs::read(&dest).unwrap(), full_body);
         let _ = std::fs::remove_file(&dest);
     }
 

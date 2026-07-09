@@ -10,4 +10,5 @@ pub mod logs;
 pub mod model_manager;
 pub mod parallel_download;
 pub mod pdf;
+pub mod spawn;
 pub mod workspace;

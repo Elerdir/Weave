@@ -642,13 +642,15 @@ impl ComfyInstallerPort for LocalComfyInstaller {
             .try_clone()
             .map_err(|e| AppError::ComfyUi(format!("Priprava ComfyUI logu selhala: {e}")))?;
 
-        let child = tokio::process::Command::new(&venv_python)
-            .arg("main.py")
+        let mut cmd = tokio::process::Command::new(&venv_python);
+        cmd.arg("main.py")
             .arg("--port")
             .arg(COMFYUI_DEFAULT_PORT.to_string())
             .current_dir(&self.install_dir)
             .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
+            .stderr(Stdio::from(stderr));
+        crate::spawn::hide_console(&mut cmd);
+        let child = cmd
             .spawn()
             .map_err(|e| AppError::ComfyUi(format!("Spuštění ComfyUI selhalo: {e}")))?;
 

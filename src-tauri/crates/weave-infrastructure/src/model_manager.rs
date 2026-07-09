@@ -90,17 +90,23 @@ impl ModelManagerPort for LocalModelManager {
         // paralelně přes víc segmentů (viz `parallel_download`). Progress se
         // reportuje throttlovaně (~5x/s); `try_send` místo `send().await`, aby šlo
         // volat i ze sync callbacku volaného souběžnými segmenty.
+        //
+        // Stahuje se do `.part` a až po úspěchu přejmenuje — segmentované stahování
+        // soubor předalokuje na plnou velikost, takže napůl stažený soubor by jinak
+        // vypadal jako hotový model (a llama.cpp by na něm spadl).
+        let tmp_dest = dir.join(format!("{model_id}.gguf.part"));
         let progress_tx = tx.clone();
         let downloaded = crate::parallel_download::download(
             &self.http,
             source_url,
-            &dest,
+            &tmp_dest,
             move |downloaded, total| {
                 let _ = progress_tx.try_send(DownloadProgress::Progress { downloaded, total });
             },
         )
         .await
         .map_err(AppError::Repository)?;
+        std::fs::rename(&tmp_dest, &dest).map_err(|e| AppError::Repository(e.to_string()))?;
 
         let _ = tx.send(DownloadProgress::Verifying).await;
         // TODO: SHA256 checksum ověření
@@ -152,13 +158,13 @@ impl ModelManagerPort for LocalModelManager {
         #[cfg(not(target_os = "macos"))]
         {
             // Zkusíme CUDA přes nvidia-smi
-            if let Ok(output) = std::process::Command::new("nvidia-smi")
-                .args([
-                    "--query-gpu=name,memory.total,memory.free",
-                    "--format=csv,noheader",
-                ])
-                .output()
-            {
+            let mut cmd = std::process::Command::new("nvidia-smi");
+            cmd.args([
+                "--query-gpu=name,memory.total,memory.free",
+                "--format=csv,noheader",
+            ]);
+            crate::spawn::hide_console_std(&mut cmd);
+            if let Ok(output) = cmd.output() {
                 if output.status.success() {
                     let info = String::from_utf8_lossy(&output.stdout);
                     let parts: Vec<&str> = info.trim().split(',').collect();

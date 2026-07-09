@@ -28,6 +28,7 @@ pub async fn run_streamed(
     cmd.args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    crate::spawn::hide_console(&mut cmd);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
@@ -106,7 +107,10 @@ pub fn find_system_python() -> Option<String> {
         } else {
             &["--version"]
         };
-        if let Ok(output) = std::process::Command::new(candidate).args(args).output() {
+        let mut probe = std::process::Command::new(candidate);
+        probe.args(args);
+        crate::spawn::hide_console_std(&mut probe);
+        if let Ok(output) = probe.output() {
             if output.status.success() {
                 let text = format!(
                     "{}{}",
@@ -141,12 +145,10 @@ pub fn venv_python_path(venv_dir: &std::path::Path) -> std::path::PathBuf {
 
 /// Detekuje NVIDIA GPU přes nvidia-smi (bez závislosti na jiném portu).
 pub fn has_nvidia_gpu() -> bool {
-    std::process::Command::new("nvidia-smi")
-        .arg("--query-gpu=name")
-        .arg("--format=csv,noheader")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    let mut cmd = std::process::Command::new("nvidia-smi");
+    cmd.arg("--query-gpu=name").arg("--format=csv,noheader");
+    crate::spawn::hide_console_std(&mut cmd);
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 /// Stáhne soubor s progress reportingem po ~5% krocích do `InstallProgress::Output`
