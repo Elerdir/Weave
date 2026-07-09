@@ -110,17 +110,24 @@ impl ModelCatalogPort for HuggingFaceCatalog {
                 }
                 // U LFS souborů (všechny GGUF) je skutečná velikost v `lfs.size`;
                 // top-level `size` bývá jen velikost pointer souboru.
-                let size_bytes = entry
-                    .get("lfs")
+                let lfs = entry.get("lfs");
+                let size_bytes = lfs
                     .and_then(|l| l.get("size"))
                     .and_then(|s| s.as_u64())
                     .or_else(|| entry.get("size").and_then(|s| s.as_u64()))
                     .unwrap_or(0);
+                // `lfs.oid` je SHA256 souboru (někdy s prefixem "sha256:").
+                let sha256 = lfs
+                    .and_then(|l| l.get("oid"))
+                    .and_then(|o| o.as_str())
+                    .map(|o| o.trim_start_matches("sha256:").to_ascii_lowercase())
+                    .filter(|o| !o.is_empty());
                 Some(CatalogFile {
                     file_name: path.to_string(),
                     size_bytes,
                     quant: parse_quant(path),
                     download_url: format!("{}/{}/resolve/main/{}", self.base_url, repo_id, path),
+                    sha256,
                 })
             })
             .collect();
@@ -241,9 +248,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 { "type": "file", "path": "README.md", "size": 100 },
                 { "type": "file", "path": "big.Q8_0.gguf", "size": 134,
-                  "lfs": { "size": 8_000_000_000u64 } },
+                  "lfs": { "size": 8_000_000_000u64, "oid": "sha256:ABCDEF123456" } },
                 { "type": "file", "path": "small.Q4_K_M.gguf", "size": 134,
-                  "lfs": { "size": 4_000_000_000u64 } },
+                  "lfs": { "size": 4_000_000_000u64, "oid": "deadbeef" } },
                 { "type": "directory", "path": "images" }
             ])))
             .mount(&server)
@@ -263,7 +270,10 @@ mod tests {
         assert!(files[0]
             .download_url
             .ends_with("/org/repo-GGUF/resolve/main/small.Q4_K_M.gguf"));
+        assert_eq!(files[0].sha256.as_deref(), Some("deadbeef"));
         assert_eq!(files[1].file_name, "big.Q8_0.gguf");
+        // Prefix "sha256:" se odstraňuje a hex normalizuje na lowercase
+        assert_eq!(files[1].sha256.as_deref(), Some("abcdef123456"));
     }
 
     #[tokio::test]

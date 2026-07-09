@@ -45,10 +45,13 @@ pub enum GpuBackend {
 #[cfg_attr(test, mockall::automock)]
 pub trait ModelManagerPort: Send + Sync {
     async fn list_local(&self) -> AppResult<Vec<LocalModel>>;
+    /// Stáhne model. `expected_sha256` (je-li známý, např. z HF `lfs.oid`)
+    /// se po stažení ověří — nesoulad soubor smaže a vrátí chybu.
     async fn download(
         &self,
         model_id: &str,
         source_url: &str,
+        expected_sha256: Option<String>,
         tx: mpsc::Sender<DownloadProgress>,
     ) -> AppResult<()>;
     async fn delete(&self, model_id: &str) -> AppResult<()>;

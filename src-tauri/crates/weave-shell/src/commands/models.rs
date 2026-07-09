@@ -57,10 +57,12 @@ pub async fn detect_gpu(state: State<'_, AppState>) -> Result<Option<GpuInfo>, S
 }
 
 /// Stáhne model na pozadí. Progress se posílá do okna jako `model-download-progress`.
+/// `sha256` (je-li znám, např. z HF katalogu) se po stažení ověří.
 #[tauri::command]
 pub async fn download_model(
     model_id: String,
     source_url: String,
+    sha256: Option<String>,
     window: Window,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
@@ -96,7 +98,7 @@ pub async fn download_model(
 
     state
         .model_manager
-        .download(&model_id, &source_url, tx)
+        .download(&model_id, &source_url, sha256, tx)
         .await
         .map_err(|e| e.to_string())
 }
@@ -186,9 +188,10 @@ pub async fn download_recommended_model(
         }
     });
 
+    // Doporučené modely checksum v katalogu nemají → bez ověření.
     state
         .model_manager
-        .download(&recommended.id, &recommended.download_url, tx)
+        .download(&recommended.id, &recommended.download_url, None, tx)
         .await
         .map_err(|e| e.to_string())?;
 

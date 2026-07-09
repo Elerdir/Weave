@@ -42,6 +42,8 @@ encoding_rs = { version = "0.8", optional = true }
 zip = { version = "7.2.0", default-features = false, features = ["deflate"] }
 png = { workspace = true }
 tokio-tungstenite = "0.29"
+sha2 = "0.10"
+hex = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.60", features = [

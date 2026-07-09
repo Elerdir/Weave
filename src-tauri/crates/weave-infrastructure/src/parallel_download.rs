@@ -85,19 +85,54 @@ pub async fn download(
     }
 
     let result = if !supports_range || total < MIN_PARALLEL_SIZE {
-        download_sequential(http, url, dest, total, on_progress).await
+        download_sequential(http, url, dest, total, supports_range, on_progress).await
     } else {
         download_segmented(http, url, dest, total, on_progress).await
     };
 
-    // Po selhání rozpracovaný soubor smažeme — segmentovaný režim ho
-    // předalokuje na plnou velikost, takže by se soubor s dírami tvářil
-    // jako kompletní (a např. llama.cpp by na něm spadl). Resume neumíme,
-    // částečný soubor nemá hodnotu.
-    if result.is_err() {
+    // Po selhání: když server umí Range, rozpracovaný soubor NECHÁVÁME —
+    // příští pokus na něj naváže (sekvenčně od velikosti souboru, segmentovaně
+    // podle sidecar metadat). Bez podpory Range je částečný soubor k ničemu
+    // a soubor s dírami by se tvářil jako kompletní → smazat i s metadaty.
+    if result.is_err() && !supports_range {
         let _ = std::fs::remove_file(dest);
+        let _ = std::fs::remove_file(segments_meta_path(dest));
     }
     result
+}
+
+/// Sidecar soubor segmentovaného stahování — pamatuje si, které segmenty už
+/// jsou komplet, aby šlo po přerušení navázat místo stahování od nuly.
+fn segments_meta_path(dest: &Path) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("{}.segments.json", dest.to_string_lossy()))
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SegmentsMeta {
+    total: u64,
+    segment_size: u64,
+    completed: Vec<bool>,
+}
+
+impl SegmentsMeta {
+    fn load_if_resumable(dest: &Path, total: u64, segment_size: u64, count: usize) -> Option<Self> {
+        let meta: SegmentsMeta =
+            serde_json::from_str(&std::fs::read_to_string(segments_meta_path(dest)).ok()?).ok()?;
+        // Layout musí sedět (jiná velikost/segmentace = jiný soubor či konfigurace)
+        // a soubor musí existovat v plné předalokované velikosti.
+        let file_len = dest.metadata().ok()?.len();
+        (meta.total == total
+            && meta.segment_size == segment_size
+            && meta.completed.len() == count
+            && file_len == total)
+            .then_some(meta)
+    }
+
+    fn store(&self, dest: &Path) {
+        if let Ok(json) = serde_json::to_string(self) {
+            let _ = std::fs::write(segments_meta_path(dest), json);
+        }
+    }
 }
 
 async fn download_sequential(
@@ -105,12 +140,27 @@ async fn download_sequential(
     url: &str,
     dest: &Path,
     total_hint: u64,
+    supports_range: bool,
     on_progress: impl Fn(u64, u64) + Send + Sync + 'static,
 ) -> Result<u64, String> {
     use std::io::{BufWriter, Write};
 
-    let response = http
-        .get(url)
+    // Resume: existující částečný soubor + Range podpora + známá cílová
+    // velikost → pokračujeme od konce souboru místo stahování od nuly.
+    // (Bez validace verze souboru — stejné zjednodušení jako běžné downloadery;
+    // checksum po stažení případný nesoulad odhalí.)
+    let existing = dest.metadata().map(|m| m.len()).unwrap_or(0);
+    let resume_from = if supports_range && total_hint > 0 && existing > 0 && existing < total_hint {
+        existing
+    } else {
+        0
+    };
+
+    let mut request = http.get(url);
+    if resume_from > 0 {
+        request = request.header(RANGE, format!("bytes={resume_from}-"));
+    }
+    let response = request
         .send()
         .await
         .map_err(|e| format!("Stažení selhalo: {e}"))?;
@@ -118,11 +168,21 @@ async fn download_sequential(
         return Err(format!("Server vrátil {}", response.status()));
     }
 
-    let total = response.content_length().unwrap_or(total_hint);
-    let file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+    // Server může resume ignorovat a poslat celé tělo (200) → začínáme od nuly.
+    let resuming = resume_from > 0 && response.status() == StatusCode::PARTIAL_CONTENT;
+    let (total, file, mut downloaded) = if resuming {
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dest)
+            .map_err(|e| e.to_string())?;
+        (total_hint, file, resume_from)
+    } else {
+        let total = response.content_length().unwrap_or(total_hint);
+        let file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+        (total, file, 0u64)
+    };
     let mut file = BufWriter::with_capacity(256 * 1024, file);
 
-    let mut downloaded = 0u64;
     let mut last_report = tokio::time::Instant::now();
     let mut stream = response.bytes_stream();
 
@@ -148,18 +208,40 @@ async fn download_segmented(
     total: u64,
     on_progress: impl Fn(u64, u64) + Send + Sync + 'static,
 ) -> Result<u64, String> {
-    // Soubor předalokujeme na plnou velikost, ať do něj segmenty můžou psát
-    // na svůj offset nezávisle na sobě (řídké/preallocated zápisy, ne append).
-    {
-        let file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
-        file.set_len(total).map_err(|e| e.to_string())?;
-    }
-
     let num_segments = (total / MIN_SEGMENT_SIZE).clamp(1, max_segments());
     let segment_size = total.div_ceil(num_segments);
+    let segment_count = num_segments.min(total.div_ceil(segment_size)) as usize;
 
-    let downloaded = Arc::new(AtomicU64::new(0));
+    // Resume: sidecar metadata z přerušeného stahování říkají, které segmenty
+    // už jsou komplet — ty se přeskočí. Když metadata nesedí (jiná velikost,
+    // jiný layout) nebo nejsou, soubor se předalokuje znovu a jede se od nuly.
+    let meta = match SegmentsMeta::load_if_resumable(dest, total, segment_size, segment_count) {
+        Some(meta) => meta,
+        None => {
+            // Předalokace na plnou velikost — segmenty pak píšou na svůj
+            // offset nezávisle na sobě (žádný append).
+            let file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+            file.set_len(total).map_err(|e| e.to_string())?;
+            SegmentsMeta {
+                total,
+                segment_size,
+                completed: vec![false; segment_count],
+            }
+        }
+    };
+
+    // Metadata zapsat hned — kdyby appka spadla uprostřed (nebo selhaly
+    // všechny segmenty), příští běh pozná rozpracované stahování a naváže.
+    meta.store(dest);
+
+    // Hotové segmenty se rovnou započítají do progresu.
+    let initial: u64 = (0..segment_count)
+        .filter(|&i| meta.completed[i])
+        .map(|i| segment_len(i as u64, segment_size, total))
+        .sum();
+    let downloaded = Arc::new(AtomicU64::new(initial));
     let on_progress = Arc::new(on_progress);
+    let meta = Arc::new(std::sync::Mutex::new(meta));
 
     let ticker_downloaded = downloaded.clone();
     let ticker_progress = on_progress.clone();
@@ -175,18 +257,25 @@ async fn download_segmented(
     });
 
     let mut tasks = Vec::new();
-    for i in 0..num_segments {
-        let start = i * segment_size;
-        if start >= total {
-            break;
+    for i in 0..segment_count as u64 {
+        if meta.lock().expect("segments meta poisoned").completed[i as usize] {
+            continue;
         }
+        let start = i * segment_size;
         let end = (start + segment_size).min(total) - 1;
         let http = http.clone();
         let url = url.to_string();
         let dest = dest.to_path_buf();
         let downloaded = downloaded.clone();
+        let meta = meta.clone();
         tasks.push(tokio::spawn(async move {
-            download_range(&http, &url, &dest, start, end, &downloaded).await
+            download_range(&http, &url, &dest, start, end, &downloaded).await?;
+            // Hotový segment hned zapsat do sidecar metadat — kdyby zbytek
+            // selhal (nebo appka spadla), příští pokus tenhle segment přeskočí.
+            let mut guard = meta.lock().expect("segments meta poisoned");
+            guard.completed[i as usize] = true;
+            guard.store(&dest);
+            Ok::<(), String>(())
         }));
     }
 
@@ -207,8 +296,16 @@ async fn download_segmented(
     ticker.abort();
 
     result?;
+    // Kompletní soubor → sidecar metadata už nejsou potřeba.
+    let _ = std::fs::remove_file(segments_meta_path(dest));
     on_progress(total, total);
     Ok(total)
+}
+
+/// Skutečná délka i-tého segmentu (poslední bývá kratší).
+fn segment_len(i: u64, segment_size: u64, total: u64) -> u64 {
+    let start = i * segment_size;
+    (start + segment_size).min(total).saturating_sub(start)
 }
 
 /// Kolikrát zkusit segment znovu — velké soubory (10+ GB) běží desítky minut
@@ -365,7 +462,146 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_segmented_download_removes_preallocated_file() {
+    async fn sequential_resume_continues_from_partial_file() {
+        let server = MockServer::start().await;
+        let full_body: Vec<u8> = (0..1000u64).map(|i| (i % 256) as u8).collect();
+        let cut = 400usize;
+
+        Mock::given(method("HEAD"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-length", full_body.len().to_string())
+                    .insert_header("accept-ranges", "bytes"),
+            )
+            .mount(&server)
+            .await;
+        // Malý soubor (< MIN_PARALLEL_SIZE) → sekvenční cesta; server na
+        // Range odpovídá 206 se zbytkem těla.
+        let body_for_mock = full_body.clone();
+        Mock::given(method("GET"))
+            .respond_with(move |req: &wiremock::Request| {
+                match req.headers.get("range").and_then(|v| v.to_str().ok()) {
+                    Some(range) => {
+                        let start: usize = range
+                            .strip_prefix("bytes=")
+                            .and_then(|s| s.strip_suffix('-'))
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        ResponseTemplate::new(206).set_body_bytes(body_for_mock[start..].to_vec())
+                    }
+                    None => ResponseTemplate::new(200).set_body_bytes(body_for_mock.clone()),
+                }
+            })
+            .mount(&server)
+            .await;
+
+        // Rozpracovaný soubor z „přerušeného" stahování
+        let dest = tmp_dest("seq_resume");
+        std::fs::write(&dest, &full_body[..cut]).unwrap();
+
+        let downloaded = download(&reqwest::Client::new(), &server.uri(), &dest, |_, _| {})
+            .await
+            .unwrap();
+
+        // Vrácený počet = celkem (včetně už existující části), obsah kompletní
+        assert_eq!(downloaded, full_body.len() as u64);
+        assert_eq!(std::fs::read(&dest).unwrap(), full_body);
+        // A opravdu se navazovalo: přišel právě jeden GET s Range od místa řezu
+        let range_gets = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| {
+                r.method.as_str() == "GET"
+                    && r.headers
+                        .get("range")
+                        .is_some_and(|v| v.to_str().unwrap() == format!("bytes={cut}-"))
+            })
+            .count();
+        assert_eq!(range_gets, 1, "stahování mělo navázat od bajtu {cut}");
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[tokio::test]
+    async fn segmented_resume_skips_completed_segments() {
+        let server = MockServer::start().await;
+        let total_size = 40 * 1024 * 1024u64; // 2 segmenty po 20 MB
+        let full_body: Vec<u8> = (0..total_size).map(|i| (i % 256) as u8).collect();
+
+        Mock::given(method("HEAD"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-length", total_size.to_string())
+                    .insert_header("accept-ranges", "bytes"),
+            )
+            .mount(&server)
+            .await;
+
+        // Druhý segment (od 20 MB) při prvním běhu trvale selhává — přesně
+        // SEGMENT_ATTEMPTS pokusů, pak je mock vyčerpaný a další běh projde.
+        let segment2_range = format!("bytes={}-{}", total_size / 2, total_size - 1);
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::header("range", segment2_range.as_str()))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(u64::from(super::SEGMENT_ATTEMPTS))
+            .mount(&server)
+            .await;
+        let body_for_mock = full_body.clone();
+        Mock::given(method("GET"))
+            .respond_with(move |req: &wiremock::Request| {
+                let range = req.headers.get("range").unwrap().to_str().unwrap();
+                let spec = range.strip_prefix("bytes=").unwrap();
+                let (start, end) = spec.split_once('-').unwrap();
+                let start: usize = start.parse().unwrap();
+                let end: usize = end.parse().unwrap();
+                ResponseTemplate::new(206).set_body_bytes(body_for_mock[start..=end].to_vec())
+            })
+            .mount(&server)
+            .await;
+
+        let dest = tmp_dest("seg_resume");
+
+        // 1. běh: druhý segment selže → chyba, ale soubor + metadata zůstávají
+        let first = download(&reqwest::Client::new(), &server.uri(), &dest, |_, _| {}).await;
+        assert!(first.is_err());
+        assert!(dest.exists(), "částečný soubor musí zůstat pro resume");
+        assert!(
+            segments_meta_path(&dest).exists(),
+            "sidecar metadata musí zůstat pro resume"
+        );
+
+        // 2. běh: naváže — první (hotový) segment se už znovu nestahuje
+        let downloaded = download(&reqwest::Client::new(), &server.uri(), &dest, |_, _| {})
+            .await
+            .unwrap();
+        assert_eq!(downloaded, total_size);
+        assert_eq!(std::fs::read(&dest).unwrap(), full_body);
+        assert!(
+            !segments_meta_path(&dest).exists(),
+            "po úspěchu se metadata mažou"
+        );
+
+        // První segment stažen jen jednou (v 1. běhu), 2. běh ho přeskočil
+        let segment1_range = format!("bytes=0-{}", total_size / 2 - 1);
+        let segment1_gets = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|r| {
+                r.headers
+                    .get("range")
+                    .is_some_and(|v| v.to_str().unwrap() == segment1_range)
+            })
+            .count();
+        assert_eq!(segment1_gets, 1, "hotový segment se nesmí stahovat znovu");
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[tokio::test]
+    async fn failed_segmented_download_keeps_file_and_meta_for_resume() {
         let server = MockServer::start().await;
         let total_size = 40 * 1024 * 1024u64;
 
@@ -383,13 +619,40 @@ mod tests {
             .mount(&server)
             .await;
 
-        let dest = tmp_dest("failed_cleanup");
+        let dest = tmp_dest("failed_keep");
         let result = download(&reqwest::Client::new(), &server.uri(), &dest, |_, _| {}).await;
 
         assert!(result.is_err());
-        // Předalokovaný soubor s dírami NESMÍ zůstat na disku — tvářil by se
-        // jako kompletní model.
-        assert!(!dest.exists(), "po chybě nesmí zůstat rozpracovaný soubor");
+        // Server umí Range → rozpracovaný soubor + sidecar metadata zůstávají
+        // pro resume. (Že se nedokončený soubor netváří jako hotový, řeší
+        // volající vzorem `.part` + rename.)
+        assert!(dest.exists(), "soubor má zůstat pro resume");
+        assert!(
+            segments_meta_path(&dest).exists(),
+            "metadata mají zůstat pro resume"
+        );
+        let _ = std::fs::remove_file(&dest);
+        let _ = std::fs::remove_file(segments_meta_path(&dest));
+    }
+
+    #[tokio::test]
+    async fn failed_download_without_range_support_removes_partial_file() {
+        // Bez podpory Range je částečný soubor k ničemu → po chybě se maže.
+        let server = MockServer::start().await;
+        Mock::given(method("HEAD"))
+            .respond_with(ResponseTemplate::new(200).insert_header("content-length", "500"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let dest = tmp_dest("failed_noresume");
+        let result = download(&reqwest::Client::new(), &server.uri(), &dest, |_, _| {}).await;
+
+        assert!(result.is_err());
+        assert!(!dest.exists(), "bez Range podpory se částečný soubor maže");
     }
 
     #[tokio::test]

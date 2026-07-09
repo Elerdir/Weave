@@ -61,6 +61,7 @@ impl ModelManagerPort for LocalModelManager {
         &self,
         model_id: &str,
         source_url: &str,
+        expected_sha256: Option<String>,
         tx: mpsc::Sender<DownloadProgress>,
     ) -> AppResult<()> {
         // Odhad velikosti jen pro "Started" event — samotné stahování (níže) si
@@ -106,10 +107,27 @@ impl ModelManagerPort for LocalModelManager {
         )
         .await
         .map_err(AppError::Repository)?;
-        std::fs::rename(&tmp_dest, &dest).map_err(|e| AppError::Repository(e.to_string()))?;
 
+        // Ověření SHA256 (je-li znám, např. z HF `lfs.oid`) — JEŠTĚ na `.part`
+        // souboru, aby vadný obsah nikdy nedostal finální jméno modelu.
         let _ = tx.send(DownloadProgress::Verifying).await;
-        // TODO: SHA256 checksum ověření
+        let mut checksum = String::new();
+        if let Some(expected) = expected_sha256
+            .as_deref()
+            .map(|s| s.trim().trim_start_matches("sha256:").to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+        {
+            let actual = sha256_of_file(&tmp_dest).await?;
+            if actual != expected {
+                let _ = std::fs::remove_file(&tmp_dest);
+                return Err(AppError::Repository(format!(
+                    "Stažený soubor je poškozený: SHA256 nesouhlasí \
+                     (očekáváno {expected}, staženo {actual}). Soubor byl smazán — zkus to znovu."
+                )));
+            }
+            checksum = actual;
+        }
+        std::fs::rename(&tmp_dest, &dest).map_err(|e| AppError::Repository(e.to_string()))?;
 
         let model = LocalModel {
             id: model_id.to_string(),
@@ -117,7 +135,7 @@ impl ModelManagerPort for LocalModelManager {
             version: "latest".to_string(),
             size_bytes: downloaded,
             path: dest.to_string_lossy().into_owned(),
-            checksum: String::new(),
+            checksum,
         };
 
         // Zapsat do manifestu, jinak by list_local model po restartu neviděl
@@ -236,6 +254,34 @@ impl ModelManagerPort for LocalModelManager {
     }
 }
 
+/// SHA256 souboru (hex, lowercase). Hashuje se streamovaně po 1 MB blocích
+/// ve `spawn_blocking` — modely mají jednotky až desítky GB a nesmí blokovat
+/// async runtime.
+async fn sha256_of_file(path: &std::path::Path) -> AppResult<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let mut file =
+            std::fs::File::open(&path).map_err(|e| AppError::Repository(e.to_string()))?;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            let n = file
+                .read(&mut buf)
+                .map_err(|e| AppError::Repository(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        Ok(hex::encode(hasher.finalize()))
+    })
+    .await
+    .map_err(|e| AppError::Repository(e.to_string()))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +318,85 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].id, "test-model");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn download_verifies_sha256_and_fills_manifest_checksum() {
+        use sha2::{Digest, Sha256};
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let body = b"gguf-fake-content".to_vec();
+        let expected = hex::encode(Sha256::digest(&body));
+        Mock::given(method("HEAD"))
+            .respond_with(
+                ResponseTemplate::new(200).insert_header("content-length", body.len().to_string()),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+            .mount(&server)
+            .await;
+
+        let (mgr, dir) = tmp_manager();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        // Prefix "sha256:" musí projít taky (formát z HF lfs.oid)
+        mgr.download(
+            "checked",
+            &server.uri(),
+            Some(format!("sha256:{expected}")),
+            tx,
+        )
+        .await
+        .unwrap();
+        let _ = drain.await;
+
+        assert!(dir.join("checked.gguf").exists());
+        let manifest = mgr.list_local().await.unwrap();
+        assert_eq!(
+            manifest[0].checksum, expected,
+            "checksum patří do manifestu"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn download_rejects_sha256_mismatch_and_removes_file() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("HEAD"))
+            .respond_with(ResponseTemplate::new(200).insert_header("content-length", "9"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"tampered!".to_vec()))
+            .mount(&server)
+            .await;
+
+        let (mgr, dir) = tmp_manager();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let err = mgr
+            .download("bad", &server.uri(), Some("0".repeat(64)), tx)
+            .await
+            .unwrap_err()
+            .to_string();
+        let _ = drain.await;
+
+        assert!(err.contains("SHA256"), "chyba má zmínit checksum: {err}");
+        // Vadný soubor nesmí zůstat pod finálním ani .part jménem a nesmí
+        // se dostat do manifestu.
+        assert!(!dir.join("bad.gguf").exists());
+        assert!(!dir.join("bad.gguf.part").exists());
+        assert!(mgr.list_local().await.unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

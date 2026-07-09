@@ -173,8 +173,8 @@ function createModelsStore() {
       models = models.filter((m) => m.id !== modelId);
     },
 
-    async downloadModel(modelId: string, sourceUrl: string) {
-      await runDownload(modelId, () => invoke("download_model", { modelId, sourceUrl }));
+    async downloadModel(modelId: string, sourceUrl: string, sha256: string | null = null) {
+      await runDownload(modelId, () => invoke("download_model", { modelId, sourceUrl, sha256 }));
     },
 
     /**
