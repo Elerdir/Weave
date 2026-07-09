@@ -187,7 +187,7 @@ const cs = {
     add: "Přidat",
     empty: "Zatím žádné postavy. Přidej postavu a nahraj jí pár fotek.",
     emptyShort: "Žádné uložené postavy",
-    notesPlaceholder: "Poznámky (věk, vzhled…) — pro tebe, do generování nejdou",
+    notesPlaceholder: "Poznámky (věk, vzhled, povaha…) — když postavu zmíníš jménem, přidají se do kontextu psaní",
     addPhotos: "Přidat fotky",
     removePhoto: "Odebrat fotku",
     delete: "Smazat postavu",

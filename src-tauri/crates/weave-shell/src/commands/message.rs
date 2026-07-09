@@ -288,6 +288,11 @@ async fn build_use_case(
         Arc::new(weave_infrastructure::civitai::CivitAiClient::new(
             civitai_token,
         )),
+        Arc::new(
+            weave_infrastructure::db::subject_repo::SqliteSubjectRepository::new(
+                state.pool.clone(),
+            ),
+        ),
     )
 }
 

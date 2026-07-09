@@ -18,6 +18,7 @@ use crate::{
         llm_port::{ChatRequest, LlmPort, StreamChunk},
         lora_catalog_port::LoraCatalogPort,
         persona_repository::PersonaRepository,
+        subject_repository::SubjectRepository,
         workspace_port::WorkspaceRepository,
     },
 };
@@ -372,6 +373,33 @@ fn parse_prompt_enhancement(raw: &str, fallback: &str) -> (String, Option<String
     }
 }
 
+/// Je jméno postavy zmíněné v (už normalizovaném) textu? Porovnává se bez
+/// diakritiky a velikosti písmen. Česká ženská jména na -a se skloňují
+/// (Růženka → Růžence/Růženku…), proto se u nich zkouší i kmen bez koncovky
+/// a bez posledních dvou znaků (palatalizace k→c v dativu). Jména do 3 znaků
+/// se ignorují, aby se neshodovala běžná slova.
+fn subject_name_mentioned(name: &str, normalized_haystack: &str) -> bool {
+    let name = strip_czech_diacritics(name.trim()).to_lowercase();
+    if name.chars().count() < 3 {
+        return false;
+    }
+    if normalized_haystack.contains(&name) {
+        return true;
+    }
+    if name.ends_with('a') {
+        for cut in [1usize, 2] {
+            let stem: String = {
+                let chars: Vec<char> = name.chars().collect();
+                chars[..chars.len().saturating_sub(cut)].iter().collect()
+            };
+            if stem.chars().count() >= 4 && normalized_haystack.contains(&stem) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub struct SendMessageUseCase {
     conv_repo: Arc<dyn ConversationRepository>,
     msg_repo: Arc<dyn MessageRepository>,
@@ -383,6 +411,7 @@ pub struct SendMessageUseCase {
     gen_settings_repo: Arc<dyn GenerationSettingsRepository>,
     comfy_installer: Arc<dyn ComfyInstallerPort>,
     lora_catalog: Arc<dyn LoraCatalogPort>,
+    subject_repo: Arc<dyn SubjectRepository>,
 }
 
 impl SendMessageUseCase {
@@ -398,6 +427,7 @@ impl SendMessageUseCase {
         gen_settings_repo: Arc<dyn GenerationSettingsRepository>,
         comfy_installer: Arc<dyn ComfyInstallerPort>,
         lora_catalog: Arc<dyn LoraCatalogPort>,
+        subject_repo: Arc<dyn SubjectRepository>,
     ) -> Self {
         Self {
             conv_repo,
@@ -410,7 +440,25 @@ impl SendMessageUseCase {
             gen_settings_repo,
             comfy_installer,
             lora_catalog,
+            subject_repo,
         }
+    }
+
+    /// Postavy zmíněné jménem v textu (bez ohledu na velikost písmen
+    /// a diakritiku, včetně běžného skloňování ženských jmen na -a).
+    async fn mentioned_subjects(&self, text: &str) -> Vec<weave_domain::subject::Subject> {
+        let subjects = match self.subject_repo.list().await {
+            Ok(subjects) => subjects,
+            Err(e) => {
+                tracing::warn!("Načtení referenčních postav selhalo: {e}");
+                return vec![];
+            }
+        };
+        let haystack = strip_czech_diacritics(text).to_lowercase();
+        subjects
+            .into_iter()
+            .filter(|s| subject_name_mentioned(&s.name, &haystack))
+            .collect()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -640,6 +688,21 @@ impl SendMessageUseCase {
             init_image.is_some() || matches!(intent, weave_domain::model::Intent::ImageGeneration);
         let result = match is_image {
             true => {
+                // Zmíněná referenční postava bez přiložených fotek → její fotky
+                // se přiloží automaticky (PuLID). Jen při PRÁVĚ jedné shodě —
+                // průměrovat identity dvou různých lidí nedává smysl.
+                let mut reference_image_paths = reference_image_paths;
+                if reference_image_paths.is_empty() && init_image.is_none() {
+                    let mentioned = self.mentioned_subjects(&content).await;
+                    if let [subject] = mentioned.as_slice() {
+                        if !subject.images.is_empty() {
+                            tracing::info!(subject = %subject.name,
+                                "Postava zmíněna v promptu — přikládám její fotky jako referenci");
+                            reference_image_paths =
+                                subject.images.iter().map(|i| i.path.clone()).collect();
+                        }
+                    }
+                }
                 self.handle_image(
                     content,
                     reference_image_paths,
@@ -657,6 +720,12 @@ impl SendMessageUseCase {
 
                 // Přiložené @soubory → system kontext na začátku (neukládá se do historie)
                 if let Some(context) = self.build_file_context(&file_refs).await? {
+                    history.insert(0, Message::system(conversation_id.clone(), context));
+                }
+
+                // Zmíněné referenční postavy → jejich poznámky (vzhled, věk…)
+                // jako system kontext, aby spisovatel držel charakter konzistentní.
+                if let Some(context) = self.build_subject_context(&content).await {
                     history.insert(0, Message::system(conversation_id.clone(), context));
                 }
 
@@ -734,6 +803,25 @@ impl SendMessageUseCase {
         }
 
         Ok(if any { Some(context) } else { None })
+    }
+
+    /// System kontext s popisy postav zmíněných v aktuální zprávě (jméno
+    /// a poznámky uživatele: vzhled, věk, povaha…). `None` když žádná
+    /// zmíněná postava nemá neprázdné poznámky.
+    async fn build_subject_context(&self, content: &str) -> Option<String> {
+        let mentioned = self.mentioned_subjects(content).await;
+        let described: Vec<String> = mentioned
+            .iter()
+            .filter(|s| !s.notes.trim().is_empty())
+            .map(|s| format!("- {}: {}", s.name.trim(), s.notes.trim()))
+            .collect();
+        if described.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "Popisy postav od uživatele (drž je konzistentně v celém textu):\n{}",
+            described.join("\n")
+        ))
     }
 
     /// Kompletní pipeline generování obrázku: zkontroluje prostředí, případně
@@ -1229,6 +1317,14 @@ mod tests {
         m
     }
 
+    /// Mock repozitáře postav: žádné uložené postavy (výchozí pro testy,
+    /// kde postavy nejsou předmětem).
+    fn default_subject_repo() -> crate::ports::subject_repository::MockSubjectRepository {
+        let mut m = crate::ports::subject_repository::MockSubjectRepository::new();
+        m.expect_list().returning(|| Box::pin(async { Ok(vec![]) }));
+        m
+    }
+
     /// Mock ComfyUI installeru: „vše připraveno, server běží" — orchestrace
     /// tak nic neinstaluje ani nespouští (výchozí pro testy mimo orchestraci).
     fn default_comfy_installer() -> MockComfyInstallerPort {
@@ -1256,6 +1352,7 @@ mod tests {
             Arc::new(default_gen_settings()),
             Arc::new(default_comfy_installer()),
             Arc::new(default_lora_catalog()),
+            Arc::new(default_subject_repo()),
         )
     }
 
@@ -1282,6 +1379,7 @@ mod tests {
             Arc::new(default_gen_settings()),
             Arc::new(default_comfy_installer()),
             Arc::new(default_lora_catalog()),
+            Arc::new(default_subject_repo()),
         )
     }
 
@@ -1754,6 +1852,7 @@ mod tests {
             Arc::new(gen_repo),
             Arc::new(default_comfy_installer()),
             Arc::new(default_lora_catalog()),
+            Arc::new(default_subject_repo()),
         );
         let (tx, _rx) = mpsc::channel(8);
 
@@ -1830,6 +1929,7 @@ mod tests {
             Arc::new(default_gen_settings()),
             Arc::new(installer),
             Arc::new(default_lora_catalog()),
+            Arc::new(default_subject_repo()),
         );
 
         let (tx, mut rx) = mpsc::channel(64);
@@ -1933,6 +2033,7 @@ mod tests {
             Arc::new(default_gen_settings()),
             Arc::new(installer),
             Arc::new(default_lora_catalog()),
+            Arc::new(default_subject_repo()),
         );
 
         let (tx, mut rx) = mpsc::channel(64);
@@ -2025,6 +2126,7 @@ mod tests {
             Arc::new(gen_repo),
             Arc::new(installer),
             Arc::new(default_lora_catalog()),
+            Arc::new(default_subject_repo()),
         );
 
         let (tx, mut rx) = mpsc::channel(64);
@@ -2040,6 +2142,255 @@ mod tests {
         .await
         .unwrap();
 
+        while let Some(chunk) = rx.recv().await {
+            if let StreamChunk::Error(e) = chunk {
+                panic!("necekana chyba: {e}");
+            }
+        }
+    }
+
+    /// Mock repozitáře postav s danými postavami.
+    fn subject_repo_with(
+        subjects: Vec<weave_domain::subject::Subject>,
+    ) -> crate::ports::subject_repository::MockSubjectRepository {
+        let mut m = crate::ports::subject_repository::MockSubjectRepository::new();
+        m.expect_list().returning(move || {
+            let subjects = subjects.clone();
+            Box::pin(async move { Ok(subjects) })
+        });
+        m
+    }
+
+    fn subject(name: &str, notes: &str, photos: &[&str]) -> weave_domain::subject::Subject {
+        weave_domain::subject::Subject {
+            id: format!("subject:{name}"),
+            name: name.into(),
+            notes: notes.into(),
+            images: photos
+                .iter()
+                .map(|p| weave_domain::subject::SubjectImage {
+                    id: format!("img:{p}"),
+                    path: (*p).into(),
+                    mime: "image/png".into(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn subject_name_matching_handles_case_diacritics_and_declension() {
+        // Přímá shoda + diakritika/velikost písmen
+        assert!(subject_name_mentioned("Nikol", "nakresli nikol na plazi"));
+        assert!(subject_name_mentioned("Růženka", "kapitola o ruzenka"));
+        // Skloňování ženských jmen na -a (Růženka → Růžence/Růženku)
+        assert!(subject_name_mentioned(
+            "Růženka",
+            "napis kapitolu o ruzence"
+        ));
+        assert!(subject_name_mentioned("Růženka", "videl ruzenku v lese"));
+        assert!(subject_name_mentioned("Adéla", "adelu potkal u reky"));
+        // Neshoda a příliš krátká jména
+        assert!(!subject_name_mentioned("Nikol", "nakresli kocku"));
+        assert!(!subject_name_mentioned("Al", "alabastrova vaza"));
+    }
+
+    /// Zmíněná postava (i bez diakritiky/velkých písmen) → její poznámky
+    /// jdou jako system kontext do textového generování.
+    #[tokio::test]
+    async fn mentioned_subject_notes_reach_text_context() {
+        let conv = ConversationId::new();
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let conv_for_list = conv.clone();
+        msg_repo.expect_list_by_conversation().returning(move |_| {
+            let history = vec![Message::user(
+                conv_for_list.clone(),
+                "napiš kapitolu o ruzence v lese",
+            )];
+            Box::pin(async move { Ok(history) })
+        });
+
+        let mut llm = MockLlmPort::new();
+        llm.expect_chat_stream()
+            .withf(|req: &ChatRequest, _tx| {
+                // System kontext s popisem postavy musí být v historii
+                req.messages.iter().any(|m| {
+                    m.role == weave_domain::message::Role::System
+                        && m.content.contains("Růženka")
+                        && m.content.contains("rusovláska se zelenýma očima")
+                })
+            })
+            .returning(|_, tx| {
+                Box::pin(async move {
+                    let _ = tx.send(StreamChunk::Token("kapitola".into())).await;
+                    let _ = tx.send(StreamChunk::Done(Default::default())).await;
+                    Ok(())
+                })
+            });
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(llm),
+            Arc::new(MockImageGenPort::new()),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(default_gen_settings()),
+            Arc::new(default_comfy_installer()),
+            Arc::new(default_lora_catalog()),
+            Arc::new(subject_repo_with(vec![subject(
+                "Růženka",
+                "rusovláska se zelenýma očima, 25 let",
+                &[],
+            )])),
+        );
+
+        let (tx, mut rx) = mpsc::channel(64);
+        uc.execute(
+            conv,
+            "napiš kapitolu o ruzence v lese".into(),
+            vec![],
+            vec![],
+            None,
+            true,
+            tx,
+        )
+        .await
+        .unwrap();
+        while rx.recv().await.is_some() {}
+    }
+
+    /// Obrázkový prompt zmiňující právě jednu postavu bez přiložených fotek
+    /// → fotky postavy se přiloží automaticky jako PuLID reference.
+    /// Při zmínce dvou postav se nepřikládá nic (průměrování identit).
+    #[tokio::test]
+    async fn image_prompt_auto_attaches_single_mentioned_subject_photos() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut image_gen = MockImageGenPort::new();
+        image_gen
+            .expect_generate()
+            .withf(|req: &ImageRequest, _tx| {
+                req.reference_image_paths == ["/appdata/subjects/nikol1.png"]
+            })
+            .returning(|_req, tx| {
+                Box::pin(async move {
+                    let _ = tx
+                        .send(ImageProgress::Done {
+                            output_path: "/gallery/nikol.png".into(),
+                        })
+                        .await;
+                    Ok(())
+                })
+            });
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(image_prompt_llm()),
+            Arc::new(image_gen),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(default_gen_settings()),
+            Arc::new(default_comfy_installer()),
+            Arc::new(default_lora_catalog()),
+            Arc::new(subject_repo_with(vec![subject(
+                "Nikol",
+                "",
+                &["/appdata/subjects/nikol1.png"],
+            )])),
+        );
+
+        let (tx, mut rx) = mpsc::channel(64);
+        uc.execute(
+            ConversationId::new(),
+            "vygeneruj obrázek: Nikol na pláži".into(),
+            vec![],
+            vec![],
+            None,
+            true,
+            tx,
+        )
+        .await
+        .unwrap();
+        while let Some(chunk) = rx.recv().await {
+            if let StreamChunk::Error(e) = chunk {
+                panic!("necekana chyba: {e}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn image_prompt_with_two_mentioned_subjects_attaches_nothing() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut image_gen = MockImageGenPort::new();
+        image_gen
+            .expect_generate()
+            .withf(|req: &ImageRequest, _tx| req.reference_image_paths.is_empty())
+            .returning(|_req, tx| {
+                Box::pin(async move {
+                    let _ = tx
+                        .send(ImageProgress::Done {
+                            output_path: "/gallery/dve.png".into(),
+                        })
+                        .await;
+                    Ok(())
+                })
+            });
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(image_prompt_llm()),
+            Arc::new(image_gen),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(default_gen_settings()),
+            Arc::new(default_comfy_installer()),
+            Arc::new(default_lora_catalog()),
+            Arc::new(subject_repo_with(vec![
+                subject("Nikol", "", &["/a/nikol.png"]),
+                subject("Adéla", "", &["/a/adela.png"]),
+            ])),
+        );
+
+        let (tx, mut rx) = mpsc::channel(64);
+        uc.execute(
+            ConversationId::new(),
+            "vygeneruj obrázek: Nikol a Adéla na pláži".into(),
+            vec![],
+            vec![],
+            None,
+            true,
+            tx,
+        )
+        .await
+        .unwrap();
         while let Some(chunk) = rx.recv().await {
             if let StreamChunk::Error(e) = chunk {
                 panic!("necekana chyba: {e}");
@@ -2099,6 +2450,7 @@ mod tests {
             Arc::new(default_gen_settings()),
             Arc::new(default_comfy_installer()),
             Arc::new(default_lora_catalog()),
+            Arc::new(default_subject_repo()),
         );
 
         let (tx, mut rx) = mpsc::channel(64);
@@ -2344,6 +2696,7 @@ mod tests {
             Arc::new(default_gen_settings()),
             Arc::new(installer),
             Arc::new(catalog),
+            Arc::new(default_subject_repo()),
         );
 
         let (tx, mut rx) = mpsc::channel(64);
@@ -2440,6 +2793,7 @@ mod tests {
             Arc::new(default_gen_settings()),
             Arc::new(installer),
             Arc::new(default_lora_catalog()),
+            Arc::new(default_subject_repo()),
         );
 
         let (tx, mut rx) = mpsc::channel(64);
@@ -2505,6 +2859,7 @@ mod tests {
             Arc::new(default_gen_settings()),
             Arc::new(default_comfy_installer()),
             Arc::new(default_lora_catalog()),
+            Arc::new(default_subject_repo()),
         );
 
         let (tx, mut rx) = mpsc::channel(64);
