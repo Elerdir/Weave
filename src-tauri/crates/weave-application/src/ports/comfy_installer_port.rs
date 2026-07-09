@@ -64,6 +64,14 @@ pub trait ComfyInstallerPort: Send + Sync {
         download_url: &str,
         tx: mpsc::Sender<InstallProgress>,
     ) -> AppResult<()>;
+    /// Zajistí checkpoint soubor v `models/checkpoints` — když chybí, stáhne
+    /// ho (s průběhem přes `tx`). Když existuje, nedělá nic.
+    async fn ensure_checkpoint(
+        &self,
+        file_name: &str,
+        download_url: &str,
+        tx: mpsc::Sender<InstallProgress>,
+    ) -> AppResult<()>;
     /// Vypíše stažené obrázkové checkpointy (models/checkpoints).
     async fn list_checkpoints(&self) -> AppResult<Vec<CheckpointInfo>>;
     /// Smaže stažený checkpoint podle názvu souboru.

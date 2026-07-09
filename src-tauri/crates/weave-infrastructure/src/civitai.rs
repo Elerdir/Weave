@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use weave_application::{
     error::{AppError, AppResult},
-    ports::lora_catalog_port::{LoraCatalogPort, LoraInfo},
+    ports::lora_catalog_port::{CatalogBrowseItem, ImageModelKind, LoraCatalogPort, LoraInfo},
 };
 
 pub struct CivitAiClient {
@@ -37,16 +37,44 @@ struct SearchResponse {
 #[derive(Deserialize)]
 struct ModelItem {
     name: String,
+    #[serde(default)]
+    nsfw: bool,
+    #[serde(default)]
+    creator: Option<Creator>,
+    #[serde(default)]
+    stats: Option<Stats>,
     #[serde(rename = "modelVersions", default)]
     model_versions: Vec<ModelVersion>,
 }
 
+#[derive(Deserialize, Default)]
+struct Creator {
+    #[serde(default)]
+    username: String,
+}
+
+#[derive(Deserialize, Default)]
+struct Stats {
+    #[serde(rename = "downloadCount", default)]
+    download_count: u64,
+}
+
 #[derive(Deserialize)]
 struct ModelVersion {
+    #[serde(rename = "baseModel", default)]
+    base_model: String,
     #[serde(rename = "trainedWords", default)]
     trained_words: Vec<String>,
     #[serde(default)]
+    images: Vec<VersionImage>,
+    #[serde(default)]
     files: Vec<ModelFile>,
+}
+
+#[derive(Deserialize)]
+struct VersionImage {
+    #[serde(default)]
+    url: String,
 }
 
 #[derive(Deserialize)]
@@ -54,6 +82,8 @@ struct ModelFile {
     name: String,
     #[serde(rename = "downloadUrl")]
     download_url: Option<String>,
+    #[serde(rename = "sizeKB", default)]
+    size_kb: f64,
 }
 
 /// Vybere z odpovědi první model se stažitelným .safetensors souborem.
@@ -73,6 +103,53 @@ fn pick_lora(response: SearchResponse) -> Option<LoraInfo> {
                 });
             }
         }
+    }
+    None
+}
+
+impl CivitAiClient {
+    /// Token do download URL — hledání ho nepotřebuje, stažení často ano
+    /// (oficiálně podporovaný `?token=` způsob).
+    fn with_token(&self, url: String) -> String {
+        match &self.token {
+            Some(token) => {
+                let sep = if url.contains('?') { '&' } else { '?' };
+                format!("{url}{sep}token={token}")
+            }
+            None => url,
+        }
+    }
+}
+
+/// Převede položku vyhledávání na kartu prohlížeče: bere první verzi se
+/// stažitelným .safetensors souborem. Čistá funkce kvůli testům.
+fn to_browse_item(item: &ModelItem, kind: ImageModelKind) -> Option<CatalogBrowseItem> {
+    for version in &item.model_versions {
+        let file = version.files.iter().find(|f| {
+            f.name.to_ascii_lowercase().ends_with(".safetensors") && f.download_url.is_some()
+        });
+        let Some(file) = file else { continue };
+        return Some(CatalogBrowseItem {
+            name: item.name.clone(),
+            creator: item
+                .creator
+                .as_ref()
+                .map(|c| c.username.clone())
+                .unwrap_or_default(),
+            kind,
+            base_model: version.base_model.clone(),
+            preview_image_url: version
+                .images
+                .iter()
+                .map(|i| i.url.clone())
+                .find(|u| !u.is_empty()),
+            downloads: item.stats.as_ref().map(|s| s.download_count).unwrap_or(0),
+            nsfw: item.nsfw,
+            file_name: file.name.clone(),
+            download_url: file.download_url.clone().expect("filtrováno výše"),
+            size_bytes: (file.size_kb * 1024.0) as u64,
+            trigger_words: version.trained_words.clone(),
+        });
     }
     None
 }
@@ -108,17 +185,59 @@ impl LoraCatalogPort for CivitAiClient {
             .map_err(|e| AppError::ComfyUi(format!("CivitAI odpověď nejde přečíst: {e}")))?;
 
         Ok(pick_lora(parsed).map(|mut lora| {
-            // Token do download URL — hledání ho nepotřebuje, stažení často ano.
-            if let Some(token) = &self.token {
-                let sep = if lora.download_url.contains('?') {
-                    '&'
-                } else {
-                    '?'
-                };
-                lora.download_url = format!("{}{}token={}", lora.download_url, sep, token);
-            }
+            lora.download_url = self.with_token(lora.download_url);
             lora
         }))
+    }
+
+    async fn browse(
+        &self,
+        query: &str,
+        kind: ImageModelKind,
+        base_model: Option<&str>,
+    ) -> AppResult<Vec<CatalogBrowseItem>> {
+        let url = format!("{}/api/v1/models", self.base_url);
+        let mut params: Vec<(&str, String)> = vec![
+            ("limit", "20".into()),
+            ("types", kind.api_type().into()),
+            ("sort", "Most Downloaded".into()),
+            // Uživatel generuje i 18+ obsah — NSFW modely se nefiltrují,
+            // v UI se jen označí štítkem.
+            ("nsfw", "true".into()),
+            ("query", query.trim().into()),
+        ];
+        if let Some(base) = base_model {
+            params.push(("baseModels", base.into()));
+        }
+        let resp = self
+            .http
+            .get(&url)
+            .query(&params)
+            .send()
+            .await
+            .map_err(|e| AppError::ComfyUi(format!("CivitAI hledání selhalo: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(AppError::ComfyUi(format!(
+                "CivitAI hledání selhalo: HTTP {}",
+                resp.status()
+            )));
+        }
+
+        let parsed: SearchResponse = resp
+            .json()
+            .await
+            .map_err(|e| AppError::ComfyUi(format!("CivitAI odpověď nejde přečíst: {e}")))?;
+
+        Ok(parsed
+            .items
+            .iter()
+            .filter_map(|item| to_browse_item(item, kind))
+            .map(|mut item| {
+                item.download_url = self.with_token(item.download_url);
+                item
+            })
+            .collect())
     }
 }
 
@@ -201,6 +320,92 @@ mod tests {
 
         let client = CivitAiClient::with_base_url(server.uri(), None);
         assert!(client.find_lora("nic", "Pony").await.unwrap().is_none());
+    }
+
+    fn browse_body() -> serde_json::Value {
+        serde_json::json!({
+            "items": [
+                {
+                    "name": "RealVis Ultra",
+                    "nsfw": true,
+                    "creator": { "username": "sg161222" },
+                    "stats": { "downloadCount": 12345 },
+                    "modelVersions": [
+                        {
+                            "baseModel": "SDXL 1.0",
+                            "trainedWords": [],
+                            "images": [ { "url": "https://img.civitai/preview.jpg" } ],
+                            "files": [
+                                { "name": "realvis_ultra.safetensors",
+                                  "downloadUrl": "https://cdn/realvis_ultra.safetensors",
+                                  "sizeKB": 2048.0 }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "name": "Bez souboru",
+                    "modelVersions": [ { "baseModel": "SDXL 1.0", "files": [] } ]
+                }
+            ]
+        })
+    }
+
+    #[tokio::test]
+    async fn browse_maps_items_and_filters_undownloadable() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models"))
+            .and(query_param("types", "Checkpoint"))
+            .and(query_param("nsfw", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(browse_body()))
+            .mount(&server)
+            .await;
+
+        let client = CivitAiClient::with_base_url(server.uri(), None);
+        let items = client
+            .browse("realvis", ImageModelKind::Checkpoint, None)
+            .await
+            .unwrap();
+
+        // Položka bez stažitelného souboru se vynechá
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.name, "RealVis Ultra");
+        assert_eq!(item.creator, "sg161222");
+        assert_eq!(item.base_model, "SDXL 1.0");
+        assert_eq!(
+            item.preview_image_url.as_deref(),
+            Some("https://img.civitai/preview.jpg")
+        );
+        assert_eq!(item.downloads, 12345);
+        assert!(item.nsfw);
+        assert_eq!(item.file_name, "realvis_ultra.safetensors");
+        assert_eq!(item.size_bytes, 2048 * 1024);
+    }
+
+    #[tokio::test]
+    async fn browse_appends_token_and_base_model_filter() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models"))
+            .and(query_param("types", "LORA"))
+            .and(query_param("baseModels", "Pony"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(browse_body()))
+            .mount(&server)
+            .await;
+
+        let client = CivitAiClient::with_base_url(server.uri(), Some("tajny".into()));
+        let items = client
+            .browse("x", ImageModelKind::Lora, Some("Pony"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            items[0].download_url,
+            "https://cdn/realvis_ultra.safetensors?token=tajny"
+        );
+        assert_eq!(items[0].kind, ImageModelKind::Lora);
     }
 
     #[tokio::test]

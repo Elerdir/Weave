@@ -572,6 +572,26 @@ impl ComfyInstallerPort for LocalComfyInstaller {
         download_file(&self.http, download_url, &path, file_name, &tx).await
     }
 
+    async fn ensure_checkpoint(
+        &self,
+        file_name: &str,
+        download_url: &str,
+        tx: mpsc::Sender<InstallProgress>,
+    ) -> AppResult<()> {
+        // Ochrana proti path traversal — jméno souboru nesmí obsahovat cestu.
+        if file_name.contains('/') || file_name.contains('\\') || file_name.contains("..") {
+            return Err(AppError::ComfyUi(format!(
+                "Neplatný název checkpoint souboru: {file_name}"
+            )));
+        }
+        let path = self.checkpoints_dir().join(file_name);
+        if path.exists() {
+            return Ok(());
+        }
+        Self::step(&tx, &format!("Stahuji checkpoint: {file_name}")).await;
+        download_file(&self.http, download_url, &path, file_name, &tx).await
+    }
+
     async fn ensure_reference_assets(&self, tx: mpsc::Sender<InstallProgress>) -> AppResult<()> {
         let cloned_now = self.ensure_pulid_custom_node(&tx).await?;
         if cloned_now {
