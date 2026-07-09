@@ -8,15 +8,17 @@ test.describe("First-run Wizard", () => {
     await page.reload();
   });
 
+  // Počet kroků se s vývojem mění (naposledy přibyl OpenVINO krok) —
+  // testy kotví jen na číslo aktuálního kroku, ne na celkový počet.
   test("zobrazí wizard při prvním spuštění", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "Weave" })).toBeVisible();
-    await expect(page.getByText(/Krok 1 z 4|Step 1 of 4/)).toBeVisible();
+    await expect(page.getByText(/Krok 1 z \d+|Step 1 of \d+/)).toBeVisible();
   });
 
   test("lze přejít na další krok", async ({ page }) => {
     const nextBtn = page.getByRole("button", { name: /Další|Next/ });
     await nextBtn.click();
-    await expect(page.getByText(/Krok 2 z 4|Step 2 of 4/)).toBeVisible();
+    await expect(page.getByText(/Krok 2 z \d+|Step 2 of \d+/)).toBeVisible();
   });
 
   test("lze přepnout jazyk ve welcome stepu", async ({ page }) => {
