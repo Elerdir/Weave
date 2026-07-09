@@ -10,4 +10,5 @@ pub mod model_catalog_port;
 pub mod model_manager_port;
 pub mod pdf_exporter;
 pub mod persona_repository;
+pub mod subject_repository;
 pub mod workspace_port;

@@ -189,7 +189,7 @@ const en: Messages = {
     add: "Add",
     empty: "No characters yet. Add one and upload a few photos.",
     emptyShort: "No saved characters",
-    notesPlaceholder: "Notes (age, appearance…) — for you, not sent to generation",
+    notesPlaceholder: "Notes (age, appearance, personality…) — mentioned by name, they join the writing context",
     addPhotos: "Add photos",
     removePhoto: "Remove photo",
     delete: "Delete character",

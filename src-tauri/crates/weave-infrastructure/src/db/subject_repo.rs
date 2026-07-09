@@ -8,6 +8,13 @@ pub struct SqliteSubjectRepository {
     pool: SqlitePool,
 }
 
+#[async_trait::async_trait]
+impl weave_application::ports::subject_repository::SubjectRepository for SqliteSubjectRepository {
+    async fn list(&self) -> AppResult<Vec<Subject>> {
+        SqliteSubjectRepository::list(self).await
+    }
+}
+
 impl SqliteSubjectRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
