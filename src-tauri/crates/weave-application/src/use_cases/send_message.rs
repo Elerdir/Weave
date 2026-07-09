@@ -711,6 +711,7 @@ impl SendMessageUseCase {
                     init_image,
                     gen.pulid_weight_or_default(),
                     gen.face_detailer_enabled(),
+                    gen.image_checkpoint().map(str::to_string),
                     tee_tx,
                 )
                 .await
@@ -838,6 +839,7 @@ impl SendMessageUseCase {
         init_image: Option<String>,
         pulid_weight: f32,
         face_detailer: bool,
+        checkpoint_override: Option<String>,
         stream_tx: mpsc::Sender<StreamChunk>,
     ) -> AppResult<()> {
         use crate::ports::comfy_installer_port::ComfyStatus;
@@ -883,8 +885,11 @@ impl SendMessageUseCase {
             result?;
         }
 
-        // 2. Model podle stylu promptu (stáhne se, jen když chybí)
-        {
+        // 2. Model podle stylu promptu (stáhne se, jen když chybí). Při
+        // zvoleném vlastním checkpointu se stylový nestahuje — nebyl by
+        // použit a klidně by tahal 6+ GB zbytečně; existenci vlastního
+        // souboru ohlídá preflight kontrola v comfyui klientu.
+        if checkpoint_override.is_none() {
             let (itx, irx) = mpsc::channel(64);
             let fwd = tokio::spawn(forward_install_progress(
                 ImageStage::DownloadingModel,
@@ -1098,6 +1103,7 @@ impl SendMessageUseCase {
             // Síla PuLID podoby a doladění obličeje (per-konverzace, z posuvníků).
             pulid_weight,
             face_detailer,
+            checkpoint_override,
         };
 
         // Generování běží v samostatné úloze a průběh vyprazdňujeme SOUBĚŽNĚ.
@@ -2383,6 +2389,89 @@ mod tests {
         uc.execute(
             ConversationId::new(),
             "vygeneruj obrázek: Nikol a Adéla na pláži".into(),
+            vec![],
+            vec![],
+            None,
+            true,
+            tx,
+        )
+        .await
+        .unwrap();
+        while let Some(chunk) = rx.recv().await {
+            if let StreamChunk::Error(e) = chunk {
+                panic!("necekana chyba: {e}");
+            }
+        }
+    }
+
+    /// Zvolený vlastní checkpoint (per konverzace) musí doletět do
+    /// ImageRequestu a stylový checkpoint se nesmí zbytečně stahovat.
+    #[tokio::test]
+    async fn image_checkpoint_override_reaches_request_and_skips_style_download() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut gen_repo = MockGenerationSettingsRepository::new();
+        gen_repo.expect_get().returning(|_| {
+            Box::pin(async {
+                Ok(weave_domain::generation_settings::GenerationSettings {
+                    image_checkpoint: Some("realvis_ultra.safetensors".into()),
+                    ..Default::default()
+                })
+            })
+        });
+
+        let mut installer = MockComfyInstallerPort::new();
+        installer
+            .expect_status()
+            .returning(|| Box::pin(async { Ok(ComfyStatus::Running) }));
+        // Klíčové: stylový checkpoint se při overridu nestahuje
+        installer.expect_ensure_style_checkpoint().never();
+        installer
+            .expect_stop_server()
+            .returning(|| Box::pin(async { Ok(()) }));
+
+        let mut image_gen = MockImageGenPort::new();
+        image_gen
+            .expect_generate()
+            .withf(|req: &ImageRequest, _tx| {
+                req.checkpoint_override.as_deref() == Some("realvis_ultra.safetensors")
+            })
+            .returning(|_req, tx| {
+                Box::pin(async move {
+                    let _ = tx
+                        .send(ImageProgress::Done {
+                            output_path: "/gallery/custom.png".into(),
+                        })
+                        .await;
+                    Ok(())
+                })
+            });
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(image_prompt_llm()),
+            Arc::new(image_gen),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(gen_repo),
+            Arc::new(installer),
+            Arc::new(default_lora_catalog()),
+            Arc::new(default_subject_repo()),
+        );
+
+        let (tx, mut rx) = mpsc::channel(64);
+        uc.execute(
+            ConversationId::new(),
+            "vygeneruj obrázek hradu".into(),
             vec![],
             vec![],
             None,

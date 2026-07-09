@@ -658,12 +658,22 @@ fn apply_style_tuning(workflow: &mut serde_json::Value, req: &ImageRequest) {
     }
 }
 
+/// Checkpoint pro workflow: vlastní volba uživatele (per konverzace,
+/// např. stažený z CivitAI) má přednost před automatickou volbou podle
+/// stylu promptu. Prázdný/whitespace override se ignoruje.
+fn checkpoint_for_request(req: &ImageRequest) -> String {
+    match req.checkpoint_override.as_deref().map(str::trim) {
+        Some(custom) if !custom.is_empty() => custom.to_string(),
+        _ => crate::comfy_installer::checkpoint_filename_for_style(req.style_preset).to_string(),
+    }
+}
+
 fn build_txt2img_workflow(req: &ImageRequest) -> serde_json::Value {
     let mut workflow = serde_json::json!({
         "1": {
             "class_type": "CheckpointLoaderSimple",
             "inputs": {
-                "ckpt_name": crate::comfy_installer::checkpoint_filename_for_style(req.style_preset)
+                "ckpt_name": checkpoint_for_request(req)
             }
         },
         "2": {
@@ -720,7 +730,7 @@ fn build_pulid_workflow(req: &ImageRequest, uploaded_images: &[String]) -> serde
         "1": {
             "class_type": "CheckpointLoaderSimple",
             "inputs": {
-                "ckpt_name": crate::comfy_installer::checkpoint_filename_for_style(req.style_preset)
+                "ckpt_name": checkpoint_for_request(req)
             }
         },
         "2": {
@@ -994,6 +1004,7 @@ mod tests {
             hires_fix: false,
             pulid_weight: 1.0,
             face_detailer: false,
+            checkpoint_override: None,
         }
     }
 
@@ -1080,6 +1091,32 @@ mod tests {
         let plain = build_basic_workflow(&sample_request(), &[], None);
         assert!(plain.get("17").is_none());
         assert_eq!(plain["6"]["inputs"]["samples"][0], "5");
+    }
+
+    #[test]
+    fn checkpoint_override_replaces_style_choice() {
+        let mut req = sample_request();
+        req.checkpoint_override = Some("realvis_ultra.safetensors".into());
+
+        // txt2img i PuLID větev berou vlastní checkpoint
+        let plain = build_basic_workflow(&req, &[], None);
+        assert_eq!(
+            plain["1"]["inputs"]["ckpt_name"],
+            "realvis_ultra.safetensors"
+        );
+        let pulid = build_basic_workflow(&req, &["ref.png".into()], None);
+        assert_eq!(
+            pulid["1"]["inputs"]["ckpt_name"],
+            "realvis_ultra.safetensors"
+        );
+
+        // Prázdný/whitespace override se ignoruje → volba podle stylu
+        req.checkpoint_override = Some("  ".into());
+        let fallback = build_basic_workflow(&req, &[], None);
+        assert_eq!(
+            fallback["1"]["inputs"]["ckpt_name"],
+            crate::comfy_installer::REALVIS_CHECKPOINT_FILENAME
+        );
     }
 
     #[test]

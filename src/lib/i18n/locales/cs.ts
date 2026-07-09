@@ -133,6 +133,10 @@ const cs = {
       pulidWeightHint:
         "Jak silně se drží referenční fotky. Výš = věrnější tvář, ale méně volnosti pro prompt (riziko artefaktů).",
       faceDetailer: "Doladit obličej / oči",
+      imageCheckpoint: "Model obrázků (checkpoint)",
+      imageCheckpointAuto: "Automaticky podle stylu promptu",
+      imageCheckpointHint:
+        "Vlastní checkpoint (např. stažený z CivitAI) místo automatické volby. Musí být SDXL architektura, jinak reference (PuLID) nefungují.",
       faceDetailerHint:
         "Druhý průchod přesampluje detekovaný obličej — nejvíc pomůže očím. Poprvé stáhne Impact Pack (~stovky MB) a přidá čas ke generování.",
     },

@@ -8,6 +8,7 @@ export interface GenerationSettings {
   pulid_weight: number | null;
   face_detailer: boolean | null;
   runtime_backend: RuntimeBackend | null;
+  image_checkpoint: string | null;
 }
 
 export type RuntimeBackend = "default" | "mistral" | "local" | "embedded" | "openvino_npu";
@@ -28,6 +29,8 @@ function createGenerationSettingsStore() {
   /** Doladit obličej/oči FaceDetailerem (Impact Pack). */
   let faceDetailer = $state(false);
   let runtimeBackend = $state<RuntimeBackend>("default");
+  /** Checkpoint obrázků; "" = automaticky podle stylu promptu. */
+  let imageCheckpoint = $state("");
 
   return {
     get contextLength() {
@@ -48,6 +51,9 @@ function createGenerationSettingsStore() {
     get runtimeBackend() {
       return runtimeBackend;
     },
+    get imageCheckpoint() {
+      return imageCheckpoint;
+    },
 
     async load(id: string) {
       conversationId = id;
@@ -60,6 +66,7 @@ function createGenerationSettingsStore() {
       pulidWeight = s.pulid_weight ?? DEFAULT_PULID_WEIGHT;
       faceDetailer = s.face_detailer ?? false;
       runtimeBackend = s.runtime_backend ?? "default";
+      imageCheckpoint = s.image_checkpoint ?? "";
     },
 
     setContextLength(value: number) {
@@ -88,6 +95,10 @@ function createGenerationSettingsStore() {
       runtimeBackend = value;
     },
 
+    setImageCheckpoint(value: string) {
+      imageCheckpoint = value;
+    },
+
     async save() {
       if (!conversationId) return;
       const settings: GenerationSettings = {
@@ -97,6 +108,7 @@ function createGenerationSettingsStore() {
         pulid_weight: pulidWeight,
         face_detailer: faceDetailer,
         runtime_backend: runtimeBackend,
+        image_checkpoint: imageCheckpoint.trim() ? imageCheckpoint.trim() : null,
       };
       await invoke("set_conversation_settings", { conversationId, settings });
     },

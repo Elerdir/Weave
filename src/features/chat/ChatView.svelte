@@ -11,6 +11,7 @@
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { generationSettingsStore } from "$lib/stores/generation-settings.svelte";
   import { vramStore } from "$lib/stores/vram.svelte";
+  import { comfyInstallStore } from "$lib/stores/comfy-install.svelte";
   import type { RuntimeBackend } from "$lib/stores/generation-settings.svelte";
   import {
     editImageMessage,
@@ -306,6 +307,15 @@
   onMount(() => {
     vramStore.start();
     return () => vramStore.stop();
+  });
+
+  // Seznam stažených checkpointů pro select v panelu parametrů — načítá se
+  // líně při prvním otevření panelu (mimo Tauri tiše selže a select nabízí
+  // jen automatickou volbu).
+  $effect(() => {
+    if (showGenSettings) {
+      comfyInstallStore.load().catch(() => {});
+    }
   });
 
   /** Tooltip VRAM chipu: GPU + kdo paměť právě drží. */
@@ -622,6 +632,32 @@
           <span>{i18n.m.chat.genSettings.faceDetailer}</span>
         </label>
         <p class="gen-hint">{i18n.m.chat.genSettings.faceDetailerHint}</p>
+      </div>
+
+      <div class="gen-field">
+        <div class="gen-label-row">
+          <label for="gen-checkpoint">{i18n.m.chat.genSettings.imageCheckpoint}</label>
+        </div>
+        <select
+          id="gen-checkpoint"
+          class="gen-select"
+          value={generationSettingsStore.imageCheckpoint}
+          onchange={(e) => {
+            generationSettingsStore.setImageCheckpoint((e.target as HTMLSelectElement).value);
+            void generationSettingsStore.save();
+          }}
+        >
+          <option value="">{i18n.m.chat.genSettings.imageCheckpointAuto}</option>
+          {#each comfyInstallStore.checkpoints as ckpt (ckpt.file_name)}
+            <option value={ckpt.file_name}>{ckpt.file_name}</option>
+          {/each}
+          {#if generationSettingsStore.imageCheckpoint && !comfyInstallStore.checkpoints.some((c) => c.file_name === generationSettingsStore.imageCheckpoint)}
+            <option value={generationSettingsStore.imageCheckpoint}>
+              {generationSettingsStore.imageCheckpoint}
+            </option>
+          {/if}
+        </select>
+        <p class="gen-hint">{i18n.m.chat.genSettings.imageCheckpointHint}</p>
       </div>
     </div>
   {/if}
@@ -1075,6 +1111,16 @@
     gap: 0.5rem;
     font-size: 0.82rem;
     cursor: pointer;
+  }
+
+  .gen-select {
+    width: 100%;
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.82rem;
   }
 
   .gen-toggle input[type="checkbox"] {

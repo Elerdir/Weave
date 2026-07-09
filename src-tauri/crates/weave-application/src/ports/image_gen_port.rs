@@ -44,6 +44,11 @@ pub struct ImageRequest {
     /// Zapojí se, jen když je uzel v běžícím ComfyUI k dispozici.
     #[serde(default)]
     pub face_detailer: bool,
+    /// Vlastní checkpoint (název souboru v `models/checkpoints`, např.
+    /// stažený z CivitAI) místo automatické volby podle stylu. Stylové
+    /// ladění promptu (score tagy, clip skip) se dál řídí stylem promptu.
+    #[serde(default)]
+    pub checkpoint_override: Option<String>,
 }
 
 fn default_pulid_weight() -> f32 {
