@@ -30,6 +30,9 @@ pub struct RuntimeRestartResult {
     pub openvino_started: bool,
 }
 
+// Používá se jen ve windows detekci NPU (detect_npu_impl) — na jiných
+// platformách by byl dead code a CI clippy (-D warnings na Linuxu) by spadl.
+#[cfg(target_os = "windows")]
 #[derive(Debug, Deserialize)]
 struct WindowsNpuDevice {
     #[serde(rename = "Name")]
@@ -172,15 +175,16 @@ pub async fn test_openvino_npu_connection(url: String) -> Result<bool, String> {
 #[cfg(target_os = "windows")]
 fn detect_npu_impl() -> NpuInfo {
     let script = r#"$device = Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'NPU|Neural|AI Boost|XDNA|VPU|Hexagon' -or $_.PNPClass -eq 'ComputeAccelerator' } | Select-Object -First 1 Name,Manufacturer,DeviceID; if ($device) { $device | ConvertTo-Json -Compress }"#;
-    let output = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ])
-        .output();
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
+    ]);
+    weave_infrastructure::spawn::hide_console_std(&mut cmd);
+    let output = cmd.output();
 
     let Ok(output) = output else {
         return NpuInfo {
