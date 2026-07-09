@@ -10,6 +10,7 @@
   import { settingsStore } from "$lib/stores/settings.svelte";
   import type { ApiServiceId } from "$lib/stores/settings.svelte";
   import { modelsStore, formatBytes, formatSpeed, formatEta } from "$lib/stores/models.svelte";
+  import { modelSearchStore, modelIdForFile } from "$lib/stores/model-search.svelte";
   import { comfyInstallStore } from "$lib/stores/comfy-install.svelte";
   import { openvinoInstallStore } from "$lib/stores/openvino-install.svelte";
   import { updaterStore } from "$lib/stores/updater.svelte";
@@ -428,6 +429,104 @@
                 </div>
               {/each}
             </div>
+
+            <h4 class="sub-heading">{i18n.m.settings.llm.searchTitle}</h4>
+            <p class="hint">{i18n.m.settings.llm.searchHint}</p>
+            <div class="comfyui-row">
+              <input
+                type="text"
+                placeholder={i18n.m.settings.llm.searchPlaceholder}
+                value={modelSearchStore.query}
+                oninput={(e) => modelSearchStore.setQuery((e.target as HTMLInputElement).value)}
+                onkeydown={(e) => e.key === "Enter" && modelSearchStore.search()}
+              />
+              <button
+                class="btn-sm primary"
+                disabled={modelSearchStore.searching || !modelSearchStore.query.trim()}
+                onclick={() => modelSearchStore.search()}
+              >
+                {modelSearchStore.searching
+                  ? i18n.m.settings.llm.searching
+                  : i18n.m.settings.llm.searchButton}
+              </button>
+            </div>
+
+            {#if modelSearchStore.error}
+              <span class="conn-status disconnected">{modelSearchStore.error}</span>
+            {/if}
+
+            {#if modelSearchStore.searched && modelSearchStore.results.length === 0 && !modelSearchStore.searching}
+              <p class="hint">{i18n.m.settings.llm.searchEmpty}</p>
+            {/if}
+
+            {#if modelSearchStore.results.length > 0}
+              <div class="recommended-list">
+                {#each modelSearchStore.results as repo (repo.repo_id)}
+                  {@const isOpen = modelSearchStore.expandedRepo === repo.repo_id}
+                  <div class="recommended-item search-repo" class:active={isOpen}>
+                    <div class="recommended-meta">
+                      <div class="recommended-name">
+                        {repo.name}
+                        {#if repo.gated}
+                          <span class="gated-badge" title={i18n.m.settings.llm.gatedHint}>🔒</span>
+                        {/if}
+                      </div>
+                      <div class="recommended-desc">
+                        {repo.author} · ⬇ {repo.downloads.toLocaleString()} · ❤ {repo.likes.toLocaleString()}
+                      </div>
+                      {#if isOpen}
+                        {#if modelSearchStore.loadingFiles && modelSearchStore.filesFor(repo.repo_id).length === 0}
+                          <div class="recommended-size">{i18n.m.common.loading}</div>
+                        {:else if modelSearchStore.filesFor(repo.repo_id).length === 0}
+                          <div class="recommended-size">{i18n.m.settings.llm.noGgufFiles}</div>
+                        {:else}
+                          <div class="quant-list">
+                            {#each modelSearchStore.filesFor(repo.repo_id) as file (file.file_name)}
+                              {@const fileId = modelIdForFile(file.file_name)}
+                              {@const downloaded = modelsStore.isDownloaded(fileId)}
+                              {@const vram = (modelsStore.gpu?.vram_mb ?? 0) * 1024 * 1024}
+                              <div class="quant-row">
+                                <span class="quant-badge">{file.quant ?? "GGUF"}</span>
+                                <span class="quant-size">
+                                  {formatBytes(file.size_bytes)}
+                                  {#if vram > 0 && file.size_bytes > 0}
+                                    {#if file.size_bytes < vram * 0.8}
+                                      <span class="fit ok" title={i18n.m.settings.llm.vramFits}>●</span>
+                                    {:else if file.size_bytes < vram}
+                                      <span class="fit tight" title={i18n.m.settings.llm.vramTight}>●</span>
+                                    {:else}
+                                      <span class="fit over" title={i18n.m.settings.llm.vramOver}>●</span>
+                                    {/if}
+                                  {/if}
+                                </span>
+                                {#if downloaded}
+                                  <span class="dl-inline">✓ {i18n.m.wizard.steps.models.ready}</span>
+                                {:else if modelsStore.download?.modelId === fileId}
+                                  <span class="dl-inline">
+                                    {Math.round(((modelsStore.download.downloaded) / (modelsStore.download.total || 1)) * 100)}%
+                                  </span>
+                                {:else}
+                                  <button
+                                    class="btn-sm primary"
+                                    disabled={!!modelsStore.download}
+                                    onclick={() => modelsStore.downloadModel(fileId, file.download_url)}
+                                  >
+                                    {i18n.m.settings.llm.download}
+                                  </button>
+                                {/if}
+                              </div>
+                            {/each}
+                          </div>
+                        {/if}
+                      {/if}
+                    </div>
+                    <button class="btn-sm" onclick={() => modelSearchStore.toggleRepo(repo.repo_id)}>
+                      {isOpen ? i18n.m.settings.llm.hideQuants : i18n.m.settings.llm.showQuants}
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
 
             {#if modelsStore.download}
               <div class="dl-progress" style="margin-top:0.75rem">
@@ -1900,6 +1999,57 @@
     color: var(--color-accent);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+
+  /* Vyhledávání na HuggingFace: rozbalený repo + řádky kvantizací */
+  .search-repo {
+    align-items: flex-start;
+  }
+  .gated-badge {
+    font-size: 0.72rem;
+  }
+  .quant-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.5rem;
+  }
+  .quant-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.8rem;
+  }
+  .quant-badge {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.7rem;
+    font-weight: 600;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 0.1rem 0.4rem;
+    min-width: 4.5rem;
+    text-align: center;
+  }
+  .quant-size {
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+    min-width: 6.5rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+  .fit {
+    font-size: 0.7rem;
+  }
+  .fit.ok {
+    color: #3fb950;
+  }
+  .fit.tight {
+    color: #d29922;
+  }
+  .fit.over {
+    color: var(--color-error);
   }
 
   .advanced-details {

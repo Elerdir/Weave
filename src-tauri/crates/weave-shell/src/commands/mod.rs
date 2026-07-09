@@ -1,3 +1,4 @@
+pub mod catalog;
 pub mod comfy_installer;
 pub mod conversation;
 pub mod gallery;

@@ -6,6 +6,7 @@ pub mod image_gen_port;
 pub mod keychain_port;
 pub mod llm_port;
 pub mod lora_catalog_port;
+pub mod model_catalog_port;
 pub mod model_manager_port;
 pub mod pdf_exporter;
 pub mod persona_repository;
