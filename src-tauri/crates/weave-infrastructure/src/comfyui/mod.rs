@@ -1057,7 +1057,9 @@ mod tests {
         assert!(!is_execution_finished(
             &serde_json::json!({ "status": { "status_str": "running" } })
         ));
-        assert!(!is_execution_finished(&serde_json::json!({ "outputs": {} })));
+        assert!(!is_execution_finished(
+            &serde_json::json!({ "outputs": {} })
+        ));
     }
 
     #[test]

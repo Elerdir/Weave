@@ -60,6 +60,7 @@ describe("generationSettingsStore", () => {
       max_tokens: null,
       pulid_weight: null,
       face_detailer: null,
+      runtime_backend: null,
     });
     await generationSettingsStore.load("conv-1");
 
@@ -80,6 +81,7 @@ describe("generationSettingsStore", () => {
         max_tokens: null,
         pulid_weight: 0.75,
         face_detailer: true,
+        runtime_backend: "default",
       },
     });
   });

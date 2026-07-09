@@ -262,7 +262,8 @@ async fn build_use_case(
         .ok()
         .and_then(|settings| settings.runtime_backend);
     let llm =
-        crate::commands::settings::resolve_llm_with_backend(state, runtime_backend.as_deref()).await;
+        crate::commands::settings::resolve_llm_with_backend(state, runtime_backend.as_deref())
+            .await;
 
     // CivitAI token (volitelný) — bez něj funguje hledání LoRA, jen
     // stažení některých modelů může selhat.
