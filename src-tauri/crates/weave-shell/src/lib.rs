@@ -6,8 +6,8 @@ use tauri::Manager;
 use weave_application::ports::keychain_port::{ApiService, KeychainPort};
 use weave_infrastructure::{
     attachment_store::LocalAttachmentStore, comfy_installer::LocalComfyInstaller,
-    comfyui::ComfyUiClient, db, keychain::OsKeychain, llm::mistral_client::MistralClient,
-    model_manager::LocalModelManager,
+    comfyui::ComfyUiClient, db, hf_catalog::HuggingFaceCatalog, keychain::OsKeychain,
+    llm::mistral_client::MistralClient, model_manager::LocalModelManager,
 };
 
 use state::AppState;
@@ -63,6 +63,7 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
                 .with_gallery_dir(data_dir.join("weave").join("gallery")),
         ),
         model_manager: Arc::new(LocalModelManager::new(models_dir)),
+        model_catalog: Arc::new(HuggingFaceCatalog::default()),
         comfy_installer: Arc::new(LocalComfyInstaller::new(comfyui_install_dir)),
         attachment_store: Arc::new(LocalAttachmentStore::new(reference_images_dir)),
         active_generation: std::sync::Mutex::new(None),

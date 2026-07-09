@@ -3,6 +3,7 @@ pub mod civitai;
 pub mod comfy_installer;
 pub mod comfyui;
 pub mod db;
+pub mod hf_catalog;
 pub mod image_stamp;
 pub mod keychain;
 pub mod llm;

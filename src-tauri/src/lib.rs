@@ -211,6 +211,8 @@ pub fn run() {
             commands::subjects::add_subject_image,
             commands::subjects::remove_subject_image,
             commands::subjects::open_subjects_window,
+            commands::catalog::search_model_catalog,
+            commands::catalog::list_catalog_gguf_files,
             commands::models::list_local_models,
             commands::models::list_recommended_models,
             commands::models::detect_gpu,
