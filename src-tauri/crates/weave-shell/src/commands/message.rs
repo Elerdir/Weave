@@ -32,6 +32,7 @@ pub async fn list_messages(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_message(
     conversation_id: String,
     content: String,

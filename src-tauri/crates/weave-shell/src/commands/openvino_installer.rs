@@ -159,6 +159,10 @@ async fn status_for(root: &Path) -> OpenvinoRuntimeStatus {
     }
 }
 
+// set_readonly(false) je tu záměr: pip/venv soubory mívají na Windows readonly
+// flag, který blokuje remove_dir_all při odinstalaci. Volá se těsně před
+// smazáním složky, takže „world writable" na Unixu je bez praktického dopadu.
+#[allow(clippy::permissions_set_readonly_false)]
 fn clear_readonly_flags(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
