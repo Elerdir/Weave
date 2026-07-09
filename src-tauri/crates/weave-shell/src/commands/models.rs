@@ -1,13 +1,16 @@
 use tauri::{Emitter, State, Window};
 use tokio::sync::mpsc;
 use weave_application::ports::model_manager_port::{DownloadProgress, GpuInfo, LocalModel};
-use weave_domain::recommended_models::{recommend_gpu_layers, recommended_models, RecommendedModel};
+use weave_domain::recommended_models::{
+    recommend_gpu_layers, recommended_models, RecommendedModel,
+};
 
 use crate::state::AppState;
 
 /// Klíč v `app_config`, pod kterým se pamatuje uživatelem zvolená složka pro
 /// stahování modelů (aby se použila i po restartu appky).
 pub const MODELS_DIR_KEY: &str = "models.directory";
+pub const DOWNLOAD_SEGMENTS_KEY: &str = "models.download_segments";
 
 #[tauri::command]
 pub async fn list_local_models(state: State<'_, AppState>) -> Result<Vec<LocalModel>, String> {
@@ -22,6 +25,26 @@ pub async fn list_local_models(state: State<'_, AppState>) -> Result<Vec<LocalMo
 #[tauri::command]
 pub async fn list_recommended_models() -> Result<Vec<RecommendedModel>, String> {
     Ok(recommended_models())
+}
+
+#[tauri::command]
+pub async fn get_download_segments() -> Result<u64, String> {
+    Ok(weave_infrastructure::parallel_download::current_max_segments())
+}
+
+#[tauri::command]
+pub async fn set_download_segments(
+    segments: u64,
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    use weave_infrastructure::db::app_config;
+
+    let segments = segments.clamp(1, 32);
+    weave_infrastructure::parallel_download::set_max_segments_override(segments);
+    app_config::set(&state.pool, DOWNLOAD_SEGMENTS_KEY, &segments.to_string())
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(segments)
 }
 
 #[tauri::command]

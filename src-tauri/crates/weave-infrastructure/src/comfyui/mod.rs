@@ -166,6 +166,19 @@ impl ComfyUiClient {
             Err(_) => false,
         }
     }
+
+    async fn fetch_queue_state(&self, prompt_id: &str) -> AppResult<ComfyQueueState> {
+        let queue: serde_json::Value = self
+            .http
+            .get(format!("{}/queue", self.base_url))
+            .send()
+            .await
+            .map_err(|e| AppError::ComfyUi(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| AppError::ComfyUi(e.to_string()))?;
+        Ok(prompt_queue_state(&queue, prompt_id))
+    }
 }
 
 #[async_trait]
@@ -257,19 +270,59 @@ impl ImageGenPort for ComfyUiClient {
 
         // Backstop proti nekonečnému čekání, kdyby ComfyUI zamrzl bez odpovědi.
         let started = std::time::Instant::now();
+        let mut last_queue_poll = started;
+        let mut last_status_report = started
+            .checked_sub(std::time::Duration::from_secs(30))
+            .unwrap_or(started);
+        let mut last_queue_state = ComfyQueueState::Unknown;
         const GEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            let elapsed = started.elapsed();
 
-            if started.elapsed() > GEN_TIMEOUT {
+            if elapsed > GEN_TIMEOUT {
                 ws_task.abort();
-                return Err(AppError::ComfyUi(
+                return Err(AppError::ComfyUi(format!(
                     "Generování obrázku trvalo přes 10 minut a bylo přerušeno. Časté při \
                      nedostatku VRAM — máš-li současně načtený velký lokální LLM, uvolni ho \
-                     (v Nastavení přepni backend nebo restartuj appku) a zkus to znovu."
-                        .into(),
-                ));
+                     (v Nastavení přepni backend nebo restartuj appku) a zkus to znovu. Poslední stav ComfyUI fronty: {}.",
+                    last_queue_state.label()
+                )));
+            }
+
+            if last_queue_poll.elapsed() >= std::time::Duration::from_secs(5) {
+                last_queue_poll = std::time::Instant::now();
+                match self.fetch_queue_state(&prompt_id).await {
+                    Ok(queue_state) => {
+                        let should_report = queue_state != last_queue_state
+                            || last_status_report.elapsed() >= std::time::Duration::from_secs(30);
+                        last_queue_state = queue_state;
+                        if should_report {
+                            last_status_report = std::time::Instant::now();
+                            let elapsed_secs = elapsed.as_secs();
+                            tracing::info!(
+                                %prompt_id,
+                                queue_state = queue_state.label(),
+                                elapsed_secs,
+                                "ComfyUI generování stále čeká na výsledek"
+                            );
+                            let _ = tx
+                                .send(ImageProgress::Status {
+                                    detail: format!(
+                                        "ComfyUI: {} ({} s)",
+                                        queue_state.label(),
+                                        elapsed_secs
+                                    ),
+                                    percent: None,
+                                })
+                                .await;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(%prompt_id, "Dotaz na ComfyUI /queue selhal: {e}");
+                    }
+                }
             }
 
             let history: serde_json::Value = self
@@ -317,10 +370,12 @@ impl ImageGenPort for ComfyUiClient {
                         // Označení AI původu (metadata + neviditelný vodoznak)
                         // vč. promptu pro galerii. Selhání generování neshodí —
                         // obrázek už na disku je.
-                        if let Err(e) = crate::image_stamp::stamp_ai_image(
+                        if let Err(e) = crate::image_stamp::stamp_ai_image_with_details(
                             &out_path,
                             Some(&request.prompt),
                             request.negative_prompt.as_deref(),
+                            request.original_prompt.as_deref(),
+                            request.reference_preservation.as_deref(),
                         ) {
                             tracing::warn!("Označení AI obrázku selhalo: {e:#}");
                         }
@@ -331,6 +386,14 @@ impl ImageGenPort for ComfyUiClient {
                             })
                             .await;
                         return Ok(());
+                    }
+                    if is_execution_finished(entry) {
+                        ws_task.abort();
+                        return Err(AppError::ComfyUi(
+                            "ComfyUI workflow skončil, ale v /history není žádný výstupní obrázek. \
+                             To obvykle znamená rozbitý workflow, chybějící SaveImage uzel, nebo chybu v custom nodech."
+                                .into(),
+                        ));
                     }
                 }
             }
@@ -743,16 +806,18 @@ fn build_pulid_workflow(req: &ImageRequest, uploaded_images: &[String]) -> serde
 
     // Řetěz ImageBatch uzlů: (20+21)→30, (30+22)→31, … Poslední článek
     // (nebo přímo LoadImage u jediné fotky) jde do ApplyPulid jako uzel "8".
-    let mut last_ref: serde_json::Value = serde_json::json!(["20", 0]);
+    let load_start = 20usize;
+    let batch_start = load_start + uploaded_images.len().max(10);
+    let mut last_ref: serde_json::Value = serde_json::json!([load_start.to_string(), 0]);
     for i in 1..uploaded_images.len() {
-        let batch_id = format!("{}", 30 + i - 1);
+        let batch_id = format!("{}", batch_start + i - 1);
         map.insert(
             batch_id.clone(),
             serde_json::json!({
                 "class_type": "ImageBatch",
                 "inputs": {
                     "image1": last_ref,
-                    "image2": [format!("{}", 20 + i), 0]
+                    "image2": [format!("{}", load_start + i), 0]
                 }
             }),
         );
@@ -807,6 +872,54 @@ fn parse_ws_progress(text: &str) -> Option<(u32, u32)> {
     ))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComfyQueueState {
+    Running,
+    Pending,
+    Missing,
+    Unknown,
+}
+
+impl ComfyQueueState {
+    fn label(self) -> &'static str {
+        match self {
+            ComfyQueueState::Running => "running",
+            ComfyQueueState::Pending => "pending",
+            ComfyQueueState::Missing => "not in queue",
+            ComfyQueueState::Unknown => "unknown",
+        }
+    }
+}
+
+fn prompt_queue_state(queue: &serde_json::Value, prompt_id: &str) -> ComfyQueueState {
+    if queue
+        .get("queue_running")
+        .is_some_and(|v| json_contains_string(v, prompt_id))
+    {
+        return ComfyQueueState::Running;
+    }
+    if queue
+        .get("queue_pending")
+        .is_some_and(|v| json_contains_string(v, prompt_id))
+    {
+        return ComfyQueueState::Pending;
+    }
+    if queue.get("queue_running").is_some() || queue.get("queue_pending").is_some() {
+        ComfyQueueState::Missing
+    } else {
+        ComfyQueueState::Unknown
+    }
+}
+
+fn json_contains_string(value: &serde_json::Value, needle: &str) -> bool {
+    match value {
+        serde_json::Value::String(s) => s == needle,
+        serde_json::Value::Array(items) => items.iter().any(|v| json_contains_string(v, needle)),
+        serde_json::Value::Object(map) => map.values().any(|v| json_contains_string(v, needle)),
+        _ => false,
+    }
+}
+
 fn extract_output_filename(outputs: &serde_json::Value) -> Option<String> {
     outputs.as_object()?.values().find_map(|node| {
         node.get("images")?
@@ -846,6 +959,16 @@ fn extract_execution_error(entry: &serde_json::Value) -> Option<String> {
     Some(detail)
 }
 
+fn is_execution_finished(entry: &serde_json::Value) -> bool {
+    matches!(
+        entry
+            .get("status")
+            .and_then(|s| s.get("status_str"))
+            .and_then(|s| s.as_str()),
+        Some("success" | "error")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -855,8 +978,10 @@ mod tests {
 
     fn sample_request() -> ImageRequest {
         ImageRequest {
+            original_prompt: None,
             prompt: "kosmická loď nad planetou".into(),
             negative_prompt: Some("rozmazané".into()),
+            reference_preservation: None,
             width: 1024,
             height: 768,
             steps: 25,
@@ -894,6 +1019,45 @@ mod tests {
         assert!(extract_execution_error(&ok).is_none());
         let running = serde_json::json!({ "outputs": {} });
         assert!(extract_execution_error(&running).is_none());
+    }
+
+    #[test]
+    fn prompt_queue_state_detects_running_pending_and_missing() {
+        let queue = serde_json::json!({
+            "queue_running": [[12, "running-id", {}, {}, []]],
+            "queue_pending": [[13, "pending-id", {}, {}, []]]
+        });
+
+        assert_eq!(
+            prompt_queue_state(&queue, "running-id"),
+            ComfyQueueState::Running
+        );
+        assert_eq!(
+            prompt_queue_state(&queue, "pending-id"),
+            ComfyQueueState::Pending
+        );
+        assert_eq!(
+            prompt_queue_state(&queue, "other-id"),
+            ComfyQueueState::Missing
+        );
+        assert_eq!(
+            prompt_queue_state(&serde_json::json!({ "unexpected": [] }), "x"),
+            ComfyQueueState::Unknown
+        );
+    }
+
+    #[test]
+    fn execution_finished_detects_terminal_history_status() {
+        assert!(is_execution_finished(
+            &serde_json::json!({ "status": { "status_str": "success" } })
+        ));
+        assert!(is_execution_finished(
+            &serde_json::json!({ "status": { "status_str": "error" } })
+        ));
+        assert!(!is_execution_finished(
+            &serde_json::json!({ "status": { "status_str": "running" } })
+        ));
+        assert!(!is_execution_finished(&serde_json::json!({ "outputs": {} })));
     }
 
     #[test]
@@ -1221,6 +1385,29 @@ mod tests {
         assert_eq!(
             workflow["12"]["inputs"]["image"],
             serde_json::json!(["31", 0])
+        );
+    }
+
+    #[test]
+    fn pulid_workflow_many_references_do_not_overwrite_load_nodes() {
+        let req = sample_request();
+        let refs: Vec<String> = (0..12).map(|i| format!("ref-{i}.png")).collect();
+        let workflow = build_basic_workflow(&req, &refs, None);
+
+        for i in 0..12 {
+            let id = format!("{}", 20 + i);
+            assert_eq!(workflow[&id]["class_type"], "LoadImage", "node {id}");
+            assert_eq!(
+                workflow[&id]["inputs"]["image"],
+                serde_json::json!(format!("ref-{i}.png"))
+            );
+        }
+
+        assert_eq!(workflow["31"]["class_type"], "LoadImage");
+        assert_eq!(workflow["32"]["class_type"], "ImageBatch");
+        assert_eq!(
+            workflow["12"]["inputs"]["image"],
+            serde_json::json!(["42", 0])
         );
     }
 

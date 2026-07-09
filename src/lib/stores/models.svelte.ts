@@ -108,6 +108,7 @@ function createModelsStore() {
   let error = $state<string | null>(null);
   let modelsDir = $state<string>("");
   let movingModelsDir = $state(false);
+  let downloadSegments = $state(16);
 
   return {
     get models() {
@@ -131,6 +132,9 @@ function createModelsStore() {
     get movingModelsDir() {
       return movingModelsDir;
     },
+    get downloadSegments() {
+      return downloadSegments;
+    },
 
     isDownloaded(id: string) {
       return models.some((m) => m.id === id);
@@ -141,6 +145,12 @@ function createModelsStore() {
       recommended = await invoke<RecommendedModel[]>("list_recommended_models");
       gpu = await invoke<GpuInfo | null>("detect_gpu");
       modelsDir = await invoke<string>("get_models_dir");
+      downloadSegments = await invoke<number>("get_download_segments");
+    },
+
+    async setDownloadSegments(value: number) {
+      const segments = Math.min(32, Math.max(1, Math.round(value)));
+      downloadSegments = await invoke<number>("set_download_segments", { segments });
     },
 
     /** Přesune stahování (i existující modely) do jiné složky. */

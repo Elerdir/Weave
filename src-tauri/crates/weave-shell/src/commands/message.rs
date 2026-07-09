@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use serde::Serialize;
 use tauri::{Emitter, State};
 use tokio::sync::mpsc;
 use weave_application::{
@@ -8,6 +9,12 @@ use weave_application::{
 use weave_domain::{conversation::ConversationId, message::Message};
 
 use crate::state::AppState;
+
+#[derive(Debug, Serialize)]
+struct StreamEvent {
+    conversation_id: String,
+    chunk: StreamChunk,
+}
 
 #[tauri::command]
 pub async fn list_messages(
@@ -30,18 +37,22 @@ pub async fn send_message(
     content: String,
     file_refs: Option<Vec<String>>,
     reference_images: Option<Vec<String>>,
+    reference_preservation: Option<String>,
+    translate_image_prompt: Option<bool>,
     window: tauri::Window,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let conv_id = parse_conversation_id(&conversation_id)?;
-    let uc = build_use_case(&state).await;
-    let tx = spawn_stream_forwarder(window, &state);
+    let uc = build_use_case(&state, &conv_id).await;
+    let tx = spawn_stream_forwarder(window, &state, conversation_id);
 
     uc.execute(
         conv_id,
         content,
         file_refs.unwrap_or_default(),
         reference_images.unwrap_or_default(),
+        reference_preservation,
+        translate_image_prompt.unwrap_or(true),
         tx,
     )
     .await
@@ -56,8 +67,8 @@ pub async fn regenerate_response(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let conv_id = parse_conversation_id(&conversation_id)?;
-    let uc = build_use_case(&state).await;
-    let tx = spawn_stream_forwarder(window, &state);
+    let uc = build_use_case(&state, &conv_id).await;
+    let tx = spawn_stream_forwarder(window, &state, conversation_id);
 
     uc.regenerate(conv_id, tx).await.map_err(|e| e.to_string())
 }
@@ -73,8 +84,8 @@ pub async fn resend_message(
 ) -> Result<(), String> {
     let conv_id = parse_conversation_id(&conversation_id)?;
     let msg_id = parse_message_id(&message_id)?;
-    let uc = build_use_case(&state).await;
-    let tx = spawn_stream_forwarder(window, &state);
+    let uc = build_use_case(&state, &conv_id).await;
+    let tx = spawn_stream_forwarder(window, &state, conversation_id);
 
     uc.resend(conv_id, msg_id, tx)
         .await
@@ -111,8 +122,8 @@ pub async fn edit_image_message(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let conv_id = parse_conversation_id(&conversation_id)?;
-    let uc = build_use_case(&state).await;
-    let tx = spawn_stream_forwarder(window, &state);
+    let uc = build_use_case(&state, &conv_id).await;
+    let tx = spawn_stream_forwarder(window, &state, conversation_id);
 
     uc.edit_image(conv_id, content, init_image, tx)
         .await
@@ -184,13 +195,22 @@ pub async fn get_conversation_settings(
 #[tauri::command]
 pub async fn set_conversation_settings(
     conversation_id: String,
-    settings: weave_domain::generation_settings::GenerationSettings,
+    mut settings: weave_domain::generation_settings::GenerationSettings,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     use weave_application::ports::generation_settings_repository::GenerationSettingsRepository;
     use weave_infrastructure::db::generation_settings_repo::SqliteGenerationSettingsRepository;
 
     let conv_id = parse_conversation_id(&conversation_id)?;
+    if let Some(backend) = settings.runtime_backend.as_deref().map(str::trim) {
+        match backend {
+            "" => settings.runtime_backend = None,
+            "default" | "mistral" | "local" | "embedded" | "openvino_npu" => {
+                settings.runtime_backend = Some(backend.to_string());
+            }
+            other => return Err(format!("Neznamy runtime backend: {other}")),
+        }
+    }
     SqliteGenerationSettingsRepository::new(state.pool.clone())
         .set(&conv_id, &settings)
         .await
@@ -221,7 +241,11 @@ fn parse_message_id(raw: &str) -> Result<weave_domain::message::MessageId, Strin
 }
 
 /// Sestaví use case se všemi závislostmi (LLM backend dle aktuálního nastavení).
-async fn build_use_case(state: &State<'_, AppState>) -> SendMessageUseCase {
+async fn build_use_case(
+    state: &State<'_, AppState>,
+    conversation_id: &ConversationId,
+) -> SendMessageUseCase {
+    use weave_application::ports::generation_settings_repository::GenerationSettingsRepository;
     use weave_infrastructure::{
         db::{
             conversation_repo::SqliteConversationRepository,
@@ -231,7 +255,14 @@ async fn build_use_case(state: &State<'_, AppState>) -> SendMessageUseCase {
         workspace::workspace_repo::SqliteWorkspaceRepository,
     };
 
-    let llm = crate::commands::settings::resolve_llm(state).await;
+    let generation_settings_repo = SqliteGenerationSettingsRepository::new(state.pool.clone());
+    let runtime_backend = generation_settings_repo
+        .get(conversation_id)
+        .await
+        .ok()
+        .and_then(|settings| settings.runtime_backend);
+    let llm =
+        crate::commands::settings::resolve_llm_with_backend(state, runtime_backend.as_deref()).await;
 
     // CivitAI token (volitelný) — bez něj funguje hledání LoRA, jen
     // stažení některých modelů může selhat.
@@ -250,7 +281,7 @@ async fn build_use_case(state: &State<'_, AppState>) -> SendMessageUseCase {
         Arc::new(SqliteWorkspaceRepository::new(state.pool.clone())),
         Arc::new(SqlitePersonaRepository::new(state.pool.clone())),
         state.attachment_store.clone(),
-        Arc::new(SqliteGenerationSettingsRepository::new(state.pool.clone())),
+        Arc::new(generation_settings_repo),
         state.comfy_installer.clone(),
         Arc::new(weave_infrastructure::civitai::CivitAiClient::new(
             civitai_token,
@@ -264,6 +295,7 @@ async fn build_use_case(state: &State<'_, AppState>) -> SendMessageUseCase {
 fn spawn_stream_forwarder(
     window: tauri::Window,
     state: &State<'_, AppState>,
+    conversation_id: String,
 ) -> mpsc::Sender<StreamChunk> {
     let (tx, mut rx) = mpsc::channel::<StreamChunk>(128);
 
@@ -283,7 +315,11 @@ fn spawn_stream_forwarder(
             tokio::select! {
                 maybe_chunk = rx.recv() => match maybe_chunk {
                     Some(chunk) => {
-                        let _ = window.emit("stream-chunk", &chunk);
+                        let event = StreamEvent {
+                            conversation_id: conversation_id.clone(),
+                            chunk,
+                        };
+                        let _ = window.emit("stream-chunk", &event);
                     }
                     None => break,
                 },
@@ -291,7 +327,11 @@ fn spawn_stream_forwarder(
                     // Uzavřením rx přestanou klienti posílat tokeny a inference
                     // skončí. Frontend dostane Done, aby rozepsanou odpověď
                     // korektně uzavřel (částečný text zůstane zachovaný).
-                    let _ = window.emit("stream-chunk", &StreamChunk::Done(Default::default()));
+                    let event = StreamEvent {
+                        conversation_id: conversation_id.clone(),
+                        chunk: StreamChunk::Done(Default::default()),
+                    };
+                    let _ = window.emit("stream-chunk", &event);
                     break;
                 }
             }

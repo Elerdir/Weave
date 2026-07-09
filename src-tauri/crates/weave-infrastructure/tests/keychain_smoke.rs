@@ -16,7 +16,7 @@ use weave_infrastructure::keychain::OsKeychain;
 #[tokio::test]
 #[ignore = "zapisuje do reálného OS keychainu, spouštět ručně"]
 async fn store_then_retrieve_roundtrips_on_this_machine() {
-    let keychain = OsKeychain;
+    let keychain = OsKeychain::new(std::env::temp_dir().join("weave-keychain-smoke"));
     let service = ApiService::CivitAi;
     let token = "smoke-test-token-12345";
 

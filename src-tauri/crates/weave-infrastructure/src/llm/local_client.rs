@@ -14,13 +14,19 @@ use weave_domain::message::{GenerationStats, ModelBackend, Role};
 pub struct LocalLlmClient {
     http: Client,
     base_url: String,
+    backend: ModelBackend,
 }
 
 impl LocalLlmClient {
     pub fn new(base_url: impl Into<String>) -> Self {
+        Self::with_backend(base_url, ModelBackend::LocalCpu)
+    }
+
+    pub fn with_backend(base_url: impl Into<String>, backend: ModelBackend) -> Self {
         Self {
             http: Client::new(),
             base_url: base_url.into().trim_end_matches('/').to_string(),
+            backend,
         }
     }
 
@@ -141,7 +147,7 @@ impl LlmPort for LocalLlmClient {
                             prompt_tokens,
                             completion_tokens,
                             model_id: request.model_id.clone(),
-                            backend: ModelBackend::LocalCpu,
+                            backend: self.backend.clone(),
                         }))
                         .await;
                     return Ok(());
@@ -308,5 +314,31 @@ mod tests {
 
         let client = LocalLlmClient::new(server.uri());
         assert!(client.is_available().await);
+    }
+
+    #[tokio::test]
+    async fn reports_configured_backend_in_stats() {
+        let server = MockServer::start().await;
+        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"Ahoj\"}}]}\n\
+                   data: [DONE]\n";
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(sse))
+            .mount(&server)
+            .await;
+
+        let client = LocalLlmClient::with_backend(server.uri(), ModelBackend::OpenvinoNpu);
+        let (tx, mut rx) = mpsc::channel(16);
+        client.chat_stream(chat_request(), tx).await.unwrap();
+
+        let mut done_stats = None;
+        while let Some(chunk) = rx.recv().await {
+            if let StreamChunk::Done(s) = chunk {
+                done_stats = Some(s);
+            }
+        }
+
+        let stats = done_stats.expect("chybí Done se statistikami");
+        assert!(matches!(stats.backend, ModelBackend::OpenvinoNpu));
     }
 }

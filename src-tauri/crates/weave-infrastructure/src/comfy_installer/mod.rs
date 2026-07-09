@@ -1,6 +1,7 @@
 mod process;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -90,6 +91,26 @@ const FACE_DETECTOR_FILENAME: &str = "face_yolov8m.pt";
 const FACE_DETECTOR_URL: &str =
     "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt";
 
+fn clear_readonly_flags(path: &Path) -> AppResult<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path).map_err(|e| AppError::ComfyUi(e.to_string()))? {
+            let entry = entry.map_err(|e| AppError::ComfyUi(e.to_string()))?;
+            clear_readonly_flags(&entry.path())?;
+        }
+    }
+    let metadata = std::fs::metadata(path).map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    let mut permissions = metadata.permissions();
+    if permissions.readonly() {
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions)
+            .map_err(|e| AppError::ComfyUi(e.to_string()))?;
+    }
+    Ok(())
+}
+
 pub struct LocalComfyInstaller {
     install_dir: PathBuf,
     server: Arc<Mutex<Option<Child>>>,
@@ -107,6 +128,23 @@ impl LocalComfyInstaller {
 
     fn venv_dir(&self) -> PathBuf {
         self.install_dir.join("venv")
+    }
+
+    fn main_py_path(&self) -> PathBuf {
+        self.install_dir.join("main.py")
+    }
+
+    fn has_valid_checkout(&self) -> bool {
+        self.main_py_path().exists() && self.install_dir.join("requirements.txt").exists()
+    }
+
+    fn remove_install_dir(&self) -> AppResult<()> {
+        if !self.install_dir.exists() {
+            return Ok(());
+        }
+        clear_readonly_flags(&self.install_dir)?;
+        std::fs::remove_dir_all(&self.install_dir)
+            .map_err(|e| AppError::ComfyUi(format!("Odinstalace ComfyUI selhala: {e}")))
     }
 
     fn custom_nodes_dir(&self) -> PathBuf {
@@ -135,6 +173,37 @@ impl LocalComfyInstaller {
 
     fn checkpoints_dir(&self) -> PathBuf {
         self.install_dir.join("models").join("checkpoints")
+    }
+
+    fn logs_dir(&self) -> PathBuf {
+        self.install_dir.join("weave_logs")
+    }
+
+    fn server_log_path(&self) -> PathBuf {
+        self.logs_dir().join("comfyui-server.log")
+    }
+
+    fn read_log_tail(path: &Path) -> String {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return "Log ComfyUI zatim neni dostupny.".into();
+        };
+        let mut lines = text.lines().rev().take(80).collect::<Vec<_>>();
+        lines.reverse();
+        let tail = lines.join("\n");
+        if tail.trim().is_empty() {
+            "Log ComfyUI je prazdny.".into()
+        } else {
+            tail
+        }
+    }
+
+    fn start_error(message: impl Into<String>, log_path: &Path) -> AppError {
+        AppError::ComfyUi(format!(
+            "{}\n\nPosledni radky logu ({}):\n{}",
+            message.into(),
+            log_path.display(),
+            Self::read_log_tail(log_path)
+        ))
     }
 
     fn loras_dir(&self) -> PathBuf {
@@ -342,9 +411,10 @@ impl ComfyInstallerPort for LocalComfyInstaller {
         if self.server.lock().await.is_some() {
             return Ok(ComfyStatus::Running);
         }
-        let main_py = self.install_dir.join("main.py");
-        if main_py.exists() && venv_python_path(&self.venv_dir()).exists() {
+        if self.has_valid_checkout() && venv_python_path(&self.venv_dir()).exists() {
             Ok(ComfyStatus::Installed)
+        } else if self.install_dir.exists() {
+            Ok(ComfyStatus::Broken)
         } else {
             Ok(ComfyStatus::NotInstalled)
         }
@@ -361,10 +431,13 @@ impl ComfyInstallerPort for LocalComfyInstaller {
         })?;
 
         // 2. Git clone ComfyUI (pokud ještě neexistuje)
-        if !self.install_dir.join(".git").exists() {
+        if self.install_dir.exists() && !self.has_valid_checkout() {
+            Self::step(&tx, "Opravuji rozbitou instalaci ComfyUI").await;
+            self.remove_install_dir()?;
+        }
+
+        if !self.has_valid_checkout() {
             Self::step(&tx, "Stahuji ComfyUI (git clone)").await;
-            std::fs::create_dir_all(&self.install_dir)
-                .map_err(|e| AppError::ComfyUi(e.to_string()))?;
             run_streamed(
                 "git",
                 &[
@@ -470,6 +543,11 @@ impl ComfyInstallerPort for LocalComfyInstaller {
         Ok(())
     }
 
+    async fn uninstall(&self) -> AppResult<()> {
+        self.stop_server().await?;
+        self.remove_install_dir()
+    }
+
     async fn ensure_lora(
         &self,
         file_name: &str,
@@ -544,13 +622,29 @@ impl ComfyInstallerPort for LocalComfyInstaller {
             return Err(AppError::ComfyUi("ComfyUI není nainstalováno".into()));
         }
 
+        if !self.has_valid_checkout() {
+            return Err(AppError::ComfyUi(format!(
+                "ComfyUI instalace je nekompletni: chybi {}. V nastaveni pouzij Opravit instalaci.",
+                self.main_py_path().display()
+            )));
+        }
+
+        let log_path = self.server_log_path();
+        std::fs::create_dir_all(self.logs_dir())
+            .map_err(|e| AppError::ComfyUi(format!("Vytvoreni ComfyUI log slozky selhalo: {e}")))?;
+        let stdout = std::fs::File::create(&log_path)
+            .map_err(|e| AppError::ComfyUi(format!("Vytvoreni ComfyUI logu selhalo: {e}")))?;
+        let stderr = stdout
+            .try_clone()
+            .map_err(|e| AppError::ComfyUi(format!("Priprava ComfyUI logu selhala: {e}")))?;
+
         let child = tokio::process::Command::new(&venv_python)
             .arg("main.py")
             .arg("--port")
             .arg(COMFYUI_DEFAULT_PORT.to_string())
             .current_dir(&self.install_dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
             .spawn()
             .map_err(|e| AppError::ComfyUi(format!("Spuštění ComfyUI selhalo: {e}")))?;
 
@@ -561,6 +655,34 @@ impl ComfyInstallerPort for LocalComfyInstaller {
         let url = format!("http://localhost:{COMFYUI_DEFAULT_PORT}/system_stats");
         for _ in 0..60 {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+            {
+                let mut guard = self.server.lock().await;
+                if let Some(child) = guard.as_mut() {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            *guard = None;
+                            return Err(Self::start_error(
+                                format!("ComfyUI proces skoncil pred startem serveru ({status})."),
+                                &log_path,
+                            ));
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            return Err(Self::start_error(
+                                format!("Kontrola ComfyUI procesu selhala: {e}"),
+                                &log_path,
+                            ));
+                        }
+                    }
+                } else {
+                    return Err(Self::start_error(
+                        "ComfyUI proces uz neni evidovany jako bezici.",
+                        &log_path,
+                    ));
+                }
+            }
+
             if self
                 .http
                 .get(&url)
@@ -572,8 +694,10 @@ impl ComfyInstallerPort for LocalComfyInstaller {
                 return Ok(());
             }
         }
-        Err(AppError::ComfyUi(
-            "ComfyUI server se nespustil do 60 sekund".into(),
+        let _ = self.stop_server().await;
+        Err(Self::start_error(
+            "ComfyUI server se nespustil do 60 sekund.",
+            &log_path,
         ))
     }
 
@@ -657,6 +781,13 @@ mod tests {
     async fn list_checkpoints_empty_without_directory() {
         let installer = temp_installer();
         assert!(installer.list_checkpoints().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn status_reports_broken_when_directory_is_incomplete() {
+        let installer = temp_installer();
+        std::fs::create_dir_all(&installer.install_dir).unwrap();
+        assert_eq!(installer.status().await.unwrap(), ComfyStatus::Broken);
     }
 
     #[tokio::test]

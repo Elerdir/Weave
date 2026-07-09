@@ -57,6 +57,7 @@ function createConversationStore() {
   let messages = $state<Message[]>([]);
   let loading = $state(false);
   let streamingContent = $state<string | null>(null);
+  let streamingConversationId = $state<string | null>(null);
   let currentStats = $state<GenerationStats | null>(null);
   let lastError = $state<string | null>(null);
   let imageStage = $state<ImageStageInfo | null>(null);
@@ -68,9 +69,19 @@ function createConversationStore() {
     get messages() { return messages; },
     get loading() { return loading; },
     get streamingContent() { return streamingContent; },
+    get streamingConversationId() { return streamingConversationId; },
+    get activeStreamingContent() {
+      return streamingConversationId === activeId ? streamingContent : null;
+    },
     get currentStats() { return currentStats; },
     get lastError() { return lastError; },
     get imageStage() { return imageStage; },
+    get activeImageStage() {
+      return streamingConversationId === activeId ? imageStage : null;
+    },
+    get isActiveGeneration() {
+      return loading && streamingConversationId === activeId;
+    },
     get compacting() { return compacting; },
 
     get activeConversation() {
@@ -152,18 +163,25 @@ function createConversationStore() {
     },
 
     appendStreamToken(token: string) {
+      streamingConversationId ??= activeId;
       streamingContent = (streamingContent ?? "") + token;
     },
 
     setImageStage(info: ImageStageInfo | null) {
+      if (info !== null) streamingConversationId ??= activeId;
       imageStage = info;
     },
 
     finalizeStream(stats: GenerationStats) {
-      if (streamingContent !== null) {
+      const finishedConversationId = streamingConversationId;
+      if (
+        streamingContent !== null &&
+        finishedConversationId !== null &&
+        finishedConversationId === activeId
+      ) {
         const assistantMsg: Message = {
           id: crypto.randomUUID(),
-          conversation_id: activeId!,
+          conversation_id: finishedConversationId!,
           role: "assistant",
           content: streamingContent,
           attachments: [],
@@ -173,13 +191,15 @@ function createConversationStore() {
         messages = [...messages, assistantMsg];
       }
       streamingContent = null;
+      streamingConversationId = null;
       currentStats = stats;
       loading = false;
       imageStage = null;
     },
 
-    startLoading() {
+    startLoading(conversationId: string | null = activeId) {
       loading = true;
+      streamingConversationId = conversationId;
       streamingContent = null;
       currentStats = null;
       lastError = null;
@@ -204,11 +224,11 @@ function createConversationStore() {
 
     /** Znovu načte zprávy aktivní konverzace z DB (sladí lokální ID s backendem).
      *  Defenzivně: mimo Tauri (e2e v prohlížeči) nechá lokální stav být. */
-    async reloadMessages() {
-      if (!activeId) return;
+    async reloadMessages(conversationId: string | null = activeId) {
+      if (!conversationId) return;
       try {
-        const fresh = await invoke<Message[]>("list_messages", { conversationId: activeId });
-        if (Array.isArray(fresh)) messages = fresh;
+        const fresh = await invoke<Message[]>("list_messages", { conversationId });
+        if (Array.isArray(fresh) && activeId === conversationId) messages = fresh;
       } catch (err) {
         console.warn("reloadMessages selhal:", err);
       }

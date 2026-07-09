@@ -2,11 +2,23 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { notify } from "$lib/services/notify";
 
-export type ComfyStatus = "NotInstalled" | "Installed" | "Running";
+export type ComfyStatus = "NotInstalled" | "Broken" | "Installed" | "Running";
 
 export interface CheckpointInfo {
   file_name: string;
   size_bytes: number;
+}
+
+export interface ComfyDiagnostics {
+  status: ComfyStatus;
+  install_dir: string;
+  main_py_exists: boolean;
+  requirements_exists: boolean;
+  venv_python_exists: boolean;
+  pulid_node_exists: boolean;
+  impact_pack_exists: boolean;
+  server_log_path: string;
+  server_log_tail: string;
 }
 
 interface InstallEvent {
@@ -23,7 +35,10 @@ function createComfyInstallStore() {
   let log = $state<string[]>([]);
   let error = $state<string | null>(null);
   let starting = $state(false);
+  let uninstalling = $state(false);
   let checkpoints = $state<CheckpointInfo[]>([]);
+  let diagnostics = $state<ComfyDiagnostics | null>(null);
+  let diagnosing = $state(false);
 
   return {
     get checkpoints() {
@@ -47,6 +62,15 @@ function createComfyInstallStore() {
     get starting() {
       return starting;
     },
+    get uninstalling() {
+      return uninstalling;
+    },
+    get diagnostics() {
+      return diagnostics;
+    },
+    get diagnosing() {
+      return diagnosing;
+    },
 
     async load() {
       status = await invoke<ComfyStatus>("get_comfyui_status");
@@ -56,6 +80,19 @@ function createComfyInstallStore() {
     async deleteCheckpoint(fileName: string) {
       await invoke("delete_image_model", { fileName });
       checkpoints = checkpoints.filter((c) => c.file_name !== fileName);
+    },
+
+    async diagnose() {
+      diagnosing = true;
+      error = null;
+      try {
+        diagnostics = await invoke<ComfyDiagnostics>("diagnose_comfyui");
+        status = diagnostics.status;
+      } catch (err) {
+        error = String(err);
+      } finally {
+        diagnosing = false;
+      }
     },
 
     async install() {
@@ -110,6 +147,24 @@ function createComfyInstallStore() {
     async stopServer() {
       await invoke("stop_comfyui_server");
       status = "Installed";
+    },
+
+    async uninstall() {
+      if (installing || uninstalling) return;
+      uninstalling = true;
+      error = null;
+      try {
+        await invoke("uninstall_comfyui");
+        status = "NotInstalled";
+        checkpoints = [];
+        currentStep = "";
+        log = [];
+        diagnostics = null;
+      } catch (err) {
+        error = String(err);
+      } finally {
+        uninstalling = false;
+      }
     },
   };
 }

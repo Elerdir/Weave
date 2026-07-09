@@ -13,6 +13,27 @@ type StreamChunk =
   | { Done: GenerationStats }
   | { Error: string };
 
+type StreamEvent = {
+  conversation_id: string;
+  chunk: StreamChunk;
+};
+
+function unwrapStreamPayload(payload: StreamChunk | StreamEvent): {
+  conversationId: string | null;
+  chunk: StreamChunk;
+} {
+  if (
+    typeof payload === "object" &&
+    payload !== null &&
+    "conversation_id" in payload &&
+    "chunk" in payload
+  ) {
+    const routed = payload as StreamEvent;
+    return { conversationId: routed.conversation_id, chunk: routed.chunk };
+  }
+  return { conversationId: null, chunk: payload as StreamChunk };
+}
+
 const UNKNOWN_STATS: GenerationStats = {
   tokens_per_second: 0,
   prompt_tokens: 0,
@@ -22,9 +43,15 @@ const UNKNOWN_STATS: GenerationStats = {
 };
 
 /** Přihlásí odběr stream eventů a plní jimi conversation store. */
-async function listenForStream(): Promise<() => void> {
-  const unlisten = await listen<StreamChunk>("stream-chunk", (event) => {
-    const chunk = event.payload;
+async function listenForStream(conversationId: string): Promise<() => void> {
+  const unlisten = await listen<StreamChunk | StreamEvent>("stream-chunk", (event) => {
+    const { conversationId: routedConversationId, chunk } = unwrapStreamPayload(event.payload);
+    if (routedConversationId !== null && routedConversationId !== conversationId) return;
+    if (conversationStore.streamingConversationId !== conversationId) {
+      if ("Done" in chunk || "Error" in chunk) unlisten();
+      return;
+    }
+
     if ("Token" in chunk) {
       conversationStore.appendStreamToken(chunk.Token);
     } else if ("ImageStage" in chunk) {
@@ -45,16 +72,17 @@ async function listenForStream(): Promise<() => void> {
 /** Spustí backend command generování a při chybě uklidí stav streamu. */
 async function runGeneration(
   command: string,
+  conversationId: string,
   args: Record<string, unknown>
 ): Promise<void> {
-  conversationStore.startLoading();
-  const unlisten = await listenForStream();
+  conversationStore.startLoading(conversationId);
+  const unlisten = await listenForStream(conversationId);
   try {
     await invoke(command, args);
     // Sladí lokální stav s DB — hlavně skutečná ID zpráv (potřebná pro
     // resend/edit, lokálně vytvořené bubliny mají jen dočasná ID).
-    await conversationStore.reloadMessages();
-    await maybeAutoTitle();
+    await conversationStore.reloadMessages(conversationId);
+    await maybeAutoTitle(conversationId);
   } catch (err) {
     unlisten();
     conversationStore.setLastError(String(err));
@@ -68,7 +96,8 @@ const DEFAULT_TITLE_PREFIXES = ["Nová konverzace", "New Conversation"];
 
 /** Po dokončené výměně nechá LLM pojmenovat konverzaci s výchozím názvem.
  *  Best-effort — selhání se jen zaloguje, chat běží dál. */
-async function maybeAutoTitle(): Promise<void> {
+async function maybeAutoTitle(conversationId: string): Promise<void> {
+  if (conversationStore.activeId !== conversationId) return;
   const conv = conversationStore.activeConversation;
   if (!conv) return;
   const isDefault = DEFAULT_TITLE_PREFIXES.some((p) => conv.title.startsWith(p));
@@ -91,7 +120,9 @@ export async function sendMessage(
   conversationId: string,
   content: string,
   fileRefs: string[] = [],
-  referenceImages: string[] = []
+  referenceImages: string[] = [],
+  referencePreservation: string | null = null,
+  translateImagePrompt = true
 ): Promise<void> {
   const attachments: Attachment[] = referenceImages.map((path) => ({
     type: "image",
@@ -99,11 +130,13 @@ export async function sendMessage(
     mime: "image/*",
   }));
   conversationStore.pushUserMessage(content, attachments);
-  await runGeneration("send_message", {
+  await runGeneration("send_message", conversationId, {
     conversationId,
     content,
     fileRefs,
     referenceImages,
+    referencePreservation,
+    translateImagePrompt,
   });
 }
 
@@ -117,7 +150,7 @@ export async function editImageMessage(
   conversationStore.pushUserMessage(content, [
     { type: "image", path: initImage, mime: "image/*" },
   ]);
-  await runGeneration("edit_image_message", {
+  await runGeneration("edit_image_message", conversationId, {
     conversationId,
     content,
     initImage,
@@ -127,7 +160,7 @@ export async function editImageMessage(
 /** Znovu vygeneruje poslední odpověď asistenta v konverzaci. */
 export async function regenerateResponse(conversationId: string): Promise<void> {
   conversationStore.trimTrailingAssistantMessages();
-  await runGeneration("regenerate_response", { conversationId });
+  await runGeneration("regenerate_response", conversationId, { conversationId });
 }
 
 /** „Poslat znovu": smaže vše po dané zprávě (dotazy i odpovědi) a vygeneruje
@@ -137,7 +170,7 @@ export async function resendMessage(
   messageId: string
 ): Promise<void> {
   conversationStore.truncateAfterLocal(messageId);
-  await runGeneration("resend_message", { conversationId, messageId });
+  await runGeneration("resend_message", conversationId, { conversationId, messageId });
 }
 
 /** „Upravit a poslat": smaže původní zprávu a vše po ní, pak pošle novou verzi. */

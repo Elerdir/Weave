@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    error::AppResult,
+    error::{AppError, AppResult},
     ports::keychain_port::{ApiService, KeychainPort},
 };
 
@@ -18,6 +18,21 @@ impl ManageApiKeysUseCase {
         self.keychain.store(&service, token).await?;
         tracing::info!(service = service.key_name(), "API token uložen do keychain");
         Ok(())
+    }
+
+    pub async fn store_token_verified(
+        &self,
+        service: ApiService,
+        token: &str,
+    ) -> AppResult<Option<String>> {
+        self.store_token(service.clone(), token).await?;
+        let masked = self.masked_token(&service).await?;
+        if masked.is_none() {
+            return Err(AppError::Keychain(
+                "API token nebyl po ulozeni znovu nalezen".into(),
+            ));
+        }
+        Ok(masked)
     }
 
     pub async fn has_token(&self, service: &ApiService) -> AppResult<bool> {

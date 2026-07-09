@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -14,6 +15,7 @@ const APP_IDENTIFIER: &str = "dev.weave.app";
 /// bez toho by se logy do souboru nedopisovaly.
 static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
     std::sync::OnceLock::new();
+static CLEANUP_STARTED: AtomicBool = AtomicBool::new(false);
 
 /// Zapne logování: barevná konzole + soubor s denní rotací
 /// (`<app data>/logs/weave.log.YYYY-MM-DD`) pro log viewer v aplikaci.
@@ -78,10 +80,45 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+fn cleanup_runtime(app: &tauri::AppHandle) {
+    if CLEANUP_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    tracing::info!("Ukoncuji Weave: uvolnuji lokalni model, zastavuji ComfyUI a OpenVINO server");
+    let state = app.state::<weave_shell::state::AppState>();
+    let embedded = {
+        state
+            .embedded_llm
+            .lock()
+            .expect("embedded_llm mutex poisoned")
+            .take()
+            .map(|(_, client)| client)
+    };
+    let comfy_installer = state.comfy_installer.clone();
+
+    tauri::async_runtime::block_on(async move {
+        if let Some(client) = embedded {
+            client.unload().await;
+            tracing::info!("Lokalni model uvolnen pri ukonceni aplikace");
+        }
+        if let Err(e) = comfy_installer.stop_server().await {
+            tracing::warn!("Zastaveni ComfyUI pri ukonceni selhalo: {e}");
+        } else {
+            tracing::info!("ComfyUI zastaveno pri ukonceni aplikace");
+        }
+        if let Err(e) = commands::openvino_installer::stop_managed_server().await {
+            tracing::warn!("Zastaveni OpenVINO serveru pri ukonceni selhalo: {e}");
+        } else {
+            tracing::info!("OpenVINO server zastaven pri ukonceni aplikace");
+        }
+    });
+}
+
 pub fn run() {
     init_logging();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
@@ -130,14 +167,28 @@ pub fn run() {
             commands::message::get_conversation_settings,
             commands::message::set_conversation_settings,
             commands::settings::get_api_key_status,
+            commands::settings::open_settings_window,
             commands::settings::store_api_key,
             commands::settings::delete_api_key,
             commands::settings::get_masked_api_key,
             commands::settings::get_app_setting,
             commands::settings::set_app_setting,
             commands::settings::test_comfyui_connection,
+            commands::settings::test_openvino_npu_connection,
+            commands::settings::detect_npu,
+            commands::settings::restart_runtime,
+            commands::openvino_installer::get_openvino_runtime_status,
+            commands::openvino_installer::list_openvino_model_profiles,
+            commands::openvino_installer::install_openvino_runtime,
+            commands::openvino_installer::uninstall_openvino_runtime,
+            commands::openvino_installer::start_openvino_runtime_server,
+            commands::openvino_installer::stop_openvino_runtime_server,
+            commands::openvino_installer::download_openvino_recommended_model,
+            commands::openvino_installer::download_openvino_model_profile,
             commands::comfy_installer::get_comfyui_status,
+            commands::comfy_installer::diagnose_comfyui,
             commands::comfy_installer::install_comfyui,
+            commands::comfy_installer::uninstall_comfyui,
             commands::comfy_installer::start_comfyui_server,
             commands::comfy_installer::stop_comfyui_server,
             commands::comfy_installer::list_image_models,
@@ -148,8 +199,10 @@ pub fn run() {
             commands::logs::open_log_window,
             commands::gallery::list_gallery_images,
             commands::gallery::delete_gallery_image,
+            commands::gallery::export_gallery_image_metadata,
             commands::gallery::open_image_external,
             commands::gallery::open_gallery_window,
+            commands::gallery::open_gallery_detail_window,
             commands::subjects::list_subjects,
             commands::subjects::create_subject,
             commands::subjects::rename_subject,
@@ -161,6 +214,8 @@ pub fn run() {
             commands::models::list_local_models,
             commands::models::list_recommended_models,
             commands::models::detect_gpu,
+            commands::models::get_download_segments,
+            commands::models::set_download_segments,
             commands::models::download_model,
             commands::models::download_recommended_model,
             commands::models::delete_model,
@@ -182,7 +237,16 @@ pub fn run() {
             commands::workspace::delete_workspace_entry,
             commands::workspace::rename_workspace_entry,
             commands::workspace::search_workspace,
-        ])
-        .run(tauri::generate_context!())
-        .expect("Chyba spuštění Tauri aplikace");
+        ]);
+
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("Chyba sestaveni Tauri aplikace");
+
+    app.run(|app_handle, event| match event {
+        tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+            cleanup_runtime(app_handle);
+        }
+        _ => {}
+    });
 }

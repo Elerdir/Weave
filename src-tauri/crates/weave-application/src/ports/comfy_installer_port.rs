@@ -20,6 +20,7 @@ pub enum InstallProgress {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ComfyStatus {
     NotInstalled,
+    Broken,
     Installed,
     Running,
 }
@@ -32,6 +33,10 @@ pub enum ComfyStatus {
 pub trait ComfyInstallerPort: Send + Sync {
     async fn status(&self) -> AppResult<ComfyStatus>;
     async fn install(&self, tx: mpsc::Sender<InstallProgress>) -> AppResult<()>;
+    /// ZastavĂ­ lokĂˇlnĂ­ server a odstranĂ­ spravovanou ComfyUI instalaci vÄŤetnÄ›
+    /// venv, custom nodĹŻ a staĹľenĂ˝ch image modelĹŻ. Galerie obrĂˇzkĹŻ zĹŻstĂˇvĂˇ
+    /// mimo tuto sloĹľku a nemaĹľe se.
+    async fn uninstall(&self) -> AppResult<()>;
     async fn start_server(&self) -> AppResult<()>;
     async fn stop_server(&self) -> AppResult<()>;
     /// Zajistí, že je stažený checkpoint pro daný styl obrázku — když chybí,

@@ -13,15 +13,26 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use reqwest::header::{ACCEPT_RANGES, RANGE};
+use reqwest::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
+use reqwest::StatusCode;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 /// Pod touto velikostí souboru (nebo segmentu) se paralelizace nevyplatí —
 /// režie navíc spojení by převážila nad ziskem.
 const MIN_PARALLEL_SIZE: u64 = 32 * 1024 * 1024;
 const MIN_SEGMENT_SIZE: u64 = 16 * 1024 * 1024;
-const MAX_SEGMENTS: u64 = 8;
+const DEFAULT_MAX_SEGMENTS: u64 = 16;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
+
+static MAX_SEGMENTS_OVERRIDE: AtomicU64 = AtomicU64::new(0);
+
+pub fn set_max_segments_override(segments: u64) {
+    MAX_SEGMENTS_OVERRIDE.store(segments.clamp(1, 32), Ordering::Relaxed);
+}
+
+pub fn current_max_segments() -> u64 {
+    max_segments()
+}
 
 /// Stáhne `url` do `dest`. `on_progress(downloaded, total)` se volá throttlovaně
 /// (max. ~5x/s) — je to synchronní callback (typicky `tx.try_send(...)` do
@@ -41,17 +52,33 @@ pub async fn download(
     // Response::content_length() se u HEAD odpovědi odvozuje od skutečného
     // (prázdného) těla, ne od hlavičky — vrátí vždy 0 bez ohledu na to, co
     // hlásí Content-Length. Proto ji čteme napřímo z hlaviček.
-    let total = probe
+    let mut total = probe
         .headers()
-        .get(reqwest::header::CONTENT_LENGTH)
+        .get(CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
-    let supports_range = probe
+    let mut supports_range = probe
         .headers()
         .get(ACCEPT_RANGES)
         .map(|v| v.as_bytes() == b"bytes")
         .unwrap_or(false);
+
+    if !supports_range && (total == 0 || total >= MIN_PARALLEL_SIZE) {
+        if let Ok(range_probe) = http.get(url).header(RANGE, "bytes=0-0").send().await {
+            if range_probe.status() == StatusCode::PARTIAL_CONTENT {
+                supports_range = true;
+                if total == 0 {
+                    total = range_probe
+                        .headers()
+                        .get(CONTENT_RANGE)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(parse_content_range_total)
+                        .unwrap_or(0);
+                }
+            }
+        }
+    }
 
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -78,7 +105,7 @@ async fn download_sequential(
         .send()
         .await
         .map_err(|e| format!("Stažení selhalo: {e}"))?;
-    if !response.status().is_success() {
+    if response.error_for_status_ref().is_err() {
         return Err(format!("Server vrátil {}", response.status()));
     }
 
@@ -119,7 +146,7 @@ async fn download_segmented(
         file.set_len(total).map_err(|e| e.to_string())?;
     }
 
-    let num_segments = (total / MIN_SEGMENT_SIZE).clamp(1, MAX_SEGMENTS);
+    let num_segments = (total / MIN_SEGMENT_SIZE).clamp(1, max_segments());
     let segment_size = total.div_ceil(num_segments);
 
     let downloaded = Arc::new(AtomicU64::new(0));
@@ -178,7 +205,7 @@ async fn download_range(
         .await
         .map_err(|e| format!("Segment {start}-{end} selhal: {e}"))?;
 
-    if !response.status().is_success() {
+    if response.status() != StatusCode::PARTIAL_CONTENT {
         return Err(format!(
             "Segment {start}-{end}: server vrátil {}",
             response.status()
@@ -202,6 +229,26 @@ async fn download_range(
     }
     file.flush().await.map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn max_segments() -> u64 {
+    let override_value = MAX_SEGMENTS_OVERRIDE.load(Ordering::Relaxed);
+    if override_value > 0 {
+        return override_value;
+    }
+    std::env::var("WEAVE_DOWNLOAD_SEGMENTS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|v| v.clamp(1, 32))
+        .unwrap_or(DEFAULT_MAX_SEGMENTS)
+}
+
+fn parse_content_range_total(value: &str) -> Option<u64> {
+    let (_, total) = value.split_once('/')?;
+    if total == "*" {
+        return None;
+    }
+    total.parse().ok()
 }
 
 #[cfg(test)]
@@ -234,9 +281,14 @@ mod tests {
         let progress = Arc::new(Mutex::new(Vec::new()));
         let progress_clone = progress.clone();
 
-        let downloaded = download(&reqwest::Client::new(), &server.uri(), &dest, move |d, t| {
-            progress_clone.lock().unwrap().push((d, t));
-        })
+        let downloaded = download(
+            &reqwest::Client::new(),
+            &server.uri(),
+            &dest,
+            move |d, t| {
+                progress_clone.lock().unwrap().push((d, t));
+            },
+        )
         .await
         .unwrap();
 

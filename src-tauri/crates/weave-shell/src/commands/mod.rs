@@ -4,6 +4,7 @@ pub mod gallery;
 pub mod logs;
 pub mod message;
 pub mod models;
+pub mod openvino_installer;
 pub mod personas;
 pub mod settings;
 pub mod subjects;

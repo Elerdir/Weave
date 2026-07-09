@@ -3,11 +3,12 @@
   import WizardWelcome from "./steps/WizardWelcome.svelte";
   import WizardApiKeys from "./steps/WizardApiKeys.svelte";
   import WizardGpu from "./steps/WizardGpu.svelte";
+  import WizardOpenvino from "./steps/WizardOpenvino.svelte";
   import WizardModels from "./steps/WizardModels.svelte";
 
   let { onComplete }: { onComplete: () => void } = $props();
 
-  const STEPS = 4;
+  const STEPS = 5;
   let step = $state(1);
 
   function next() {
@@ -42,6 +43,8 @@
         <WizardApiKeys />
       {:else if step === 3}
         <WizardGpu />
+      {:else if step === 4}
+        <WizardOpenvino />
       {:else}
         <WizardModels />
       {/if}

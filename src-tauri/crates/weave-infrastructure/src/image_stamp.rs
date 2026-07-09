@@ -8,6 +8,8 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
 use anyhow::Context;
+use base64::{engine::general_purpose, Engine as _};
+use serde::{Deserialize, Serialize};
 
 /// Značka vkládaná do LSB bitů prvních pixelů obrázku.
 pub const AI_MARKER: &[u8] = b"WEAVE-AI";
@@ -20,6 +22,9 @@ const DIGITAL_SOURCE_TYPE: &str =
 const PROMPT_KEY: &str = "prompt";
 /// tEXt klíč s negativním promptem generování.
 const NEGATIVE_PROMPT_KEY: &str = "negative_prompt";
+const ORIGINAL_PROMPT_KEY: &str = "original_prompt";
+const REFERENCE_PRESERVATION_KEY: &str = "reference_preservation";
+const PROMPT_METADATA_B64_KEY: &str = "weave_prompt_metadata_b64";
 
 /// Přepíše PNG na místě: doplní metadata o AI původu (vč. promptu, pokud je
 /// zadán) a vloží neviditelný vodoznak. Pixely se změní nejvýš o 1 v LSB —
@@ -28,6 +33,16 @@ pub fn stamp_ai_image(
     path: &Path,
     prompt: Option<&str>,
     negative_prompt: Option<&str>,
+) -> anyhow::Result<()> {
+    stamp_ai_image_with_details(path, prompt, negative_prompt, None, None)
+}
+
+pub fn stamp_ai_image_with_details(
+    path: &Path,
+    prompt: Option<&str>,
+    negative_prompt: Option<&str>,
+    original_prompt: Option<&str>,
+    reference_preservation: Option<&str>,
 ) -> anyhow::Result<()> {
     let file = std::fs::File::open(path).context("otevření PNG")?;
     let decoder = png::Decoder::new(BufReader::new(file));
@@ -68,12 +83,33 @@ pub fn stamp_ai_image(
         // Prompt(y) — jen když jsou. tEXt umí jen latin1, takže text nejdřív
         // ořízneme na latin1 (ne-kódovatelné znaky → mezera); jinak by
         // write_header spadl a znehodnotil obrázek.
-        for (key, value) in [(PROMPT_KEY, prompt), (NEGATIVE_PROMPT_KEY, negative_prompt)] {
+        for (key, value) in [
+            (PROMPT_KEY, prompt),
+            (NEGATIVE_PROMPT_KEY, negative_prompt),
+            (ORIGINAL_PROMPT_KEY, original_prompt),
+            (REFERENCE_PRESERVATION_KEY, reference_preservation),
+        ] {
             if let Some(text) = value.map(to_latin1_lossy).filter(|t| !t.is_empty()) {
                 encoder
                     .add_text_chunk(key.into(), text)
                     .with_context(|| format!("tEXt {key}"))?;
             }
+        }
+
+        let prompt_metadata = PromptMetadata {
+            prompt: prompt.map(ToOwned::to_owned),
+            negative_prompt: negative_prompt.map(ToOwned::to_owned),
+            original_prompt: original_prompt.map(ToOwned::to_owned),
+            reference_preservation: reference_preservation.map(ToOwned::to_owned),
+        };
+        if prompt_metadata.has_any() {
+            let json = serde_json::to_vec(&prompt_metadata).context("serializace prompt metadat")?;
+            encoder
+                .add_text_chunk(
+                    PROMPT_METADATA_B64_KEY.into(),
+                    general_purpose::STANDARD.encode(json),
+                )
+                .context("tEXt UTF-8 prompt metadata")?;
         }
 
         let mut writer = encoder.write_header().context("PNG hlavička")?;
@@ -138,13 +174,55 @@ pub fn is_ai_stamped(path: &Path) -> bool {
 /// Přečte prompt a negativní prompt z PNG tEXt metadat (zapsaných při
 /// [`stamp_ai_image`]). Chybějící chunk = `None`.
 pub fn read_prompt_metadata(path: &Path) -> (Option<String>, Option<String>) {
+    let meta = read_prompt_metadata_extended(path);
+    (meta.prompt, meta.negative_prompt)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptMetadata {
+    pub prompt: Option<String>,
+    pub negative_prompt: Option<String>,
+    pub original_prompt: Option<String>,
+    pub reference_preservation: Option<String>,
+}
+
+impl PromptMetadata {
+    fn has_any(&self) -> bool {
+        self.prompt.as_deref().is_some_and(|s| !s.is_empty())
+            || self
+                .negative_prompt
+                .as_deref()
+                .is_some_and(|s| !s.is_empty())
+            || self
+                .original_prompt
+                .as_deref()
+                .is_some_and(|s| !s.is_empty())
+            || self
+                .reference_preservation
+                .as_deref()
+                .is_some_and(|s| !s.is_empty())
+    }
+}
+
+pub fn read_prompt_metadata_extended(path: &Path) -> PromptMetadata {
     let Ok(file) = std::fs::File::open(path) else {
-        return (None, None);
+        return PromptMetadata::default();
     };
     let decoder = png::Decoder::new(BufReader::new(file));
     let Ok(reader) = decoder.read_info() else {
-        return (None, None);
+        return PromptMetadata::default();
     };
+    if let Some(metadata) = reader
+        .info()
+        .uncompressed_latin1_text
+        .iter()
+        .find(|c| c.keyword == PROMPT_METADATA_B64_KEY)
+        .and_then(|c| general_purpose::STANDARD.decode(c.text.trim()).ok())
+        .and_then(|bytes| serde_json::from_slice::<PromptMetadata>(&bytes).ok())
+        .filter(PromptMetadata::has_any)
+    {
+        return metadata;
+    }
     let find = |key: &str| {
         reader
             .info()
@@ -153,7 +231,12 @@ pub fn read_prompt_metadata(path: &Path) -> (Option<String>, Option<String>) {
             .find(|c| c.keyword == key)
             .map(|c| c.text.clone())
     };
-    (find(PROMPT_KEY), find(NEGATIVE_PROMPT_KEY))
+    PromptMetadata {
+        prompt: find(PROMPT_KEY),
+        negative_prompt: find(NEGATIVE_PROMPT_KEY),
+        original_prompt: find(ORIGINAL_PROMPT_KEY),
+        reference_preservation: find(REFERENCE_PRESERVATION_KEY),
+    }
 }
 
 /// Vloží bity značky do LSB po sobě jdoucích bajtů obrazových dat.
@@ -270,10 +353,12 @@ mod tests {
     fn stamp_roundtrips_prompt_metadata() {
         let path = temp_png("prompt.png");
         write_test_png(&path, 16, 16);
-        stamp_ai_image(
+        stamp_ai_image_with_details(
             &path,
             Some("a knight in shining armor, detailed"),
             Some("blurry, bad eyes"),
+            Some("nakresli rytire"),
+            Some("zachovat tvar obliceje"),
         )
         .unwrap();
 
@@ -283,16 +368,44 @@ mod tests {
             Some("a knight in shining armor, detailed")
         );
         assert_eq!(negative.as_deref(), Some("blurry, bad eyes"));
+
+        let meta = read_prompt_metadata_extended(&path);
+        assert_eq!(meta.original_prompt.as_deref(), Some("nakresli rytire"));
+        assert_eq!(
+            meta.reference_preservation.as_deref(),
+            Some("zachovat tvar obliceje")
+        );
+    }
+
+    #[test]
+    fn stamp_roundtrips_utf8_prompt_metadata() {
+        let path = temp_png("prompt-utf8.png");
+        write_test_png(&path, 16, 16);
+        let original = "vygeneruj mi obr\u{00E1}zek ko\u{010D}ky v klobouku";
+        let preservation = "zachovat tv\u{00E1}\u{0159} a kompozici";
+        stamp_ai_image_with_details(
+            &path,
+            Some("cat wearing a hat, high quality"),
+            Some("blurry"),
+            Some(original),
+            Some(preservation),
+        )
+        .unwrap();
+
+        let meta = read_prompt_metadata_extended(&path);
+        assert_eq!(meta.original_prompt.as_deref(), Some(original));
+        assert_eq!(meta.reference_preservation.as_deref(), Some(preservation));
     }
 
     #[test]
     fn non_latin1_prompt_does_not_destroy_image() {
         let path = temp_png("emoji.png");
         write_test_png(&path, 32, 32);
+        let original_prompt = "ko\u{010D}ka \u{1F431} <|im_start|> \u{9F8D} detailed";
 
         // Prompt s ne-latin1 znaky (emoji, ChatML token, CJK) — dřív shodil
         // write_header a nechal soubor prázdný.
-        stamp_ai_image(&path, Some("kočka 🐱 <|im_start|> 龍 detailed"), None).unwrap();
+        stamp_ai_image(&path, Some(original_prompt), None).unwrap();
 
         // Obrázek je pořád platné PNG (nepřišel o data).
         assert!(is_ai_stamped(&path));
@@ -303,11 +416,9 @@ mod tests {
             .next_frame(&mut buf)
             .expect("PNG musí zůstat dekódovatelné");
 
-        // Prompt se uložil (ořezaný na latin1 — emoji/CJK pryč).
+        // Prompt se ulozi pres UTF-8 bezpecny JSON chunk, latin1 chunk je jen fallback.
         let (prompt, _) = read_prompt_metadata(&path);
-        let prompt = prompt.unwrap();
-        assert!(prompt.contains("detailed"));
-        assert!(!prompt.contains('🐱') && !prompt.contains('龍'));
+        assert_eq!(prompt.as_deref(), Some(original_prompt));
     }
 
     #[test]

@@ -10,8 +10,10 @@
   import { subjectsStore, type Subject } from "$lib/stores/subjects.svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { generationSettingsStore } from "$lib/stores/generation-settings.svelte";
+  import type { RuntimeBackend } from "$lib/stores/generation-settings.svelte";
   import {
     editImageMessage,
+    regenerateResponse,
     sendMessage,
     stopGeneration,
   } from "$lib/services/chat.service";
@@ -47,10 +49,61 @@
   let searchTimer: ReturnType<typeof setTimeout>;
 
   // Referenční obrázky pro generování (náhled hned po výběru)
+  const MAX_REFERENCE_IMAGES = 4;
   let refImages = $state<RefImage[]>([]);
+  let referencePreservation = $state("");
+  let translateImagePrompt = $state(true);
 
   // Panel per-konverzačních parametrů generování (posuvníky)
   let showGenSettings = $state(false);
+  let unloadingModel = $state(false);
+  let unloadNotice = $state<string | null>(null);
+  let lastActiveConversationId = $state<string | null>(null);
+  const runtimeOptions: { value: RuntimeBackend; label: () => string }[] = [
+    { value: "default", label: () => i18n.m.chat.runtime.default },
+    { value: "embedded", label: () => i18n.m.chat.runtime.gpu },
+    { value: "local", label: () => i18n.m.chat.runtime.ram },
+    { value: "openvino_npu", label: () => i18n.m.chat.runtime.npu },
+    { value: "mistral", label: () => i18n.m.chat.runtime.api },
+  ];
+
+  const runtimeInfo = $derived.by(() => {
+    const backend = conversationStore.currentStats?.backend ?? "unknown";
+    if (backend === "local_cuda" || backend === "local_metal" || backend === "local_vulkan") {
+      return { label: i18n.m.chat.runtime.gpu, kind: "gpu" };
+    }
+    if (backend === "local_cpu") {
+      return { label: i18n.m.chat.runtime.ram, kind: "ram" };
+    }
+    if (backend === "openvino_npu") {
+      return { label: i18n.m.chat.runtime.npu, kind: "npu" };
+    }
+    if (backend === "mistral_api") {
+      return { label: i18n.m.chat.runtime.api, kind: "api" };
+    }
+    if (backend === "comfy_ui") {
+      return { label: i18n.m.chat.runtime.comfyui, kind: "api" };
+    }
+    return { label: i18n.m.chat.runtime.unknown, kind: "unknown" };
+  });
+
+  const imagePromptAssistVisible = $derived.by(() => {
+    const lower = input.toLowerCase();
+    const hasCzechChars = /[áčďéěíňóřšťúůýž]/i.test(input);
+    const asksForImage = [
+      "obraz",
+      "obrazek",
+      "obrázek",
+      "fotk",
+      "nakresli",
+      "vygeneruj",
+      "ilustrac",
+      "portrait",
+      "image",
+      "photo",
+    ].some((word) => lower.includes(word));
+    return refImages.length > 0 || hasCzechChars || asksForImage;
+  });
 
   // Výběr referenčních postav (uložené sady fotek)
   let showSubjects = $state(false);
@@ -84,6 +137,14 @@
 
   $effect(() => {
     const id = conversationStore.activeId;
+    if (id !== lastActiveConversationId) {
+      lastActiveConversationId = id;
+      mentions = [];
+      refImages = [];
+      referencePreservation = "";
+      showSubjects = false;
+      closeSuggestions();
+    }
     if (id) {
       showGenSettings = false;
       void generationSettingsStore.load(id);
@@ -95,10 +156,12 @@
       paths,
       refImages.map((r) => r.path)
     );
-    if (fresh.length > 0) {
+    const freeSlots = Math.max(0, MAX_REFERENCE_IMAGES - refImages.length);
+    const accepted = fresh.slice(0, freeSlots);
+    if (accepted.length > 0) {
       refImages = [
         ...refImages,
-        ...fresh.map((path) => ({ path, previewUrl: convertFileSrc(path) })),
+        ...accepted.map((path) => ({ path, previewUrl: convertFileSrc(path) })),
       ];
     }
   }
@@ -114,6 +177,7 @@
 
   function removeRefImage(path: string) {
     refImages = refImages.filter((r) => r.path !== path);
+    if (refImages.length === 0) referencePreservation = "";
   }
 
   // „Použít jako referenci“ z bubliny zprávy → přilož k dalšímu vstupu
@@ -140,6 +204,23 @@
   });
 
   // Drag & drop obrázků kamkoliv do okna chatu → referenční obrázky
+  $effect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    listen<string>("use-prompt", (e) => {
+      if (typeof e.payload !== "string" || e.payload.trim().length === 0) return;
+      input = input.trim().length > 0 ? `${input.trim()}\n\n${e.payload}` : e.payload;
+      tick().then(() => inputEl?.focus());
+    }).then((u) => {
+      if (disposed) u();
+      else unlisten = u;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  });
+
   let dragActive = $state(false);
 
   $effect(() => {
@@ -168,7 +249,7 @@
 
   $effect(() => {
     void conversationStore.messages.length;
-    void conversationStore.streamingContent;
+    void conversationStore.activeStreamingContent;
     tick().then(() => {
       if (messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
     });
@@ -221,21 +302,82 @@
     mentions = mentions.filter((m) => m.path !== path);
   }
 
+  async function unloadModelMemory() {
+    if (unloadingModel || conversationStore.loading) return;
+    unloadingModel = true;
+    unloadNotice = null;
+    try {
+      await invoke("unload_embedded_model");
+      unloadNotice = i18n.m.chat.runtime.unloaded;
+      setTimeout(() => {
+        unloadNotice = null;
+      }, 3500);
+    } catch (e) {
+      conversationStore.setLastError(String(e));
+    } finally {
+      unloadingModel = false;
+    }
+  }
+
+  async function retryLastGeneration() {
+    if (!conversationStore.activeId || conversationStore.loading) return;
+    conversationStore.setLastError(null);
+    await regenerateResponse(conversationStore.activeId);
+  }
+
+  function switchBackendFromError() {
+    conversationStore.setLastError(null);
+    showGenSettings = true;
+  }
+
+  async function openLogsFromError() {
+    try {
+      await invoke("open_log_window");
+    } catch (e) {
+      conversationStore.setLastError(String(e));
+    }
+  }
+
   async function submit() {
     const content = input.trim();
     if (!content || conversationStore.loading || !conversationStore.activeId) return;
+    const conversationId = conversationStore.activeId;
     const refs = mentions.map((m) => m.path);
     const images = refImages.map((r) => r.path);
+    const preserve = referencePreservation.trim();
+    // Čeká-li obrázek na úpravu, jde instrukce jako img2img místo běžné zprávy.
+    const initImage = editImageStore.take();
+    const draft = {
+      input,
+      mentions,
+      refImages,
+      referencePreservation,
+    };
+
     input = "";
     mentions = [];
     refImages = [];
+    referencePreservation = "";
     closeSuggestions();
-    // Čeká-li obrázek na úpravu, jde instrukce jako img2img místo běžné zprávy.
-    const initImage = editImageStore.take();
-    if (initImage) {
-      await editImageMessage(conversationStore.activeId, content, initImage);
-    } else {
-      await sendMessage(conversationStore.activeId, content, refs, images);
+    try {
+      if (initImage) {
+        await editImageMessage(conversationId, content, initImage);
+      } else {
+        await sendMessage(
+          conversationId,
+          content,
+          refs,
+          images,
+          preserve || null,
+          translateImagePrompt
+        );
+      }
+    } catch {
+      input = draft.input;
+      mentions = draft.mentions;
+      refImages = draft.refImages;
+      referencePreservation = draft.referencePreservation;
+      if (initImage) editImageStore.set(initImage);
     }
   }
 
@@ -284,12 +426,32 @@
     </div>
     <div class="header-right">
       {#if conversationStore.currentStats}
-        <span class="tps-badge">
-          {i18n.t("chat.tokensPerSecond", {
-            tps: conversationStore.currentStats.tokens_per_second.toFixed(1)
-          })} · {conversationStore.currentStats.model_id}
-        </span>
+        <div class="runtime-cluster">
+          <span
+            class="runtime-badge"
+            class:gpu={runtimeInfo.kind === "gpu"}
+            class:ram={runtimeInfo.kind === "ram"}
+            class:npu={runtimeInfo.kind === "npu"}
+          >
+            {runtimeInfo.label}
+          </span>
+          <span class="tps-badge">
+            {i18n.t("chat.tokensPerSecond", {
+              tps: conversationStore.currentStats.tokens_per_second.toFixed(1)
+            })} · {conversationStore.currentStats.model_id}
+          </span>
+        </div>
       {/if}
+      {#if unloadNotice}
+        <span class="unload-notice">{unloadNotice}</span>
+      {/if}
+      <button
+        class="gen-settings-btn"
+        onclick={unloadModelMemory}
+        disabled={conversationStore.loading || unloadingModel}
+        title={i18n.m.chat.runtime.unload}
+        aria-label={i18n.m.chat.runtime.unload}
+      >{unloadingModel ? "..." : "⏏"}</button>
       <button
         class="gen-settings-btn"
         onclick={() => invoke("open_gallery_window").catch((e) => console.warn(e))}
@@ -311,6 +473,29 @@
 
   {#if showGenSettings}
     <div class="gen-settings-panel">
+      <div class="gen-field runtime-select-field">
+        <div class="gen-label-row">
+          <label for="gen-runtime">{i18n.m.chat.runtime.override}</label>
+          <span class="gen-value">{i18n.m.chat.runtime.perChat}</span>
+        </div>
+        <select
+          id="gen-runtime"
+          class="runtime-select"
+          value={generationSettingsStore.runtimeBackend}
+          onchange={(e) => {
+            generationSettingsStore.setRuntimeBackend(
+              (e.target as HTMLSelectElement).value as RuntimeBackend
+            );
+            void generationSettingsStore.save();
+          }}
+        >
+          {#each runtimeOptions as option (option.value)}
+            <option value={option.value}>{option.label()}</option>
+          {/each}
+        </select>
+        <p class="gen-hint">{i18n.m.chat.runtime.overrideHint}</p>
+      </div>
+
       <div class="gen-field">
         <div class="gen-label-row">
           <label for="gen-context">{i18n.m.chat.genSettings.context}</label>
@@ -412,36 +597,36 @@
       <MessageBubble {msg} isLast={i === conversationStore.messages.length - 1} />
     {/each}
 
-    {#if conversationStore.streamingContent !== null}
+    {#if conversationStore.activeStreamingContent !== null}
       <div class="bubble assistant streaming">
         <div class="bubble-content">
-          {conversationStore.streamingContent}
+          {conversationStore.activeStreamingContent}
           <span class="cursor"></span>
         </div>
       </div>
-    {:else if conversationStore.loading && conversationStore.imageStage}
+    {:else if conversationStore.isActiveGeneration && conversationStore.activeImageStage}
       <div class="bubble assistant image-progress">
         <div class="image-progress-head">
           <span class="image-progress-label">
-            {i18n.t(`chat.imageStages.${conversationStore.imageStage.stage}`)}
+            {i18n.t(`chat.imageStages.${conversationStore.activeImageStage.stage}`)}
           </span>
           <span class="image-progress-elapsed">{elapsedLabel}</span>
         </div>
         <div class="image-progress-bar">
-          {#if conversationStore.imageStage.percent != null}
+          {#if conversationStore.activeImageStage.percent != null}
             <div
               class="image-progress-fill determinate"
-              style="width: {conversationStore.imageStage.percent}%"
+              style="width: {conversationStore.activeImageStage.percent}%"
             ></div>
           {:else}
             <div class="image-progress-fill"></div>
           {/if}
         </div>
-        {#if conversationStore.imageStage.detail}
-          <div class="image-progress-detail">{conversationStore.imageStage.detail}</div>
+        {#if conversationStore.activeImageStage.detail}
+          <div class="image-progress-detail">{conversationStore.activeImageStage.detail}</div>
         {/if}
       </div>
-    {:else if conversationStore.loading}
+    {:else if conversationStore.isActiveGeneration}
       <div class="bubble assistant thinking">
         <span class="dot"></span>
         <span class="dot"></span>
@@ -454,6 +639,16 @@
     {#if conversationStore.lastError}
       <div class="error-banner" role="alert">
         <span class="error-text">⚠️ {conversationStore.lastError}</span>
+        <div class="error-actions">
+          <button onclick={retryLastGeneration} disabled={conversationStore.loading}>
+            {i18n.m.chat.errors.retry}
+          </button>
+          <button onclick={switchBackendFromError}>{i18n.m.chat.errors.switchBackend}</button>
+          <button onclick={unloadModelMemory} disabled={conversationStore.loading || unloadingModel}>
+            {i18n.m.chat.errors.unloadModel}
+          </button>
+          <button onclick={openLogsFromError}>{i18n.m.chat.errors.openLogs}</button>
+        </div>
         <button
           class="error-dismiss"
           onclick={() => conversationStore.setLastError(null)}
@@ -488,6 +683,24 @@
             >×</button>
           </div>
         {/each}
+      </div>
+    {/if}
+
+    {#if imagePromptAssistVisible}
+      <div class="image-prompt-assist">
+        <label class="translate-toggle">
+          <input type="checkbox" bind:checked={translateImagePrompt} />
+          <span>{i18n.m.chat.imagePrompt.translateToEnglish}</span>
+        </label>
+        {#if refImages.length > 0}
+          <textarea
+            class="reference-preservation-input"
+            bind:value={referencePreservation}
+            placeholder={i18n.m.chat.imagePrompt.referencePreservationPlaceholder}
+            rows="2"
+            disabled={conversationStore.loading}
+          ></textarea>
+        {/if}
       </div>
     {/if}
 
@@ -652,6 +865,44 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .runtime-cluster {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .runtime-badge {
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.16rem 0.5rem;
+    white-space: nowrap;
+  }
+  .runtime-badge.gpu {
+    background: color-mix(in srgb, var(--color-success) 12%, transparent);
+    border-color: color-mix(in srgb, var(--color-success) 55%, var(--color-border));
+    color: var(--color-success);
+  }
+  .runtime-badge.ram {
+    background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+    border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+    color: var(--color-accent);
+  }
+  .runtime-badge.npu {
+    background: color-mix(in srgb, #0ea5e9 12%, transparent);
+    border-color: color-mix(in srgb, #0ea5e9 55%, var(--color-border));
+    color: #0284c7;
+  }
+
+  .unload-notice {
+    color: var(--color-success);
+    font-size: 0.76rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
   .gen-settings-btn {
     background: transparent;
     border: 1px solid var(--color-border);
@@ -665,6 +916,10 @@
   .gen-settings-btn:hover {
     color: var(--color-text);
     background: var(--color-surface-2);
+  }
+  .gen-settings-btn:disabled {
+    cursor: default;
+    opacity: 0.45;
   }
   .gen-settings-btn.active {
     color: var(--color-accent);
@@ -707,6 +962,20 @@
   .gen-field input[type="range"] {
     width: 100%;
     accent-color: var(--color-accent);
+  }
+
+  .runtime-select {
+    width: 100%;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    color: var(--color-text);
+    font: inherit;
+    padding: 0.45rem 0.6rem;
+  }
+  .runtime-select:focus {
+    border-color: var(--color-accent);
+    outline: none;
   }
 
   .gen-section {
@@ -889,8 +1158,36 @@
   }
 
   .error-banner .error-text {
+    flex: 1 1 auto;
     line-height: 1.5;
     word-break: break-word;
+  }
+
+  .error-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    justify-content: flex-end;
+  }
+
+  .error-actions button {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    color: var(--color-text);
+    cursor: pointer;
+    font-size: 0.75rem;
+    padding: 0.25rem 0.45rem;
+    white-space: nowrap;
+  }
+
+  .error-actions button:hover:not(:disabled) {
+    border-color: var(--color-accent);
+  }
+
+  .error-actions button:disabled {
+    cursor: default;
+    opacity: 0.45;
   }
 
   .error-dismiss {
@@ -982,6 +1279,51 @@
 
   .ref-image-remove:hover {
     background: rgba(0, 0, 0, 0.85);
+  }
+
+  .image-prompt-assist {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    margin: 0.6rem 1.25rem 0;
+    padding: 0.55rem 0.65rem;
+    background: color-mix(in srgb, var(--color-accent) 7%, transparent);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+  }
+
+  .translate-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 0.78rem;
+  }
+
+  .translate-toggle input {
+    accent-color: var(--color-accent);
+  }
+
+  .reference-preservation-input {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+    min-height: 44px;
+    max-height: 110px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.45rem 0.55rem;
+    font: inherit;
+    font-size: 0.8rem;
+    line-height: 1.35;
+  }
+
+  .reference-preservation-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
   }
 
   .attach-btn {

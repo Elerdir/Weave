@@ -7,7 +7,10 @@ export interface GenerationSettings {
   max_tokens: number | null;
   pulid_weight: number | null;
   face_detailer: boolean | null;
+  runtime_backend: RuntimeBackend | null;
 }
+
+export type RuntimeBackend = "default" | "mistral" | "local" | "embedded" | "openvino_npu";
 
 export const DEFAULT_CONTEXT = 8192;
 export const DEFAULT_TEMPERATURE = 0.7;
@@ -24,6 +27,7 @@ function createGenerationSettingsStore() {
   let pulidWeight = $state(DEFAULT_PULID_WEIGHT);
   /** Doladit obličej/oči FaceDetailerem (Impact Pack). */
   let faceDetailer = $state(false);
+  let runtimeBackend = $state<RuntimeBackend>("default");
 
   return {
     get contextLength() {
@@ -41,6 +45,9 @@ function createGenerationSettingsStore() {
     get faceDetailer() {
       return faceDetailer;
     },
+    get runtimeBackend() {
+      return runtimeBackend;
+    },
 
     async load(id: string) {
       conversationId = id;
@@ -52,6 +59,7 @@ function createGenerationSettingsStore() {
       maxTokens = s.max_tokens ?? 0;
       pulidWeight = s.pulid_weight ?? DEFAULT_PULID_WEIGHT;
       faceDetailer = s.face_detailer ?? false;
+      runtimeBackend = s.runtime_backend ?? "default";
     },
 
     setContextLength(value: number) {
@@ -76,6 +84,10 @@ function createGenerationSettingsStore() {
       faceDetailer = value;
     },
 
+    setRuntimeBackend(value: RuntimeBackend) {
+      runtimeBackend = value;
+    },
+
     async save() {
       if (!conversationId) return;
       const settings: GenerationSettings = {
@@ -84,6 +96,7 @@ function createGenerationSettingsStore() {
         max_tokens: maxTokens > 0 ? maxTokens : null,
         pulid_weight: pulidWeight,
         face_detailer: faceDetailer,
+        runtime_backend: runtimeBackend,
       };
       await invoke("set_conversation_settings", { conversationId, settings });
     },

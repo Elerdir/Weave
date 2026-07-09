@@ -43,6 +43,8 @@ describe("chat.service sendMessage", () => {
       content: "ahoj",
       fileRefs: ["/ws/note.txt"],
       referenceImages: ["/tmp/ref.png"],
+      referencePreservation: null,
+      translateImagePrompt: true,
     });
   });
 
@@ -56,6 +58,8 @@ describe("chat.service sendMessage", () => {
       content: "ahoj",
       fileRefs: [],
       referenceImages: [],
+      referencePreservation: null,
+      translateImagePrompt: true,
     });
     expect(conversationStore.messages.at(-1)?.attachments).toEqual([]);
   });

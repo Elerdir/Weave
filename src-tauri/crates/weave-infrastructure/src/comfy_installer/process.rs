@@ -70,7 +70,12 @@ pub async fn run_streamed(
     let _ = err_task.await;
 
     if !status.success() {
-        let context: Vec<String> = tail.lock().expect("tail mutex poisoned").iter().cloned().collect();
+        let context: Vec<String> = tail
+            .lock()
+            .expect("tail mutex poisoned")
+            .iter()
+            .cloned()
+            .collect();
         let suffix = if context.is_empty() {
             String::new()
         } else {
@@ -174,7 +179,10 @@ pub async fn download_file(
     let last_text_report = Mutex::new(Instant::now() - Duration::from_secs(2));
 
     crate::parallel_download::download(http, url, &tmp_dest, move |downloaded, total| {
-        if let Some(pct) = downloaded.checked_mul(100).and_then(|n| n.checked_div(total)) {
+        if let Some(pct) = downloaded
+            .checked_mul(100)
+            .and_then(|n| n.checked_div(total))
+        {
             let bucket = pct / 5;
             if last_bucket.swap(bucket, Ordering::Relaxed) != bucket {
                 let _ = tx.try_send(InstallProgress::Output(format!(

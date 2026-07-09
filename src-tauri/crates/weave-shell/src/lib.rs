@@ -24,7 +24,7 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
     let db_url = format!("sqlite://{}", data_dir.join("weave.db").to_string_lossy());
     let pool = db::create_pool(&db_url).await?;
 
-    let keychain = Arc::new(OsKeychain);
+    let keychain = Arc::new(OsKeychain::new(data_dir.join("secure")));
     let mistral_key = keychain
         .retrieve(&ApiService::Mistral)
         .await
@@ -37,6 +37,13 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
         Ok(Some(custom)) if !custom.is_empty() => std::path::PathBuf::from(custom),
         _ => data_dir.join("models"),
     };
+    if let Ok(Some(value)) =
+        db::app_config::get(&pool, commands::models::DOWNLOAD_SEGMENTS_KEY).await
+    {
+        if let Ok(segments) = value.parse::<u64>() {
+            weave_infrastructure::parallel_download::set_max_segments_override(segments);
+        }
+    }
     // Musí odpovídat portu, na kterém LocalComfyInstaller spouští server.
     let comfyui_url = format!(
         "http://localhost:{}",

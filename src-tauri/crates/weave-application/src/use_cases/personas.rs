@@ -89,7 +89,7 @@ mod tests {
 
         let uc = PersonaUseCase::new(Arc::new(repo));
         let all = uc.list_all().await.unwrap();
-        assert_eq!(all.len(), 5); // 4 vestavěné + 1 vlastní
+        assert_eq!(all.len(), 6); // 5 vestavěných + 1 vlastní
     }
 
     #[tokio::test]

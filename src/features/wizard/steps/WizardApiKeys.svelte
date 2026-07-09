@@ -12,13 +12,19 @@
     value: string;
     saving: boolean;
     saved: boolean;
+    masked: string | null;
     error: string | null;
   }
 
+  interface StoredApiKeyStatus {
+    has_key: boolean;
+    masked: string | null;
+  }
+
   let fields = $state<KeyField[]>([
-    { service: "mistral", label: "", value: "", saving: false, saved: false, error: null },
-    { service: "civitai", label: "", value: "", saving: false, saved: false, error: null },
-    { service: "huggingface", label: "", value: "", saving: false, saved: false, error: null },
+    { service: "mistral", label: "", value: "", saving: false, saved: false, masked: null, error: null },
+    { service: "civitai", label: "", value: "", saving: false, saved: false, masked: null, error: null },
+    { service: "huggingface", label: "", value: "", saving: false, saved: false, masked: null, error: null },
   ]);
 
   onMount(async () => {
@@ -28,6 +34,9 @@
       fields.map(async (field) => {
         try {
           field.saved = await invoke<boolean>("get_api_key_status", { service: field.service });
+          field.masked = field.saved
+            ? await invoke<string | null>("get_masked_api_key", { service: field.service })
+            : null;
         } catch (e) {
           console.warn(`Nepodařilo se zjistit stav klíče ${field.service}:`, e);
         }
@@ -54,8 +63,15 @@
     field.saving = true;
     field.error = null;
     try {
-      await invoke("store_api_key", { service: field.service, token: field.value.trim() });
-      field.saved = true;
+      const status = await invoke<StoredApiKeyStatus>("store_api_key", {
+        service: field.service,
+        token: field.value.trim(),
+      });
+      field.saved = status.has_key;
+      field.masked = status.masked;
+      if (!status.has_key) {
+        throw new Error("API klic nebyl po ulozeni znovu nalezen.");
+      }
       field.value = "";
     } catch (e) {
       // Dřív se chyba jen tiše zahodila (unhandled rejection) — uživatel
@@ -76,19 +92,24 @@
       <div class="field">
         <div class="label-row">
           <label for={field.service}>{field.label}</label>
-          <button
-            type="button"
-            class="link-btn"
-            onclick={() => openTokenPage(field.service)}
-            title={i18n.m.wizard.steps.apiKeys.howToGet}
-            aria-label={i18n.m.wizard.steps.apiKeys.howToGet}
-          >🌐</button>
+          <div class="label-actions">
+            <span class="key-badge" class:saved={field.saved}>
+              {field.saved ? i18n.m.settings.apiKeys.stored : i18n.m.settings.apiKeys.notStored}
+            </span>
+            <button
+              type="button"
+              class="link-btn"
+              onclick={() => openTokenPage(field.service)}
+              title={i18n.m.wizard.steps.apiKeys.howToGet}
+              aria-label={i18n.m.wizard.steps.apiKeys.howToGet}
+            >🌐</button>
+          </div>
         </div>
         <div class="input-row">
           <input
             id={field.service}
             type="password"
-            placeholder={i18n.m.wizard.steps.apiKeys.placeholder}
+            placeholder={field.saved ? i18n.m.settings.apiKeys.replacePlaceholder : i18n.m.wizard.steps.apiKeys.placeholder}
             bind:value={field.value}
             onkeydown={(e) => e.key === "Enter" && save(field)}
             disabled={field.saving}
@@ -98,10 +119,10 @@
             onclick={() => save(field)}
             disabled={!field.value.trim() || field.saving}
           >
-            {#if field.saved}
-              ✓
-            {:else if field.saving}
+            {#if field.saving}
               ...
+            {:else if field.saved}
+              {i18n.m.settings.apiKeys.savedButton}
             {:else}
               {i18n.m.common.save}
             {/if}
@@ -110,7 +131,9 @@
         {#if field.error}
           <span class="error-hint">{i18n.m.wizard.steps.apiKeys.saveFailed}: {field.error}</span>
         {:else if field.saved}
-          <span class="saved-hint">{i18n.m.settings.apiKeys.stored}</span>
+          <span class="saved-hint">
+            {i18n.m.settings.apiKeys.stored}{#if field.masked}: {field.masked}{/if}
+          </span>
         {/if}
       </div>
     {/each}
@@ -149,6 +172,13 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .label-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
   }
 
   label {
@@ -170,6 +200,21 @@
   .link-btn:hover {
     opacity: 1;
     background: var(--color-surface-2);
+  }
+
+  .key-badge {
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.12rem 0.45rem;
+    white-space: nowrap;
+  }
+  .key-badge.saved {
+    border-color: color-mix(in srgb, var(--color-success) 55%, var(--color-border));
+    background: color-mix(in srgb, var(--color-success) 12%, transparent);
+    color: var(--color-success);
   }
 
   .input-row {
@@ -202,7 +247,7 @@
     font-size: 0.85rem;
     font-weight: 600;
     cursor: pointer;
-    min-width: 60px;
+    min-width: 86px;
     transition: background 0.2s;
   }
 

@@ -11,6 +11,7 @@
   import type { ApiServiceId } from "$lib/stores/settings.svelte";
   import { modelsStore, formatBytes, formatSpeed, formatEta } from "$lib/stores/models.svelte";
   import { comfyInstallStore } from "$lib/stores/comfy-install.svelte";
+  import { openvinoInstallStore } from "$lib/stores/openvino-install.svelte";
   import { updaterStore } from "$lib/stores/updater.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { TOKEN_URLS } from "$lib/token-urls";
@@ -28,6 +29,8 @@
 
   let unloadingVram = $state(false);
   let vramUnloaded = $state(false);
+  let restartingRuntime = $state(false);
+  let runtimeRestartNotice = $state<string | null>(null);
 
   async function unloadVram() {
     unloadingVram = true;
@@ -40,11 +43,46 @@
     }
   }
 
+  async function restartRuntime() {
+    if (restartingRuntime) return;
+    restartingRuntime = true;
+    runtimeRestartNotice = null;
+    try {
+      await invoke("restart_runtime", {
+        openvinoModelDir: openvinoInstallStore.status?.serverRunning
+          ? openvinoInstallStore.modelDir.trim()
+          : null,
+      });
+      runtimeRestartNotice = i18n.m.settings.runtime.restartDone;
+      await refreshRuntime();
+    } catch (e) {
+      runtimeRestartNotice = String(e);
+    } finally {
+      restartingRuntime = false;
+    }
+  }
+
   async function pickModelsDir() {
     const dir = await openFilePicker({ directory: true, multiple: false });
     if (typeof dir === "string") {
       await modelsStore.setModelsDir(dir);
     }
+  }
+
+  async function pickOpenvinoModelDir() {
+    const dir = await openFilePicker({ directory: true, multiple: false });
+    if (typeof dir === "string") {
+      openvinoInstallStore.setModelDir(dir);
+    }
+  }
+
+  async function uninstallComfyui() {
+    if (!confirm(i18n.m.settings.comfyui.uninstallConfirm)) return;
+    await comfyInstallStore.uninstall();
+  }
+
+  function diagStatus(ok: boolean) {
+    return ok ? i18n.m.settings.comfyui.diagOk : i18n.m.settings.comfyui.diagMissing;
   }
 
   async function openTokenPage(service: ApiServiceId) {
@@ -55,9 +93,19 @@
     }
   }
 
-  let { onClose }: { onClose: () => void } = $props();
+  async function openSelectedOpenvinoSource() {
+    const sourceUrl = openvinoInstallStore.selectedProfile?.sourceUrl;
+    if (!sourceUrl) return;
+    try {
+      await openUrl(sourceUrl);
+    } catch (e) {
+      console.warn("Nepodarilo se otevrit OpenVINO model zdroj:", e);
+    }
+  }
 
-  type Section = "appearance" | "language" | "apiKeys" | "llm" | "comfyui" | "models" | "notifications" | "logs" | "updates";
+  let { onClose, windowMode = false }: { onClose: () => void; windowMode?: boolean } = $props();
+
+  type Section = "appearance" | "language" | "apiKeys" | "llm" | "runtime" | "downloads" | "comfyui" | "models" | "notifications" | "logs" | "updates";
   let section = $state<Section>("appearance");
 
   let appVersion = $state("");
@@ -90,10 +138,32 @@
     { id: "huggingface", label: "HuggingFace" },
   ];
 
+  function isRtx3090Model(rec: { id: string; size_bytes: number }) {
+    return (
+      rec.size_bytes >= 7_000_000_000 ||
+      rec.id.includes("gemma-3-12b") ||
+      rec.id.includes("tiger-gemma") ||
+      rec.id.includes("gemma-3-27b") ||
+      rec.id.includes("gemma-4-26") ||
+      rec.id.includes("gemma-4-31")
+    );
+  }
+
+  function isMobile4070Model(rec: { id: string; size_bytes: number }) {
+    return rec.size_bytes <= 6_200_000_000 && !isRtx3090Model(rec);
+  }
+
+  function modelDownloadPercent(modelId: string): number {
+    const d = modelsStore.download;
+    if (!d || d.modelId !== modelId || d.total === 0) return 0;
+    return Math.round((d.downloaded / d.total) * 100);
+  }
+
   onMount(() => {
     settingsStore.load().catch((e) => console.warn("settings load selhal:", e));
     modelsStore.load().catch((e) => console.warn("models load selhal:", e));
     comfyInstallStore.load().catch((e) => console.warn("comfy status load selhal:", e));
+    openvinoInstallStore.load().catch((e) => console.warn("openvino status load selhal:", e));
     getVersion()
       .then((v) => (appVersion = v))
       .catch((e) => console.warn("app version load selhal:", e));
@@ -110,6 +180,15 @@
     const d = modelsStore.download;
     if (!d || d.total === 0) return 0;
     return Math.round((d.downloaded / d.total) * 100);
+  }
+
+  async function refreshRuntime() {
+    await Promise.allSettled([
+      settingsStore.load(),
+      modelsStore.load(),
+      comfyInstallStore.load(),
+      openvinoInstallStore.load(),
+    ]);
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -130,8 +209,8 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="settings-overlay">
-  <div class="settings-card">
+<div class="settings-overlay" class:window-mode={windowMode}>
+  <div class="settings-card" class:window-mode={windowMode}>
     <header class="settings-header">
       <h2>{i18n.m.settings.title}</h2>
       <button class="btn-close" onclick={onClose} aria-label="Zavřít">✕</button>
@@ -150,6 +229,12 @@
         </button>
         <button class:active={section === "llm"} onclick={() => (section = "llm")}>
           {i18n.m.settings.sections.llm}
+        </button>
+        <button class:active={section === "runtime"} onclick={() => (section = "runtime")}>
+          {i18n.m.settings.sections.runtime}
+        </button>
+        <button class:active={section === "downloads"} onclick={() => (section = "downloads")}>
+          {i18n.m.settings.sections.downloads}
         </button>
         <button class:active={section === "comfyui"} onclick={() => (section = "comfyui")}>
           {i18n.m.settings.sections.comfyui}
@@ -213,21 +298,20 @@
                       aria-label={i18n.m.wizard.steps.apiKeys.howToGet}
                     >🌐</button>
                   </span>
-                  {#if state.hasKey}
-                    <span class="key-status set">{state.masked ?? i18n.m.settings.apiKeys.stored}</span>
-                  {:else}
-                    <span class="key-status unset">{i18n.m.settings.apiKeys.notStored}</span>
-                  {/if}
+                  <span class="key-status" class:set={state.hasKey} class:unset={!state.hasKey}>
+                    <span class="status-dot"></span>
+                    {state.hasKey ? (state.masked ?? i18n.m.settings.apiKeys.stored) : i18n.m.settings.apiKeys.notStored}
+                  </span>
                 </div>
                 <div class="key-actions">
                   <input
                     type="password"
-                    placeholder={i18n.m.wizard.steps.apiKeys.placeholder}
+                    placeholder={state.hasKey ? i18n.m.settings.apiKeys.replacePlaceholder : i18n.m.wizard.steps.apiKeys.placeholder}
                     bind:value={keyInputs[svc.id]}
                     onkeydown={(e) => e.key === "Enter" && saveKey(svc.id)}
                   />
                   <button class="btn-sm primary" onclick={() => saveKey(svc.id)} disabled={!keyInputs[svc.id].trim()}>
-                    {i18n.m.settings.apiKeys.update}
+                    {state.hasKey ? i18n.m.settings.apiKeys.update : i18n.m.common.save}
                   </button>
                   {#if state.hasKey}
                     <button class="btn-sm danger" onclick={() => settingsStore.deleteKey(svc.id)}>
@@ -255,6 +339,13 @@
               onclick={() => settingsStore.setBackend("local")}
             >
               {i18n.m.settings.llm.local}
+            </button>
+            <button
+              class="chip"
+              class:selected={settingsStore.llmBackend === "openvino_npu"}
+              onclick={() => settingsStore.setBackend("openvino_npu")}
+            >
+              {i18n.m.settings.llm.openvinoNpu}
             </button>
             <button
               class="chip"
@@ -431,6 +522,371 @@
               <span class="conn-status testing">{i18n.m.common.loading}</span>
             {/if}
           {/if}
+
+          {#if settingsStore.llmBackend === "openvino_npu"}
+            <p class="hint" style="margin-top:1rem">{i18n.m.settings.llm.openvinoNpuHint}</p>
+            <div class="npu-info">
+              <div>
+                <strong>{i18n.m.settings.llm.npuDevice}</strong>
+                {#if settingsStore.npuInfo?.available}
+                  <span>{settingsStore.npuInfo.name ?? i18n.m.settings.llm.npuDetected}</span>
+                  {#if settingsStore.npuInfo.manufacturer}
+                    <small>{settingsStore.npuInfo.manufacturer}</small>
+                  {/if}
+                {:else}
+                  <span>{i18n.m.settings.llm.npuNotDetected}</span>
+                {/if}
+              </div>
+              <button class="btn-sm" onclick={() => settingsStore.detectNpu()}>
+                {i18n.m.settings.llm.detectNpu}
+              </button>
+            </div>
+            <h4 class="sub-heading">{i18n.m.settings.llm.openvinoRuntimeTitle}</h4>
+            <div class="runtime-card">
+              <div>
+                <strong>
+                  {openvinoInstallStore.status?.installed
+                    ? i18n.m.settings.llm.openvinoRuntimeInstalled
+                    : i18n.m.settings.llm.openvinoRuntimeMissing}
+                </strong>
+                {#if openvinoInstallStore.status}
+                  <small>{openvinoInstallStore.status.installDir}</small>
+                {/if}
+              </div>
+              {#if openvinoInstallStore.status?.installed}
+                <button
+                  class="btn-sm danger"
+                  disabled={openvinoInstallStore.uninstalling || openvinoInstallStore.installing}
+                  onclick={() => openvinoInstallStore.uninstall()}
+                >
+                  {openvinoInstallStore.uninstalling ? i18n.m.common.loading : i18n.m.settings.llm.openvinoRuntimeUninstall}
+                </button>
+              {:else}
+                <button
+                  class="btn-sm primary"
+                  disabled={openvinoInstallStore.installing}
+                  onclick={() => openvinoInstallStore.install()}
+                >
+                  {openvinoInstallStore.installing ? i18n.m.common.loading : i18n.m.settings.llm.openvinoRuntimeInstall}
+                </button>
+              {/if}
+            </div>
+            {#if openvinoInstallStore.installing}
+              <div class="install-progress">
+                <div class="install-step">
+                  <span class="spinner"></span>
+                  <span>{openvinoInstallStore.currentStep || i18n.m.common.loading}</span>
+                </div>
+                <pre class="install-log">{openvinoInstallStore.log.join("\n")}</pre>
+              </div>
+            {/if}
+            {#if openvinoInstallStore.error}
+              <span class="conn-status disconnected">{openvinoInstallStore.error}</span>
+            {/if}
+            {#if openvinoInstallStore.status?.installed}
+              <label class="field-label" for="openvino-model-profile" style="margin-top:1rem">
+                {i18n.m.settings.llm.openvinoModelProfile}
+              </label>
+              <div class="comfyui-row">
+                <select
+                  id="openvino-model-profile"
+                  value={openvinoInstallStore.selectedProfileId}
+                  onchange={(e) => openvinoInstallStore.setSelectedProfile((e.target as HTMLSelectElement).value)}
+                >
+                  {#each openvinoInstallStore.profiles as profile (profile.id)}
+                    <option value={profile.id}>
+                      {profile.name} - {profile.qualityTier}
+                    </option>
+                  {/each}
+                </select>
+                {#if openvinoInstallStore.selectedProfile?.sourceUrl}
+                  <button class="btn-sm" onclick={openSelectedOpenvinoSource}>
+                    {i18n.m.settings.llm.openvinoOpenSource}
+                  </button>
+                {/if}
+              </div>
+              {#if openvinoInstallStore.selectedProfile}
+                <div class="npu-profile-card">
+                  <strong>{openvinoInstallStore.selectedProfile.name}</strong>
+                  <span>{openvinoInstallStore.selectedProfile.description}</span>
+                  <small>
+                    {openvinoInstallStore.selectedProfile.autoDownloadable
+                      ? i18n.m.settings.llm.openvinoProfileAuto
+                      : i18n.m.settings.llm.openvinoProfileManual}
+                    - {openvinoInstallStore.selectedProfile.sizeHint}
+                  </small>
+                </div>
+              {/if}
+              <label class="field-label" for="openvino-model-dir" style="margin-top:1rem">
+                {i18n.m.settings.llm.openvinoModelDir}
+              </label>
+              <div class="comfyui-row">
+                <input
+                  id="openvino-model-dir"
+                  type="text"
+                  value={openvinoInstallStore.modelDir}
+                  placeholder={openvinoInstallStore.status.defaultModelDir}
+                  oninput={(e) => openvinoInstallStore.setModelDir((e.target as HTMLInputElement).value)}
+                />
+                <button
+                  class="btn-sm"
+                  onclick={pickOpenvinoModelDir}
+                >
+                  {i18n.m.settings.llm.browse}
+                </button>
+                <button
+                  class="btn-sm"
+                  disabled={openvinoInstallStore.downloadingModel || !openvinoInstallStore.selectedProfile?.autoDownloadable}
+                  onclick={() => openvinoInstallStore.downloadRecommendedModel()}
+                >
+                  {openvinoInstallStore.downloadingModel ? i18n.m.common.loading : i18n.m.settings.llm.openvinoDownloadSelected}
+                </button>
+              </div>
+              <p class="hint" style="margin-top:0.35rem">{i18n.m.settings.llm.openvinoModelHint}</p>
+              <div class="comfy-status-row">
+                {#if openvinoInstallStore.status.serverRunning}
+                  <span class="conn-status connected">● {i18n.m.settings.llm.openvinoServerRunning}</span>
+                  <button
+                    class="btn-sm danger"
+                    disabled={openvinoInstallStore.stoppingServer}
+                    onclick={() => openvinoInstallStore.stopServer()}
+                  >
+                    {openvinoInstallStore.stoppingServer ? i18n.m.common.loading : i18n.m.settings.llm.openvinoStopServer}
+                  </button>
+                {:else}
+                  <span class="conn-status testing">{i18n.m.settings.llm.openvinoServerStopped}</span>
+                  <button
+                    class="btn-sm primary"
+                    disabled={openvinoInstallStore.startingServer || !openvinoInstallStore.modelDir.trim()}
+                    onclick={() => openvinoInstallStore.startServer()}
+                  >
+                    {openvinoInstallStore.startingServer ? i18n.m.common.loading : i18n.m.settings.llm.openvinoStartServer}
+                  </button>
+                {/if}
+              </div>
+              {#if openvinoInstallStore.status.serverLogPath}
+                <p class="hint" style="margin-top:0.5rem">
+                  {i18n.m.settings.llm.openvinoLog}: {openvinoInstallStore.status.serverLogPath}
+                </p>
+              {/if}
+            {/if}
+            <label class="field-label" for="openvino-npu-url" style="margin-top:1rem">
+              {i18n.m.settings.llm.openvinoNpuUrl}
+            </label>
+            <div class="comfyui-row">
+              <input
+                id="openvino-npu-url"
+                type="text"
+                value={settingsStore.openvinoNpuUrl}
+                oninput={(e) =>
+                  settingsStore.setOpenvinoNpuUrl((e.target as HTMLInputElement).value)}
+                onblur={() => settingsStore.saveOpenvinoNpuUrl()}
+              />
+              <button class="btn-sm primary" onclick={() => settingsStore.testOpenvinoNpu()}>
+                {i18n.m.settings.llm.test}
+              </button>
+            </div>
+            {#if settingsStore.openvinoNpuStatus === "connected"}
+              <span class="conn-status connected">â—Ź {i18n.m.settings.llm.connected}</span>
+            {:else if settingsStore.openvinoNpuStatus === "disconnected"}
+              <span class="conn-status disconnected">â—Ź {i18n.m.settings.llm.disconnected}</span>
+            {:else if settingsStore.openvinoNpuStatus === "testing"}
+              <span class="conn-status testing">{i18n.m.common.loading}</span>
+            {/if}
+          {/if}
+        {:else if section === "runtime"}
+          <div class="section-title-row">
+            <h3>{i18n.m.settings.runtime.title}</h3>
+            <div class="section-actions">
+              <button class="btn-sm" onclick={refreshRuntime}>{i18n.m.settings.runtime.refresh}</button>
+              <button class="btn-sm primary" disabled={restartingRuntime} onclick={restartRuntime}>
+                {restartingRuntime ? i18n.m.common.loading : i18n.m.settings.runtime.restartRuntime}
+              </button>
+            </div>
+          </div>
+          {#if runtimeRestartNotice}
+            <p class="hint">{runtimeRestartNotice}</p>
+          {/if}
+          <div class="runtime-grid">
+            <section class="runtime-card">
+              <div>
+                <strong>{i18n.m.settings.runtime.llm}</strong>
+                <small>{settingsStore.llmBackend}</small>
+              </div>
+              <span class="conn-status testing">{modelsStore.models.length} {i18n.m.settings.runtime.localModels}</span>
+              {#if modelsStore.download}
+                <div class="dl-progress runtime-download">
+                  <div class="dl-head">
+                    <span>{modelsStore.download.modelId}</span>
+                    <span>{downloadPercent()}%</span>
+                  </div>
+                  <div class="dl-bar">
+                    <div class="dl-fill" style="width: {downloadPercent()}%"></div>
+                  </div>
+                  <small>
+                    {formatBytes(modelsStore.download.downloaded)} / {formatBytes(modelsStore.download.total)}
+                    {#if modelsStore.download.speedBytesPerSec > 0}
+                      · {formatSpeed(modelsStore.download.speedBytesPerSec)}
+                    {/if}
+                  </small>
+                </div>
+              {/if}
+              <div class="runtime-actions">
+                <button class="btn-sm" onclick={() => (section = "models")}>{i18n.m.settings.sections.models}</button>
+                <button class="btn-sm danger" disabled={unloadingVram} onclick={unloadVram}>
+                  {unloadingVram ? i18n.m.common.loading : i18n.m.settings.runtime.unloadModel}
+                </button>
+              </div>
+            </section>
+
+            <section class="runtime-card">
+              <div>
+                <strong>ComfyUI</strong>
+                <small>{settingsStore.comfyuiUrl}</small>
+              </div>
+              {#if comfyInstallStore.status === "Running"}
+                <span class="conn-status connected">● {i18n.m.settings.runtime.running}</span>
+              {:else if comfyInstallStore.status === "Installed"}
+                <span class="conn-status testing">● {i18n.m.settings.runtime.installedStopped}</span>
+              {:else if comfyInstallStore.status === "Broken"}
+                <span class="conn-status disconnected">● {i18n.m.settings.comfyui.brokenLabel}</span>
+              {:else}
+                <span class="conn-status disconnected">● {i18n.m.settings.runtime.notInstalled}</span>
+              {/if}
+              <div class="runtime-actions">
+                {#if comfyInstallStore.status === "Running"}
+                  <button class="btn-sm danger" onclick={() => comfyInstallStore.stopServer()}>
+                    {i18n.m.settings.comfyui.stopServer}
+                  </button>
+                {:else if comfyInstallStore.status === "Installed"}
+                  <button class="btn-sm primary" disabled={comfyInstallStore.starting} onclick={() => comfyInstallStore.startServer()}>
+                    {comfyInstallStore.starting ? i18n.m.common.loading : i18n.m.settings.comfyui.startServer}
+                  </button>
+                {:else if comfyInstallStore.status === "Broken"}
+                  <button class="btn-sm primary" disabled={comfyInstallStore.installing} onclick={() => comfyInstallStore.install()}>
+                    {comfyInstallStore.installing ? i18n.m.common.loading : i18n.m.settings.comfyui.repair}
+                  </button>
+                {:else}
+                  <button class="btn-sm primary" disabled={comfyInstallStore.installing} onclick={() => comfyInstallStore.install()}>
+                    {comfyInstallStore.installing ? i18n.m.common.loading : i18n.m.settings.comfyui.installButton}
+                  </button>
+                {/if}
+                <button class="btn-sm" onclick={() => (section = "comfyui")}>{i18n.m.settings.runtime.details}</button>
+              </div>
+              {#if comfyInstallStore.error}
+                <span class="conn-status disconnected">{comfyInstallStore.error}</span>
+              {/if}
+            </section>
+
+            <section class="runtime-card">
+              <div>
+                <strong>OpenVINO / NPU</strong>
+                <small>{openvinoInstallStore.status?.installDir ?? "..."}</small>
+              </div>
+              {#if openvinoInstallStore.status?.serverRunning}
+                <span class="conn-status connected">● {i18n.m.settings.runtime.running}</span>
+              {:else if openvinoInstallStore.status?.installed}
+                <span class="conn-status testing">● {i18n.m.settings.runtime.installedStopped}</span>
+              {:else}
+                <span class="conn-status disconnected">● {i18n.m.settings.runtime.notInstalled}</span>
+              {/if}
+              <div class="runtime-actions">
+                {#if openvinoInstallStore.status?.serverRunning}
+                  <button class="btn-sm danger" disabled={openvinoInstallStore.stoppingServer} onclick={() => openvinoInstallStore.stopServer()}>
+                    {openvinoInstallStore.stoppingServer ? i18n.m.common.loading : i18n.m.settings.llm.openvinoStopServer}
+                  </button>
+                {:else if openvinoInstallStore.status?.installed}
+                  <button class="btn-sm primary" disabled={openvinoInstallStore.startingServer || !openvinoInstallStore.modelDir.trim()} onclick={() => openvinoInstallStore.startServer()}>
+                    {openvinoInstallStore.startingServer ? i18n.m.common.loading : i18n.m.settings.llm.openvinoStartServer}
+                  </button>
+                {:else}
+                  <button class="btn-sm primary" disabled={openvinoInstallStore.installing} onclick={() => openvinoInstallStore.install()}>
+                    {openvinoInstallStore.installing ? i18n.m.common.loading : i18n.m.settings.llm.openvinoRuntimeInstall}
+                  </button>
+                {/if}
+                <button class="btn-sm" onclick={() => (section = "llm")}>{i18n.m.settings.runtime.details}</button>
+              </div>
+              {#if openvinoInstallStore.error}
+                <span class="conn-status disconnected">{openvinoInstallStore.error}</span>
+              {/if}
+            </section>
+          </div>
+        {:else if section === "downloads"}
+          <div class="section-title-row">
+            <h3>{i18n.m.settings.downloads.title}</h3>
+            <button class="btn-sm" onclick={refreshRuntime}>{i18n.m.settings.runtime.refresh}</button>
+          </div>
+          <section class="download-tuning">
+            <label for="download-segments">
+              <span>{i18n.m.settings.downloads.segments}</span>
+              <strong>{modelsStore.downloadSegments}</strong>
+            </label>
+            <input
+              id="download-segments"
+              type="range"
+              min="1"
+              max="32"
+              step="1"
+              value={modelsStore.downloadSegments}
+              oninput={(e) => modelsStore.setDownloadSegments(Number((e.target as HTMLInputElement).value))}
+            />
+            <p class="hint">{i18n.m.settings.downloads.segmentsHint}</p>
+          </section>
+          <div class="download-manager">
+            {#if modelsStore.download}
+              <section class="download-row">
+                <div>
+                  <strong>{modelsStore.download.modelId}</strong>
+                  <small>{modelsStore.download.phase === "verifying" ? i18n.m.settings.downloads.verifying : i18n.m.settings.downloads.llmModel}</small>
+                </div>
+                <div class="download-row-main">
+                  <div class="dl-head">
+                    <span>{downloadPercent()}%</span>
+                    <span>
+                      {formatBytes(modelsStore.download.downloaded)} / {formatBytes(modelsStore.download.total)}
+                      {#if modelsStore.download.speedBytesPerSec > 0}
+                        · {formatSpeed(modelsStore.download.speedBytesPerSec)}
+                      {/if}
+                      {#if formatEta(modelsStore.download.total - modelsStore.download.downloaded, modelsStore.download.speedBytesPerSec)}
+                        · {formatEta(modelsStore.download.total - modelsStore.download.downloaded, modelsStore.download.speedBytesPerSec)}
+                      {/if}
+                    </span>
+                  </div>
+                  <div class="dl-bar">
+                    <div class="dl-fill" style="width: {downloadPercent()}%"></div>
+                  </div>
+                </div>
+              </section>
+            {/if}
+
+            {#if comfyInstallStore.installing}
+              <section class="download-row">
+                <div>
+                  <strong>ComfyUI</strong>
+                  <small>{comfyInstallStore.currentStep || i18n.m.common.loading}</small>
+                </div>
+                <pre class="install-log compact-log">{comfyInstallStore.log.slice(-12).join("\n")}</pre>
+              </section>
+            {/if}
+
+            {#if openvinoInstallStore.installing || openvinoInstallStore.downloadingModel}
+              <section class="download-row">
+                <div>
+                  <strong>OpenVINO / NPU</strong>
+                  <small>{openvinoInstallStore.downloadingModel ? i18n.m.settings.downloads.openvinoModel : (openvinoInstallStore.currentStep || i18n.m.common.loading)}</small>
+                </div>
+                {#if openvinoInstallStore.installing}
+                  <pre class="install-log compact-log">{openvinoInstallStore.log.slice(-12).join("\n")}</pre>
+                {:else}
+                  <span class="conn-status testing">{i18n.m.common.loading}</span>
+                {/if}
+              </section>
+            {/if}
+
+            {#if !modelsStore.download && !comfyInstallStore.installing && !openvinoInstallStore.installing && !openvinoInstallStore.downloadingModel}
+              <p class="hint">{i18n.m.settings.downloads.empty}</p>
+            {/if}
+          </div>
         {:else if section === "comfyui"}
           <h3>{i18n.m.settings.sections.comfyui}</h3>
           <label class="field-label" for="comfyui-url">{i18n.m.settings.comfyui.url}</label>
@@ -469,6 +925,21 @@
               </div>
               <pre class="install-log">{comfyInstallStore.log.join("\n")}</pre>
             </div>
+          {:else if comfyInstallStore.status === "Broken"}
+            <div class="comfy-status-row">
+              <span class="conn-status disconnected">● {i18n.m.settings.comfyui.brokenLabel}</span>
+              <button class="btn-sm primary" onclick={() => comfyInstallStore.install()}>
+                {i18n.m.settings.comfyui.repair}
+              </button>
+              <button
+                class="btn-sm danger"
+                disabled={comfyInstallStore.uninstalling}
+                onclick={uninstallComfyui}
+              >
+                {comfyInstallStore.uninstalling ? i18n.m.settings.comfyui.uninstalling : i18n.m.settings.comfyui.uninstall}
+              </button>
+            </div>
+            <p class="hint">{i18n.m.settings.comfyui.brokenHint}</p>
           {:else if comfyInstallStore.status === "Installed"}
             <div class="comfy-status-row">
               <span class="conn-status connected">● {i18n.m.settings.comfyui.installedLabel}</span>
@@ -479,6 +950,13 @@
               >
                 {comfyInstallStore.starting ? i18n.m.common.loading : i18n.m.settings.comfyui.startServer}
               </button>
+              <button
+                class="btn-sm danger"
+                disabled={comfyInstallStore.uninstalling}
+                onclick={uninstallComfyui}
+              >
+                {comfyInstallStore.uninstalling ? i18n.m.settings.comfyui.uninstalling : i18n.m.settings.comfyui.uninstall}
+              </button>
             </div>
           {:else if comfyInstallStore.status === "Running"}
             <div class="comfy-status-row">
@@ -486,11 +964,63 @@
               <button class="btn-sm danger" onclick={() => comfyInstallStore.stopServer()}>
                 {i18n.m.settings.comfyui.stopServer}
               </button>
+              <button
+                class="btn-sm danger"
+                disabled={comfyInstallStore.uninstalling}
+                onclick={uninstallComfyui}
+              >
+                {comfyInstallStore.uninstalling ? i18n.m.settings.comfyui.uninstalling : i18n.m.settings.comfyui.uninstall}
+              </button>
             </div>
           {/if}
 
           {#if comfyInstallStore.error}
             <span class="conn-status disconnected">{comfyInstallStore.error}</span>
+          {/if}
+
+          <h4 class="sub-heading">{i18n.m.settings.comfyui.diagnosticsTitle}</h4>
+          <button
+            class="btn-sm"
+            disabled={comfyInstallStore.diagnosing}
+            onclick={() => comfyInstallStore.diagnose()}
+          >
+            {comfyInstallStore.diagnosing ? i18n.m.common.loading : i18n.m.settings.comfyui.diagnosticsRun}
+          </button>
+
+          {#if comfyInstallStore.diagnostics}
+            <div class="diagnostics-card">
+              <div class="diag-path">
+                <strong>{i18n.m.settings.comfyui.installDir}</strong>
+                <span>{comfyInstallStore.diagnostics.install_dir}</span>
+              </div>
+              <div class:ok={comfyInstallStore.diagnostics.main_py_exists}>
+                <span>main.py</span>
+                <strong>{diagStatus(comfyInstallStore.diagnostics.main_py_exists)}</strong>
+              </div>
+              <div class:ok={comfyInstallStore.diagnostics.requirements_exists}>
+                <span>requirements.txt</span>
+                <strong>{diagStatus(comfyInstallStore.diagnostics.requirements_exists)}</strong>
+              </div>
+              <div class:ok={comfyInstallStore.diagnostics.venv_python_exists}>
+                <span>venv Python</span>
+                <strong>{diagStatus(comfyInstallStore.diagnostics.venv_python_exists)}</strong>
+              </div>
+              <div class:ok={comfyInstallStore.diagnostics.pulid_node_exists}>
+                <span>PuLID custom node</span>
+                <strong>{diagStatus(comfyInstallStore.diagnostics.pulid_node_exists)}</strong>
+              </div>
+              <div class:ok={comfyInstallStore.diagnostics.impact_pack_exists}>
+                <span>Impact Pack</span>
+                <strong>{diagStatus(comfyInstallStore.diagnostics.impact_pack_exists)}</strong>
+              </div>
+              <div class="diag-path">
+                <strong>{i18n.m.settings.comfyui.serverLog}</strong>
+                <span>{comfyInstallStore.diagnostics.server_log_path}</span>
+              </div>
+            </div>
+            {#if comfyInstallStore.diagnostics.server_log_tail}
+              <pre class="install-log">{comfyInstallStore.diagnostics.server_log_tail}</pre>
+            {/if}
           {/if}
 
           {#if comfyInstallStore.checkpoints.length > 0}
@@ -541,6 +1071,107 @@
             </div>
           {/if}
 
+          <h4 class="sub-heading">{i18n.m.settings.models.recommendedMobile}</h4>
+          <div class="recommended-list">
+            {#each modelsStore.recommended.filter(isMobile4070Model) as rec (rec.id)}
+              {@const downloaded = modelsStore.isDownloaded(rec.id)}
+              {@const isActive = settingsStore.modelPath.endsWith(`${rec.id}.gguf`)}
+              <div class="recommended-item" class:active={isActive}>
+                <div class="recommended-meta">
+                  <div class="recommended-name">
+                    {rec.name}
+                    <span class="model-chip">{formatBytes(rec.size_bytes)}</span>
+                    {#if isActive}<span class="active-badge">{i18n.m.settings.llm.inUse}</span>{/if}
+                  </div>
+                  <div class="recommended-desc">{rec.description}</div>
+                </div>
+                {#if downloaded}
+                  <div class="recommended-actions">
+                    <button
+                      class="btn-sm"
+                      class:primary={!isActive}
+                      disabled={isActive}
+                      onclick={() => {
+                        const path = modelsStore.models.find((m) => m.id === rec.id)?.path ?? "";
+                        settingsStore.activateModel(path);
+                      }}
+                    >
+                      {isActive ? i18n.m.settings.llm.inUse : i18n.m.settings.llm.activate}
+                    </button>
+                    <button
+                      class="btn-sm danger"
+                      disabled={isActive}
+                      title={i18n.m.settings.models.delete}
+                      aria-label={i18n.m.settings.models.delete}
+                      onclick={() => modelsStore.deleteModel(rec.id)}
+                    >đź—‘</button>
+                  </div>
+                {:else if modelsStore.download?.modelId === rec.id}
+                  <span class="dl-inline">{modelDownloadPercent(rec.id)}%</span>
+                {:else}
+                  <button
+                    class="btn-sm primary"
+                    disabled={!!modelsStore.download}
+                    onclick={() => modelsStore.downloadRecommended(rec.id)}
+                  >
+                    {i18n.m.settings.llm.download}
+                  </button>
+                {/if}
+              </div>
+            {/each}
+          </div>
+
+          <h4 class="sub-heading">{i18n.m.settings.models.recommendedRtx3090}</h4>
+          <div class="recommended-list">
+            {#each modelsStore.recommended.filter(isRtx3090Model) as rec (rec.id)}
+              {@const downloaded = modelsStore.isDownloaded(rec.id)}
+              {@const isActive = settingsStore.modelPath.endsWith(`${rec.id}.gguf`)}
+              <div class="recommended-item" class:active={isActive}>
+                <div class="recommended-meta">
+                  <div class="recommended-name">
+                    {rec.name}
+                    <span class="model-chip">{formatBytes(rec.size_bytes)}</span>
+                    {#if isActive}<span class="active-badge">{i18n.m.settings.llm.inUse}</span>{/if}
+                  </div>
+                  <div class="recommended-desc">{rec.description}</div>
+                </div>
+                {#if downloaded}
+                  <div class="recommended-actions">
+                    <button
+                      class="btn-sm"
+                      class:primary={!isActive}
+                      disabled={isActive}
+                      onclick={() => {
+                        const path = modelsStore.models.find((m) => m.id === rec.id)?.path ?? "";
+                        settingsStore.activateModel(path);
+                      }}
+                    >
+                      {isActive ? i18n.m.settings.llm.inUse : i18n.m.settings.llm.activate}
+                    </button>
+                    <button
+                      class="btn-sm danger"
+                      disabled={isActive}
+                      title={i18n.m.settings.models.delete}
+                      aria-label={i18n.m.settings.models.delete}
+                      onclick={() => modelsStore.deleteModel(rec.id)}
+                    >đź—‘</button>
+                  </div>
+                {:else if modelsStore.download?.modelId === rec.id}
+                  <span class="dl-inline">{modelDownloadPercent(rec.id)}%</span>
+                {:else}
+                  <button
+                    class="btn-sm primary"
+                    disabled={!!modelsStore.download}
+                    onclick={() => modelsStore.downloadRecommended(rec.id)}
+                  >
+                    {i18n.m.settings.llm.download}
+                  </button>
+                {/if}
+              </div>
+            {/each}
+          </div>
+
+          <h4 class="sub-heading">{i18n.m.settings.models.downloadedTitle}</h4>
           <div class="model-list">
             {#each modelsStore.models as model (model.id)}
               <div class="model-item">
@@ -696,6 +1327,13 @@
     justify-content: center;
   }
 
+  .settings-overlay.window-mode {
+    z-index: 1;
+    background: var(--color-bg);
+    align-items: stretch;
+    justify-content: stretch;
+  }
+
   .settings-card {
     width: 720px;
     max-width: calc(100vw - 2rem);
@@ -707,6 +1345,15 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+
+  .settings-card.window-mode {
+    width: 100vw;
+    max-width: none;
+    height: 100vh;
+    max-height: none;
+    border: none;
+    border-radius: 0;
   }
 
   .settings-header {
@@ -871,14 +1518,31 @@
   }
 
   .key-status {
+    align-items: center;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    display: inline-flex;
     font-size: 0.78rem;
-    font-family: monospace;
+    font-weight: 700;
+    gap: 0.35rem;
+    padding: 0.18rem 0.55rem;
+    white-space: nowrap;
   }
   .key-status.set {
+    background: color-mix(in srgb, var(--color-success) 12%, transparent);
+    border-color: color-mix(in srgb, var(--color-success) 55%, var(--color-border));
     color: var(--color-success);
   }
   .key-status.unset {
+    background: var(--color-surface-2);
     color: var(--color-text-muted);
+  }
+  .status-dot {
+    background: currentColor;
+    border-radius: 999px;
+    display: inline-block;
+    height: 0.42rem;
+    width: 0.42rem;
   }
 
   .key-actions {
@@ -887,7 +1551,8 @@
   }
 
   .key-actions input,
-  .comfyui-row input {
+  .comfyui-row input,
+  .comfyui-row select {
     flex: 1;
     background: var(--color-surface-2);
     color: var(--color-text);
@@ -898,7 +1563,8 @@
     outline: none;
   }
   .key-actions input:focus,
-  .comfyui-row input:focus {
+  .comfyui-row input:focus,
+  .comfyui-row select:focus {
     border-color: var(--color-accent);
   }
 
@@ -982,6 +1648,187 @@
     font-weight: 600;
   }
 
+  .npu-info {
+    align-items: center;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: space-between;
+    padding: 0.6rem 0.8rem;
+  }
+
+  .npu-profile-card {
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin-top: 0.5rem;
+    padding: 0.7rem 0.8rem;
+  }
+
+  .npu-profile-card span,
+  .npu-profile-card small {
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+    line-height: 1.45;
+  }
+
+  .runtime-card {
+    align-items: center;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: space-between;
+    padding: 0.6rem 0.8rem;
+  }
+  .section-title-row {
+    align-items: center;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: space-between;
+  }
+
+  .section-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    justify-content: flex-end;
+  }
+
+  .runtime-grid {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    margin-top: 0.75rem;
+  }
+
+  .runtime-grid .runtime-card {
+    align-items: stretch;
+    flex-direction: column;
+    justify-content: flex-start;
+  }
+
+  .runtime-card > div:first-child {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+  }
+  .runtime-card strong {
+    font-size: 0.84rem;
+  }
+  .runtime-card small {
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .runtime-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+  .runtime-download {
+    margin-top: 0;
+  }
+
+  .download-manager {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+  }
+
+  .download-tuning {
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+  }
+
+  .download-tuning label {
+    align-items: center;
+    display: flex;
+    font-size: 0.85rem;
+    justify-content: space-between;
+  }
+
+  .download-tuning input {
+    width: 100%;
+  }
+
+  .download-row {
+    align-items: stretch;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: minmax(170px, 230px) minmax(0, 1fr);
+    padding: 0.75rem;
+  }
+
+  .download-row > div:first-child {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+  }
+
+  .download-row strong {
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .download-row small {
+    color: var(--color-text-muted);
+    font-size: 0.73rem;
+  }
+
+  .download-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    min-width: 0;
+  }
+
+  .compact-log {
+    margin: 0;
+    max-height: 150px;
+  }
+  .npu-info div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+  }
+  .npu-info strong {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+  }
+  .npu-info span {
+    font-size: 0.84rem;
+    font-weight: 600;
+  }
+  .npu-info small {
+    color: var(--color-text-muted);
+    font-size: 0.74rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .sub-heading {
     font-size: 0.82rem;
     font-weight: 600;
@@ -1026,6 +1873,16 @@
     border-radius: 4px;
     padding: 0.05rem 0.4rem;
   }
+  .model-chip {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    color: var(--color-text-muted);
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 0.05rem 0.4rem;
+    white-space: nowrap;
+  }
   .recommended-desc {
     font-size: 0.78rem;
     color: var(--color-text-muted);
@@ -1069,6 +1926,44 @@
     margin-top: 0.5rem;
   }
 
+  .diagnostics-card {
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    display: grid;
+    gap: 0.45rem;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    margin-top: 0.65rem;
+    padding: 0.75rem;
+  }
+
+  .diagnostics-card > div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+  }
+
+  .diagnostics-card span {
+    color: var(--color-text-muted);
+    font-size: 0.74rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .diagnostics-card strong {
+    color: var(--color-error);
+    font-size: 0.82rem;
+  }
+
+  .diagnostics-card .ok strong {
+    color: var(--color-success);
+  }
+
+  .diagnostics-card .diag-path {
+    grid-column: 1 / -1;
+  }
+
   .install-progress {
     display: flex;
     flex-direction: column;
@@ -1093,6 +1988,13 @@
     animation: spin 0.8s linear infinite;
     flex-shrink: 0;
   }
+
+  @media (max-width: 760px) {
+    .download-row {
+      grid-template-columns: 1fr;
+    }
+  }
+
   @keyframes spin {
     to { transform: rotate(360deg); }
   }

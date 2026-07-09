@@ -74,6 +74,7 @@ pub enum ModelBackend {
     LocalMetal,
     LocalVulkan,
     LocalCpu,
+    OpenvinoNpu,
     ComfyUi,
 }
 

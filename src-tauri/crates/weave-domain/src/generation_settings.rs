@@ -17,6 +17,8 @@ pub struct GenerationSettings {
     /// Doladit obličej/oči druhým průchodem FaceDetailer (ComfyUI Impact Pack).
     /// Vyžaduje doinstalování Impact Packu; `None`/`Some(false)` = vypnuto.
     pub face_detailer: Option<bool>,
+    /// Per-chat override LLM runtime. `None` nebo `default` = globalni nastaveni.
+    pub runtime_backend: Option<String>,
 }
 
 impl GenerationSettings {
@@ -48,6 +50,7 @@ mod tests {
         assert!(s.max_tokens.is_none());
         assert!(s.pulid_weight.is_none());
         assert!(s.face_detailer.is_none());
+        assert!(s.runtime_backend.is_none());
         assert_eq!(s.temperature_or_default(), 0.7);
         assert_eq!(s.pulid_weight_or_default(), 1.0);
         assert!(!s.face_detailer_enabled());
@@ -67,9 +70,11 @@ mod tests {
         let s = GenerationSettings {
             pulid_weight: Some(0.75),
             face_detailer: Some(true),
+            runtime_backend: Some("embedded".to_string()),
             ..Default::default()
         };
         assert_eq!(s.pulid_weight_or_default(), 0.75);
         assert!(s.face_detailer_enabled());
+        assert_eq!(s.runtime_backend.as_deref(), Some("embedded"));
     }
 }

@@ -9,7 +9,7 @@
   import { i18n } from "$lib/i18n/index.svelte";
 
   const usedTokens = $derived(
-    estimateConversationTokens(conversationStore.messages, conversationStore.streamingContent)
+    estimateConversationTokens(conversationStore.messages, conversationStore.activeStreamingContent)
   );
   const contextLength = $derived(generationSettingsStore.contextLength);
   const percent = $derived(contextUsagePercent(usedTokens, contextLength));

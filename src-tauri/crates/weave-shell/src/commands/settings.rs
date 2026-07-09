@@ -1,9 +1,44 @@
-use tauri::State;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager, State};
 use weave_application::{
     ports::keychain_port::ApiService, use_cases::manage_api_keys::ManageApiKeysUseCase,
 };
+use weave_domain::message::ModelBackend;
 
 use crate::state::AppState;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiKeyStatus {
+    pub has_key: bool,
+    pub masked: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NpuInfo {
+    pub available: bool,
+    pub name: Option<String>,
+    pub manufacturer: Option<String>,
+    pub device_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeRestartResult {
+    pub embedded_unloaded: bool,
+    pub comfyui_stopped: bool,
+    pub openvino_stopped: bool,
+    pub openvino_started: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct WindowsNpuDevice {
+    #[serde(rename = "Name")]
+    name: Option<String>,
+    #[serde(rename = "Manufacturer")]
+    manufacturer: Option<String>,
+    #[serde(rename = "DeviceID")]
+    device_id: Option<String>,
+}
 
 fn parse_service(service: &str) -> Result<ApiService, String> {
     match service {
@@ -12,6 +47,29 @@ fn parse_service(service: &str) -> Result<ApiService, String> {
         "huggingface" => Ok(ApiService::HuggingFace),
         _ => Err(format!("Neznámá služba: {service}")),
     }
+}
+
+/// Otevře nastavení v samostatném velkém okně (nebo zaostří už otevřené).
+#[tauri::command]
+pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("settings") {
+        win.show().map_err(|e| e.to_string())?;
+        win.unminimize().map_err(|e| e.to_string())?;
+        win.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "settings",
+        tauri::WebviewUrl::App("index.html?view=settings".into()),
+    )
+    .title("Weave - Nastaveni")
+    .inner_size(1180.0, 820.0)
+    .min_inner_size(860.0, 620.0)
+    .build()
+    .map_err(|e| format!("Otevreni nastaveni selhalo: {e}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -29,10 +87,17 @@ pub async fn store_api_key(
     service: String,
     token: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<ApiKeyStatus, String> {
     let svc = parse_service(&service)?;
     let uc = ManageApiKeysUseCase::new(state.keychain.clone());
-    uc.store_token(svc, &token).await.map_err(|e| e.to_string())
+    let masked = uc
+        .store_token_verified(svc, &token)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(ApiKeyStatus {
+        has_key: masked.is_some(),
+        masked,
+    })
 }
 
 #[tauri::command]
@@ -95,6 +160,89 @@ pub async fn test_local_llm_connection(url: String) -> Result<bool, String> {
     Ok(client.is_available().await)
 }
 
+/// Ověří dostupnost OpenAI-kompatibilního OpenVINO/OVMS endpointu pro NPU.
+#[tauri::command]
+pub async fn test_openvino_npu_connection(url: String) -> Result<bool, String> {
+    use weave_infrastructure::llm::local_client::LocalLlmClient;
+
+    let client = LocalLlmClient::with_backend(url, ModelBackend::OpenvinoNpu);
+    Ok(client.is_available().await)
+}
+
+#[cfg(target_os = "windows")]
+fn detect_npu_impl() -> NpuInfo {
+    let script = r#"$device = Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'NPU|Neural|AI Boost|XDNA|VPU|Hexagon' -or $_.PNPClass -eq 'ComputeAccelerator' } | Select-Object -First 1 Name,Manufacturer,DeviceID; if ($device) { $device | ConvertTo-Json -Compress }"#;
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .output();
+
+    let Ok(output) = output else {
+        return NpuInfo {
+            available: false,
+            name: None,
+            manufacturer: None,
+            device_id: None,
+        };
+    };
+
+    if !output.status.success() {
+        return NpuInfo {
+            available: false,
+            name: None,
+            manufacturer: None,
+            device_id: None,
+        };
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() || text == "null" {
+        return NpuInfo {
+            available: false,
+            name: None,
+            manufacturer: None,
+            device_id: None,
+        };
+    }
+
+    match serde_json::from_str::<WindowsNpuDevice>(&text) {
+        Ok(device) => NpuInfo {
+            available: true,
+            name: device.name,
+            manufacturer: device.manufacturer,
+            device_id: device.device_id,
+        },
+        Err(_) => NpuInfo {
+            available: false,
+            name: None,
+            manufacturer: None,
+            device_id: None,
+        },
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn detect_npu_impl() -> NpuInfo {
+    NpuInfo {
+        available: false,
+        name: None,
+        manufacturer: None,
+        device_id: None,
+    }
+}
+
+#[tauri::command]
+pub async fn detect_npu() -> Result<NpuInfo, String> {
+    tokio::task::spawn_blocking(detect_npu_impl)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Uvolní vestavěný model z VRAM, pokud je zrovna načtený (kešovaný v
 /// `AppState.embedded_llm`) — bez tohle by uživatel musel čekat na další
 /// akci, co si o uvolnění řekne sama (generování obrázku, přepnutí backendu).
@@ -114,9 +262,51 @@ pub async fn unload_embedded_model(state: State<'_, AppState>) -> Result<(), Str
     Ok(())
 }
 
+#[tauri::command]
+pub async fn restart_runtime(
+    openvino_model_dir: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<RuntimeRestartResult, String> {
+    let client = {
+        let mut cache = state
+            .embedded_llm
+            .lock()
+            .expect("embedded_llm mutex poisoned");
+        cache.take().map(|(_, client)| client)
+    };
+    let embedded_unloaded = client.is_some();
+    if let Some(client) = client {
+        client.unload().await;
+    }
+
+    let comfyui_stopped = state.comfy_installer.stop_server().await.is_ok();
+    let openvino_stopped = crate::commands::openvino_installer::stop_managed_server()
+        .await
+        .is_ok();
+
+    let mut openvino_started = false;
+    if let Some(model_dir) = openvino_model_dir
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        crate::commands::openvino_installer::start_openvino_runtime_server(app, model_dir).await?;
+        openvino_started = true;
+    }
+
+    Ok(RuntimeRestartResult {
+        embedded_unloaded,
+        comfyui_stopped,
+        openvino_stopped,
+        openvino_started,
+    })
+}
+
 pub const LLM_BACKEND_KEY: &str = "llm.backend";
 pub const LLM_LOCAL_URL_KEY: &str = "llm.local_url";
 pub const DEFAULT_LOCAL_URL: &str = "http://localhost:8080";
+pub const LLM_OPENVINO_NPU_URL_KEY: &str = "llm.openvino_npu_url";
+pub const DEFAULT_OPENVINO_NPU_URL: &str = "http://localhost:8091";
 pub const LLM_MODEL_PATH_KEY: &str = "llm.model_path";
 pub const LLM_GPU_LAYERS_KEY: &str = "llm.gpu_layers";
 pub const LLM_CTX_KEY: &str = "llm.context_length";
@@ -129,17 +319,29 @@ pub const DEFAULT_LLM_CTX: u32 = 8192;
 pub async fn resolve_llm(
     state: &AppState,
 ) -> std::sync::Arc<dyn weave_application::ports::llm_port::LlmPort> {
+    resolve_llm_with_backend(state, None).await
+}
+
+/// Stejne jako `resolve_llm`, ale umozni per-konverzacni override backendu.
+/// `None` nebo `default` pouzije globalni nastaveni aplikace.
+pub async fn resolve_llm_with_backend(
+    state: &AppState,
+    backend_override: Option<&str>,
+) -> std::sync::Arc<dyn weave_application::ports::llm_port::LlmPort> {
     use std::sync::Arc;
     use weave_application::ports::keychain_port::ApiService;
     use weave_infrastructure::{
         db::app_config, llm::local_client::LocalLlmClient, llm::mistral_client::MistralClient,
     };
 
-    let backend = app_config::get(&state.pool, LLM_BACKEND_KEY)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "mistral".to_string());
+    let backend = match backend_override.filter(|b| !b.is_empty() && *b != "default") {
+        Some(backend) => backend.to_string(),
+        None => app_config::get(&state.pool, LLM_BACKEND_KEY)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "mistral".to_string()),
+    };
 
     // Vestavěná GPU inference (jen když je zkompilovaná feature llm-embedded).
     #[cfg(feature = "llm-embedded")]
@@ -203,6 +405,15 @@ pub async fn resolve_llm(
             .flatten()
             .unwrap_or_else(|| DEFAULT_LOCAL_URL.to_string());
         return Arc::new(LocalLlmClient::new(url));
+    }
+
+    if backend == "openvino_npu" {
+        let url = app_config::get(&state.pool, LLM_OPENVINO_NPU_URL_KEY)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| DEFAULT_OPENVINO_NPU_URL.to_string());
+        return Arc::new(LocalLlmClient::with_backend(url, ModelBackend::OpenvinoNpu));
     }
 
     // Výchozí: Mistral API (klíč z keychain)

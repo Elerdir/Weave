@@ -3,15 +3,22 @@
   import ChatView from "./ChatView.svelte";
   import EmptyState from "./EmptyState.svelte";
   import WorkspacePanel from "$features/workspace/WorkspacePanel.svelte";
-  import Settings from "$features/settings/Settings.svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { conversationStore } from "$lib/stores/conversations.svelte";
 
   let showWorkspace = $state(false);
-  let showSettings = $state(false);
+
+  async function openSettingsWindow() {
+    try {
+      await invoke("open_settings_window");
+    } catch (e) {
+      console.warn("Opening settings failed:", e);
+    }
+  }
 </script>
 
 <div class="layout">
-  <Sidebar bind:showWorkspace onOpenSettings={() => (showSettings = true)} />
+  <Sidebar bind:showWorkspace onOpenSettings={openSettingsWindow} />
 
   {#if showWorkspace}
     <div class="workspace-pane">
@@ -27,10 +34,6 @@
     {/if}
   </main>
 </div>
-
-{#if showSettings}
-  <Settings onClose={() => (showSettings = false)} />
-{/if}
 
 <style>
   .layout {

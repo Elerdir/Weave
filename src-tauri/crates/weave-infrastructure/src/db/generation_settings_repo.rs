@@ -24,7 +24,7 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
     async fn get(&self, id: &ConversationId) -> AppResult<GenerationSettings> {
         let id_str = id.as_uuid().to_string();
         let row = sqlx::query(
-            "SELECT context_length, temperature, max_tokens, pulid_weight, face_detailer
+            "SELECT context_length, temperature, max_tokens, pulid_weight, face_detailer, runtime_backend
              FROM conversation_settings WHERE conversation_id = ?",
         )
         .bind(&id_str)
@@ -57,6 +57,9 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
                 .try_get::<Option<i64>, _>("face_detailer")
                 .map_err(|e| AppError::Repository(e.to_string()))?
                 .map(|v| v != 0),
+            runtime_backend: row
+                .try_get::<Option<String>, _>("runtime_backend")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
         })
     }
 
@@ -64,14 +67,15 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
         let id_str = id.as_uuid().to_string();
         sqlx::query(
             "INSERT INTO conversation_settings
-                 (conversation_id, context_length, temperature, max_tokens, pulid_weight, face_detailer)
-             VALUES (?, ?, ?, ?, ?, ?)
+                 (conversation_id, context_length, temperature, max_tokens, pulid_weight, face_detailer, runtime_backend)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(conversation_id) DO UPDATE SET
                  context_length = excluded.context_length,
                  temperature = excluded.temperature,
                  max_tokens = excluded.max_tokens,
                  pulid_weight = excluded.pulid_weight,
-                 face_detailer = excluded.face_detailer",
+                 face_detailer = excluded.face_detailer,
+                 runtime_backend = excluded.runtime_backend",
         )
         .bind(&id_str)
         .bind(settings.context_length.map(|v| v as i64))
@@ -79,6 +83,7 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
         .bind(settings.max_tokens.map(|v| v as i64))
         .bind(settings.pulid_weight.map(|v| v as f64))
         .bind(settings.face_detailer.map(i64::from))
+        .bind(settings.runtime_backend.as_deref())
         .execute(&self.pool)
         .await
         .map_err(|e| AppError::Repository(e.to_string()))?;
@@ -128,6 +133,7 @@ mod tests {
             max_tokens: Some(2048),
             pulid_weight: Some(0.8),
             face_detailer: Some(true),
+            runtime_backend: Some("openvino_npu".to_string()),
         };
         repo.set(&conv, &first).await.unwrap();
         assert_eq!(repo.get(&conv).await.unwrap(), first);
@@ -139,6 +145,7 @@ mod tests {
             max_tokens: None,
             pulid_weight: None,
             face_detailer: Some(false),
+            runtime_backend: Some("default".to_string()),
         };
         repo.set(&conv, &second).await.unwrap();
         assert_eq!(repo.get(&conv).await.unwrap(), second);

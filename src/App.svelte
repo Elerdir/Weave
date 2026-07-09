@@ -5,13 +5,17 @@
   import Wizard from "$features/wizard/Wizard.svelte";
   import MainLayout from "$features/chat/MainLayout.svelte";
   import LogWindow from "$features/settings/LogWindow.svelte";
+  import Settings from "$features/settings/Settings.svelte";
   import GalleryWindow from "$features/gallery/GalleryWindow.svelte";
+  import GalleryDetailWindow from "$features/gallery/GalleryDetailWindow.svelte";
   import SubjectsWindow from "$features/subjects/SubjectsWindow.svelte";
 
   // Samostatná okna — stejný frontend, jiný „view" (viz open_*_window)
   const view = new URLSearchParams(window.location.search).get("view");
   const isLogWindow = view === "logs";
+  const isSettingsWindow = view === "settings";
   const isGalleryWindow = view === "gallery";
+  const isGalleryDetailWindow = view === "gallery-detail";
   const isSubjectsWindow = view === "subjects";
 
   let ready = $state(false);
@@ -22,7 +26,7 @@
     const resolved = themeStore.resolvedTheme;
     document.documentElement.classList.add(resolved);
 
-    if (isLogWindow || isGalleryWindow || isSubjectsWindow) {
+    if (isLogWindow || isSettingsWindow || isGalleryWindow || isGalleryDetailWindow || isSubjectsWindow) {
       ready = true;
       return;
     }
@@ -54,8 +58,12 @@
 {#if ready}
   {#if isLogWindow}
     <LogWindow />
+  {:else if isSettingsWindow}
+    <Settings onClose={() => window.close()} windowMode />
   {:else if isGalleryWindow}
     <GalleryWindow />
+  {:else if isGalleryDetailWindow}
+    <GalleryDetailWindow />
   {:else if isSubjectsWindow}
     <SubjectsWindow />
   {:else if showWizard}

@@ -28,7 +28,14 @@ const IMAGE_PROMPT_SYSTEM: &str = "You convert user requests into English Stable
     prompts. Reply with EXACTLY two lines:\n\
     Line 1: comma-separated English descriptors (subject, appearance, setting, lighting, \
     style, quality tags like 'highly detailed, sharp focus'). Translate non-English requests. \
-    Keep every detail the user asked for, including names used for people. \
+    Czech and Slovak input is common: translate it completely into natural English image tags, \
+    never leave Czech/Slovak command words like 'nakresli', 'vygeneruj', 'obrazek' or 'fotka'. \
+    Keep every detail the user asked for, including names used for people and fictional \
+    characters. For recognizable fictional characters, include their canonical visual identifiers \
+    and set Line 2 to the exact character name. If a character has child/teen and adult versions \
+    and the prompt asks for revealing clothing, make the character explicitly adult. If reference \
+    images are attached, describe the requested result and include 'same person as reference \
+    image, consistent facial identity' when the prompt concerns a person. \
     Always include an explicit shot framing tag: use 'full body shot, full length portrait, \
     head to toe, standing' whenever the whole figure, outfit or pose matters (a person in \
     described clothing, a character), otherwise a fitting one like 'portrait' or 'close-up'.\n\
@@ -47,6 +54,7 @@ const DEFAULT_NEGATIVE_PROMPT: &str = "blurry, low quality, deformed, disfigured
 /// Tagy pro věrné oči — přidávají se k pozitivnímu promptu u generování
 /// podle referenční fotky (PuLID = portrét osoby, kde oči nejvíc „táhnou").
 const EYE_QUALITY_TAGS: &str = "detailed symmetric eyes, natural eyes, sharp focus";
+const MAX_IMAGE_GENERATION_REFERENCES: usize = 4;
 
 /// Klíčová slova (cz+en) značící požadavek na celou postavu. Když je prompt
 /// obsahuje, generuje se na výšku (SDXL jinak do čtverce postavu ořízne
@@ -65,10 +73,34 @@ const FULL_BODY_KEYWORDS: &[&str] = &[
     "na výšku",
 ];
 
+const WIDE_IMAGE_KEYWORDS: &[&str] = &[
+    "16:9",
+    "16x9",
+    "wide",
+    "widescreen",
+    "ultrawide",
+    "landscape",
+    "horizontal",
+    "wallpaper",
+    "desktop wallpaper",
+    "qhd",
+    "4k",
+    "uhd",
+    "tapeta",
+    "sirokouhly",
+    "sirokouhla",
+    "na sirku",
+];
+
 /// Rozpozná záběr celé postavy (cz+en) v promptu.
 fn wants_full_body(prompt: &str) -> bool {
-    let lower = prompt.to_lowercase();
+    let lower = strip_czech_diacritics(prompt).to_lowercase();
     FULL_BODY_KEYWORDS.iter().any(|k| lower.contains(k))
+}
+
+fn wants_wide_image(prompt: &str) -> bool {
+    let lower = strip_czech_diacritics(prompt).to_lowercase();
+    WIDE_IMAGE_KEYWORDS.iter().any(|k| lower.contains(k))
 }
 
 /// Vypadá text jako hotový anglický SD prompt? (převážně ASCII, komma-
@@ -84,6 +116,217 @@ fn is_ready_english_prompt(prompt: &str) -> bool {
     let non_ascii = trimmed.chars().filter(|c| !c.is_ascii()).count();
     let commas = trimmed.matches(',').count();
     (non_ascii as f32 / total as f32) < 0.05 && commas >= 2
+}
+
+fn strip_czech_diacritics(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'á' | 'Á' => 'a',
+            'č' | 'Č' => 'c',
+            'ď' | 'Ď' => 'd',
+            'é' | 'É' | 'ě' | 'Ě' => 'e',
+            'í' | 'Í' => 'i',
+            'ň' | 'Ň' => 'n',
+            'ó' | 'Ó' => 'o',
+            'ř' | 'Ř' => 'r',
+            'š' | 'Š' => 's',
+            'ť' | 'Ť' => 't',
+            'ú' | 'Ú' | 'ů' | 'Ů' => 'u',
+            'ý' | 'Ý' => 'y',
+            'ž' | 'Ž' => 'z',
+            other => other,
+        })
+        .collect()
+}
+
+fn fallback_image_prompt(user_prompt: &str, has_reference_images: bool) -> String {
+    let normalized = strip_czech_diacritics(user_prompt).to_lowercase();
+    let mut tags: Vec<String> = Vec::new();
+    fn push_tag(tags: &mut Vec<String>, tag: &str) {
+        if !tags.iter().any(|existing| existing == tag) {
+            tags.push(tag.to_string());
+        }
+    }
+
+    let phrase_tags = [
+        ("cela postava", "full body shot"),
+        ("cele telo", "full body shot"),
+        ("od hlavy", "head to toe"),
+        ("mlada zena", "young adult woman"),
+        ("mlady muz", "young adult man"),
+        ("dlouhe vlasy", "long hair"),
+        ("cerne vlasy", "black hair"),
+        ("blond vlasy", "blonde hair"),
+        ("modre oci", "blue eyes"),
+        ("zelene oci", "green eyes"),
+        ("cervene saty", "red dress"),
+        ("zapad slunce", "sunset"),
+        ("ahsoka tano", "adult Ahsoka Tano-inspired character"),
+        ("star wars", "Star Wars inspired"),
+        ("kocka v klobouku", "cat wearing a hat"),
+        ("kocky v klobouku", "cat wearing a hat"),
+        ("kocku v klobouku", "cat wearing a hat"),
+    ];
+    for (needle, tag) in phrase_tags {
+        if normalized.contains(needle) {
+            push_tag(&mut tags, tag);
+        }
+    }
+
+    let word_tags = [
+        ("portret", "portrait"),
+        ("zena", "woman"),
+        ("divka", "young adult woman"),
+        ("muz", "man"),
+        ("hrad", "castle"),
+        ("skala", "rock cliff"),
+        ("skale", "rock cliff"),
+        ("les", "forest"),
+        ("plaz", "beach"),
+        ("more", "sea"),
+        ("bikiny", "wearing a bikini"),
+        ("bikinach", "wearing a bikini"),
+        ("plavky", "wearing swimwear"),
+        ("sama", "solo"),
+        ("samotna", "solo"),
+        ("alone", "solo"),
+        ("solo", "solo"),
+        ("animated", "stylized animated illustration"),
+        ("cartoon", "stylized animated illustration"),
+        ("animovany", "stylized animated illustration"),
+        ("stylizovany", "stylized animated illustration"),
+        ("mesto", "city"),
+        ("ulice", "street"),
+        ("drak", "dragon"),
+        ("kocka", "cat"),
+        ("pes", "dog"),
+        ("kun", "horse"),
+        ("auto", "car"),
+        ("dum", "house"),
+        ("pokoj", "room"),
+        ("realisticky", "realistic"),
+        ("fotorealisticky", "photorealistic"),
+        ("malba", "painting"),
+        ("ilustrace", "illustration"),
+        ("anime", "anime"),
+        ("detailni", "highly detailed"),
+        ("usmev", "smile"),
+        ("rytir", "knight"),
+        ("rytire", "knight"),
+        ("kouzelnik", "wizard"),
+        ("priroda", "nature"),
+        ("noc", "night"),
+        ("noci", "night"),
+        ("dest", "rain"),
+        ("snih", "snow"),
+    ];
+    for (needle, tag) in word_tags {
+        if normalized.contains(needle) {
+            push_tag(&mut tags, tag);
+        }
+    }
+
+    let stem_tags = [
+        ("kock", "cat"),
+        ("kot", "kitten"),
+        ("klobouk", "hat"),
+        ("cep", "hat"),
+        ("barevn", "colorful"),
+        ("roztomil", "cute"),
+        ("sedic", "sitting"),
+        ("sed", "sitting"),
+        ("lezic", "lying down"),
+        ("spic", "sleeping"),
+        ("ahsoka", "adult Ahsoka Tano-inspired character"),
+    ];
+    for token in normalized
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+    {
+        for (stem, tag) in stem_tags {
+            if token.starts_with(stem) {
+                push_tag(&mut tags, tag);
+            }
+        }
+    }
+
+    if has_reference_images {
+        push_tag(&mut tags, "same person as reference image");
+        push_tag(&mut tags, "consistent facial identity");
+    }
+    push_tag(&mut tags, "high quality");
+    push_tag(&mut tags, "sharp focus");
+    push_tag(&mut tags, "highly detailed");
+
+    if tags.len() <= 3 {
+        tags.insert(0, "image based on user request".to_string());
+        let cleaned = normalized
+            .split_whitespace()
+            .filter(|w| {
+                !matches!(
+                    *w,
+                    "nakresli" | "vygeneruj" | "udelaj" | "mi" | "prosim" | "obrazek" | "fotku"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !cleaned.is_empty() {
+            tags.insert(1, cleaned);
+        }
+    }
+
+    tags.join(", ")
+}
+
+fn mentions_ahsoka(prompt: &str) -> bool {
+    strip_czech_diacritics(prompt)
+        .to_lowercase()
+        .contains("ahsoka")
+}
+
+fn detect_lora_query(user_prompt: &str, enhanced_prompt: &str) -> Option<String> {
+    let combined = format!("{user_prompt}\n{enhanced_prompt}");
+    let normalized = strip_czech_diacritics(&combined).to_lowercase();
+
+    let known_queries = [
+        ("ahsoka tano", "Ahsoka Tano"),
+        ("ahsoka", "Ahsoka Tano"),
+        ("sailor moon", "Sailor Moon"),
+        ("lara croft", "Lara Croft"),
+        ("harley quinn", "Harley Quinn"),
+        ("darth vader", "Darth Vader"),
+    ];
+    known_queries
+        .iter()
+        .find_map(|(needle, query)| normalized.contains(needle).then(|| (*query).to_string()))
+}
+
+fn reinforce_known_subject_tags(sd_prompt: &str, user_prompt: &str) -> String {
+    if !mentions_ahsoka(user_prompt) {
+        return sd_prompt.to_string();
+    }
+
+    let normalized_sd = strip_czech_diacritics(sd_prompt).to_lowercase();
+    let mut prefix = Vec::new();
+    if !normalized_sd.contains("ahsoka") {
+        prefix.push("adult Ahsoka Tano-inspired character");
+    } else if !normalized_sd.contains("adult") {
+        prefix.push("adult version");
+    }
+    if !normalized_sd.contains("montral") && !normalized_sd.contains("lekku") {
+        prefix.push("orange skin");
+        prefix.push("white facial markings");
+        prefix.push("blue and white montrals and lekku");
+    }
+    if !normalized_sd.contains("star wars") {
+        prefix.push("Star Wars inspired");
+    }
+
+    if prefix.is_empty() {
+        sd_prompt.to_string()
+    } else {
+        format!("{}, {}", prefix.join(", "), sd_prompt)
+    }
 }
 
 /// Ořízne text u prvního ChatML řídicího tokenu (`<|…`) a osekne uvozovky.
@@ -176,6 +419,8 @@ impl SendMessageUseCase {
         content: String,
         file_refs: Vec<String>,
         reference_images: Vec<String>,
+        reference_preservation: Option<String>,
+        translate_image_prompt: bool,
         stream_tx: mpsc::Sender<StreamChunk>,
     ) -> AppResult<()> {
         // Ověříme že konverzace existuje a získáme její personu
@@ -217,6 +462,8 @@ impl SendMessageUseCase {
             content,
             file_refs,
             reference_image_paths,
+            reference_preservation,
+            translate_image_prompt,
             None,
             stream_tx,
         )
@@ -272,6 +519,8 @@ impl SendMessageUseCase {
             vec![],
             reference_image_paths,
             None,
+            true,
+            None,
             stream_tx,
         )
         .await
@@ -326,6 +575,8 @@ impl SendMessageUseCase {
             content,
             vec![],
             vec![],
+            None,
+            true,
             Some(init_image),
             stream_tx,
         )
@@ -343,6 +594,8 @@ impl SendMessageUseCase {
         content: String,
         file_refs: Vec<String>,
         reference_image_paths: Vec<String>,
+        reference_preservation: Option<String>,
+        translate_image_prompt: bool,
         init_image: Option<String>,
         stream_tx: mpsc::Sender<StreamChunk>,
     ) -> AppResult<()> {
@@ -389,6 +642,8 @@ impl SendMessageUseCase {
                 self.handle_image(
                     content,
                     reference_image_paths,
+                    reference_preservation,
+                    translate_image_prompt,
                     init_image,
                     gen.pulid_weight_or_default(),
                     gen.face_detailer_enabled(),
@@ -489,6 +744,8 @@ impl SendMessageUseCase {
         &self,
         prompt: String,
         reference_image_paths: Vec<String>,
+        reference_preservation: Option<String>,
+        translate_image_prompt: bool,
         init_image: Option<String>,
         pulid_weight: f32,
         face_detailer: bool,
@@ -496,6 +753,19 @@ impl SendMessageUseCase {
     ) -> AppResult<()> {
         use crate::ports::comfy_installer_port::ComfyStatus;
         use crate::ports::llm_port::{ImageStage, ImageStageInfo};
+
+        let original_reference_count = reference_image_paths.len();
+        let reference_image_paths: Vec<String> = reference_image_paths
+            .into_iter()
+            .take(MAX_IMAGE_GENERATION_REFERENCES)
+            .collect();
+        if original_reference_count > reference_image_paths.len() {
+            tracing::info!(
+                original_reference_count,
+                used_reference_count = reference_image_paths.len(),
+                "Počet referenčních obrázků pro PuLID zkrácen"
+            );
+        }
 
         let style = StylePreset::classify(&prompt);
         let stage = |s: ImageStage| {
@@ -508,7 +778,10 @@ impl SendMessageUseCase {
 
         // 1. Prostředí — je ComfyUI vůbec nainstalované?
         let _ = stream_tx.send(stage(ImageStage::Checking)).await;
-        if self.comfy_installer.status().await? == ComfyStatus::NotInstalled {
+        if matches!(
+            self.comfy_installer.status().await?,
+            ComfyStatus::NotInstalled | ComfyStatus::Broken
+        ) {
             let _ = stream_tx.send(stage(ImageStage::Installing)).await;
             let (itx, irx) = mpsc::channel(64);
             let fwd = tokio::spawn(forward_install_progress(
@@ -584,7 +857,29 @@ impl SendMessageUseCase {
         // se použije původní text (generování kvůli tomu nespadne). LLM
         // zároveň navrhne koncept pro vyhledání LoRA.
         let _ = stream_tx.send(stage(ImageStage::PreparingPrompt)).await;
-        let (mut sd_prompt, lora_query) = self.enhance_image_prompt(&prompt).await;
+        let reference_preservation = reference_preservation
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let prompt_for_generator = if let Some(note) = reference_preservation.as_deref() {
+            if reference_image_paths.is_empty() {
+                prompt.clone()
+            } else {
+                format!(
+                    "{prompt}\nReference preservation note: keep this from the reference images: {note}"
+                )
+            }
+        } else {
+            prompt.clone()
+        };
+        let (mut sd_prompt, lora_query) = if translate_image_prompt {
+            self.enhance_image_prompt(&prompt_for_generator, !reference_image_paths.is_empty())
+                .await
+        } else {
+            (prompt_for_generator.clone(), None)
+        };
+        sd_prompt = reinforce_known_subject_tags(&sd_prompt, &prompt_for_generator);
+        let lora_query =
+            detect_lora_query(&prompt_for_generator, &sd_prompt).or(lora_query);
 
         // U generování podle reference (PuLID) jde vždy o osobu — přidáme
         // tagy na věrné oči, nejčastější zdroj „divných" výsledků.
@@ -652,15 +947,40 @@ impl SendMessageUseCase {
         // nevejde a ořízne se u stehen), jinak čtverec. Rozhoduje původní
         // dotaz i vylepšený prompt (ten „full body" doplňuje sám).
         let full_body = wants_full_body(&prompt) || wants_full_body(&sd_prompt);
-        let (width, height) = if full_body { (832, 1216) } else { (1024, 1024) };
+        let wide_image = wants_wide_image(&prompt) || wants_wide_image(&sd_prompt);
+        let uses_reference_images = !reference_image_paths.is_empty();
+        let (width, height) = if wide_image {
+            (1280, 720)
+        } else if full_body && uses_reference_images {
+            (768, 1152)
+        } else if full_body {
+            (832, 1216)
+        } else if uses_reference_images {
+            (896, 896)
+        } else {
+            (1024, 1024)
+        };
         let mut negative_prompt = DEFAULT_NEGATIVE_PROMPT.to_string();
+        if wide_image {
+            sd_prompt.push_str(
+                ", wide 16:9 landscape composition, horizontal frame, wallpaper composition",
+            );
+            negative_prompt.push_str(", portrait orientation, vertical image, close-up crop");
+        }
         if full_body {
             // U celé postavy je obličej malý → tagy na oči + hi-res průchod,
             // aby oči nevycházely rozmazané/„divné".
-            sd_prompt.push_str(
-                ", full body, entire figure in frame, visible feet, standing, detailed face, \
-                 detailed symmetric eyes",
-            );
+            if wide_image {
+                sd_prompt.push_str(
+                    ", full body, entire figure in frame, visible feet, detailed face, \
+                     detailed symmetric eyes",
+                );
+            } else {
+                sd_prompt.push_str(
+                    ", full body, entire figure in frame, visible feet, standing, detailed face, \
+                     detailed symmetric eyes",
+                );
+            }
             negative_prompt.push_str(", cropped, out of frame, cut off, close-up");
         }
 
@@ -672,8 +992,10 @@ impl SendMessageUseCase {
 
         let (img_tx, mut img_rx) = mpsc::channel(32);
         let request = ImageRequest {
+            original_prompt: Some(prompt.clone()),
             prompt: sd_prompt,
             negative_prompt: Some(negative_prompt),
+            reference_preservation,
             width,
             height,
             steps: 20,
@@ -684,7 +1006,7 @@ impl SendMessageUseCase {
             lora_file,
             init_image_path: init_image,
             // Hi-res dolaďovací průchod hlavně kvůli obličeji u celé postavy.
-            hires_fix: full_body,
+            hires_fix: full_body && !uses_reference_images,
             // Síla PuLID podoby a doladění obličeje (per-konverzace, z posuvníků).
             pulid_weight,
             face_detailer,
@@ -714,6 +1036,15 @@ impl SendMessageUseCase {
                 }
                 ImageProgress::Error(e) => {
                     let _ = stream_tx.send(StreamChunk::Error(e)).await;
+                }
+                ImageProgress::Status { detail, percent } => {
+                    let _ = stream_tx
+                        .send(StreamChunk::ImageStage(ImageStageInfo {
+                            stage: ImageStage::Generating,
+                            detail: Some(detail),
+                            percent,
+                        }))
+                        .await;
                 }
                 ImageProgress::Progress { step, total } => {
                     // Skutečné kroky sampleru (ComfyUI WebSocket) → progress bar
@@ -750,7 +1081,11 @@ impl SendMessageUseCase {
     /// Diffusion prompt + volitelný koncept pro vyhledání LoRA. Při
     /// jakémkoli selhání LLM vrací původní text — horší prompt je lepší
     /// než spadlé generování.
-    async fn enhance_image_prompt(&self, user_prompt: &str) -> (String, Option<String>) {
+    async fn enhance_image_prompt(
+        &self,
+        user_prompt: &str,
+        has_reference_images: bool,
+    ) -> (String, Option<String>) {
         // Hotový anglický SD prompt vezmeme rovnou — nemá cenu ho posílat LLM
         // (zbytečné přepisování a hlavně: cenzurované modely jako Mistral by
         // explicitní/odhalený prompt odmítly přeložit a generování by spadlo).
@@ -774,7 +1109,10 @@ impl SendMessageUseCase {
 
         let (tx, mut rx) = mpsc::channel(64);
         if self.llm.chat_stream(request, tx).await.is_err() {
-            return (user_prompt.to_string(), None);
+            return (
+                fallback_image_prompt(user_prompt, has_reference_images),
+                None,
+            );
         }
         let mut out = String::new();
         while let Some(chunk) = rx.recv().await {
@@ -782,12 +1120,18 @@ impl SendMessageUseCase {
                 StreamChunk::Token(t) => out.push_str(&t),
                 StreamChunk::Error(e) => {
                     tracing::warn!("Vylepšení promptu selhalo ({e}) — použije se původní");
-                    return (user_prompt.to_string(), None);
+                    return (
+                        fallback_image_prompt(user_prompt, has_reference_images),
+                        None,
+                    );
                 }
                 StreamChunk::Done(_) | StreamChunk::ImageStage(_) => {}
             }
         }
-        parse_prompt_enhancement(&out, user_prompt)
+        parse_prompt_enhancement(
+            &out,
+            &fallback_image_prompt(user_prompt, has_reference_images),
+        )
     }
 
     fn model_for_intent(intent: &weave_domain::model::Intent) -> String {
@@ -1044,6 +1388,8 @@ mod tests {
             "jak se dnes máš?".into(),
             vec![],
             vec!["/tmp/original.png".into()],
+            None,
+            true,
             tx,
         )
         .await
@@ -1067,6 +1413,8 @@ mod tests {
             .expect_generate()
             .withf(|req: &ImageRequest, _tx| {
                 req.reference_image_paths == ["/data/weave/reference-images/stored.png"]
+                    && req.reference_preservation.as_deref() == Some("preserve face shape")
+                    && req.original_prompt.is_some()
             })
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
@@ -1096,6 +1444,8 @@ mod tests {
             "nakresli mě jako rytíře".into(),
             vec![],
             vec!["/tmp/selfie.png".into()],
+            Some("preserve face shape".into()),
+            true,
             tx,
         )
         .await
@@ -1199,6 +1549,8 @@ mod tests {
                 "nakresli hrad".into(),
                 vec![],
                 vec![],
+                None,
+                true,
                 tx,
             ),
         )
@@ -1271,6 +1623,8 @@ mod tests {
             "jak se máš?".into(),
             vec![],
             vec![],
+            None,
+            true,
             tx,
         )
         .await
@@ -1408,6 +1762,8 @@ mod tests {
             "jak se máš?".into(),
             vec![],
             vec![],
+            None,
+            true,
             tx,
         )
         .await
@@ -1482,6 +1838,8 @@ mod tests {
             "nakresli hrad na skale".into(),
             vec![],
             vec![],
+            None,
+            true,
             tx,
         )
         .await
@@ -1583,6 +1941,8 @@ mod tests {
             "nakresli mě jako rytíře".into(),
             vec![],
             vec!["C:/fotky/ja.png".into()],
+            None,
+            true,
             tx,
         )
         .await
@@ -1673,6 +2033,8 @@ mod tests {
             "nakresli mi portrét".into(),
             vec![],
             vec![],
+            None,
+            true,
             tx,
         )
         .await
@@ -1801,6 +2163,80 @@ mod tests {
     }
 
     #[test]
+    fn wants_wide_image_detects_wallpaper_requests() {
+        assert!(wants_wide_image("wide cinematic 16:9 desktop wallpaper"));
+        assert!(wants_wide_image("na sirku, tapeta pro QHD monitor"));
+        assert!(wants_wide_image("landscape horizontal composition"));
+        assert!(!wants_wide_image("portrait of a woman, close-up"));
+    }
+
+    #[test]
+    fn fallback_image_prompt_translates_common_czech_terms() {
+        let prompt = fallback_image_prompt("nakresli hrad na skale v noci", false);
+        assert!(prompt.contains("castle"));
+        assert!(prompt.contains("rock cliff"));
+        assert!(prompt.contains("night"));
+        assert!(!prompt.contains("nakresli"));
+
+        let ref_prompt = fallback_image_prompt("nakresli mě jako rytíře", true);
+        assert!(ref_prompt.contains("knight"));
+        assert!(ref_prompt.contains("same person as reference image"));
+        assert!(ref_prompt.contains("consistent facial identity"));
+
+        let cat_prompt = fallback_image_prompt(
+            "vygeneruj mi obr\u{00E1}zek ko\u{010D}ky v klobouku",
+            false,
+        );
+        assert!(cat_prompt.contains("cat"));
+        assert!(cat_prompt.contains("hat"));
+        assert!(!cat_prompt.contains("kocky"));
+        assert!(!cat_prompt.contains("klobouku"));
+    }
+
+    #[test]
+    fn fallback_image_prompt_preserves_ahsoka_beach_request() {
+        let prompt = fallback_image_prompt(
+            "vygeneruj Ahsoka Tano na plazi sama v bikinach, animovany styl",
+            false,
+        );
+
+        assert!(prompt.contains("adult Ahsoka Tano-inspired character"));
+        assert!(prompt.contains("beach"));
+        assert!(prompt.contains("wearing a bikini"));
+        assert!(prompt.contains("solo"));
+        assert!(prompt.contains("stylized animated illustration"));
+    }
+
+    #[test]
+    fn deterministic_lora_query_detects_known_character() {
+        assert_eq!(
+            detect_lora_query(
+                "vygeneruj Ahsoka Tano na plazi sama v bikinach",
+                "beach, solo, high quality"
+            )
+            .as_deref(),
+            Some("Ahsoka Tano")
+        );
+        assert_eq!(
+            detect_lora_query("generic beach, high quality", "sand, ocean").as_deref(),
+            None
+        );
+    }
+
+    #[test]
+    fn known_character_tags_are_reinforced_when_llm_drops_subject() {
+        let prompt = reinforce_known_subject_tags(
+            "beach, solo, wearing a bikini, high quality",
+            "Ahsoka Tano na plazi",
+        );
+
+        assert!(prompt.contains("adult Ahsoka Tano-inspired character"));
+        assert!(prompt.contains("orange skin"));
+        assert!(prompt.contains("montrals and lekku"));
+        assert!(prompt.contains("beach"));
+    }
+
+    #[test]
     fn parse_enhancement_strips_chatml_garbage() {
         // Reálný zašuměný výstup malého lokálního modelu: za odpovědí
         // ukecal celou ChatML šablonu a zopakoval dotaz.
@@ -1835,6 +2271,9 @@ mod tests {
         msg_repo
             .expect_save()
             .returning(|_| Box::pin(async { Ok(()) }));
+        msg_repo
+            .expect_list_by_conversation()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
 
         let mut llm = MockLlmPort::new();
         llm.expect_chat_stream().returning(|_, tx| {
@@ -1915,6 +2354,8 @@ mod tests {
             "nakresli Nikol jako portrét".into(),
             vec![],
             vec![],
+            None,
+            true,
             tx,
         )
         .await
@@ -1930,7 +2371,97 @@ mod tests {
     /// Když LLM vylepšení promptu selže, generování běží dál s původním
     /// textem — horší prompt je lepší než spadlá pipeline.
     #[tokio::test]
-    async fn image_prompt_falls_back_to_original_on_llm_error() {
+    async fn wide_wallpaper_prompt_uses_landscape_dimensions() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        msg_repo
+            .expect_list_by_conversation()
+            .returning(|_| Box::pin(async { Ok(vec![]) }));
+
+        let mut llm = MockLlmPort::new();
+        llm.expect_chat_stream().returning(|_, tx| {
+            Box::pin(async move {
+                let _ = tx
+                    .send(StreamChunk::Token(
+                        "wide cinematic 16:9 wallpaper, full body, lying on her side, beach\nLORA: none"
+                            .into(),
+                    ))
+                    .await;
+                let _ = tx.send(StreamChunk::Done(Default::default())).await;
+                Ok(())
+            })
+        });
+        llm.expect_unload().returning(|| Box::pin(async {}));
+
+        let mut installer = MockComfyInstallerPort::new();
+        installer
+            .expect_status()
+            .returning(|| Box::pin(async { Ok(ComfyStatus::Running) }));
+        installer
+            .expect_ensure_style_checkpoint()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+        installer
+            .expect_stop_server()
+            .returning(|| Box::pin(async { Ok(()) }));
+
+        let mut image_gen = MockImageGenPort::new();
+        image_gen.expect_generate().returning(|req, tx| {
+            assert_eq!((req.width, req.height), (1280, 720));
+            assert!(req.prompt.contains("wide 16:9 landscape composition"));
+            assert!(!req.prompt.contains("standing"));
+            assert!(req
+                .negative_prompt
+                .as_deref()
+                .unwrap_or_default()
+                .contains("portrait orientation"));
+            Box::pin(async move {
+                let _ = tx
+                    .send(ImageProgress::Done {
+                        output_path: "/gallery/wide.png".into(),
+                    })
+                    .await;
+                Ok(())
+            })
+        });
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(llm),
+            Arc::new(image_gen),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(default_gen_settings()),
+            Arc::new(installer),
+            Arc::new(default_lora_catalog()),
+        );
+
+        let (tx, mut rx) = mpsc::channel(64);
+        uc.execute(
+            ConversationId::new(),
+            "wide 16:9 wallpaper, full body, lying on her side on a beach".into(),
+            vec![],
+            vec![],
+            None,
+            true,
+            tx,
+        )
+        .await
+        .unwrap();
+
+        while rx.recv().await.is_some() {}
+    }
+
+    #[tokio::test]
+    async fn image_prompt_falls_back_to_english_tags_on_llm_error() {
         let mut conv_repo = MockConversationRepository::new();
         conv_repo
             .expect_find_by_id()
@@ -1952,7 +2483,9 @@ mod tests {
 
         let mut image_gen = MockImageGenPort::new();
         image_gen.expect_generate().returning(|req, tx| {
-            assert_eq!(req.prompt, "nakresli hrad na skale");
+            assert!(req.prompt.contains("castle"));
+            assert!(req.prompt.contains("rock cliff"));
+            assert!(!req.prompt.contains("nakresli"));
             Box::pin(async move {
                 let _ = tx
                     .send(ImageProgress::Done {
@@ -1982,6 +2515,8 @@ mod tests {
             "nakresli hrad na skale".into(),
             vec![],
             vec![],
+            None,
+            true,
             tx,
         )
         .await

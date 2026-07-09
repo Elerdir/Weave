@@ -67,6 +67,36 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
             recommended_gpu_layers: 999,
         },
         RecommendedModel {
+            id: "gemma-3-4b-it".into(),
+            name: "Gemma 3 4B Instruct".into(),
+            description: "Lehká Gemma pro notebooky — dobrá čeština, dlouhý kontext a rychlý chat. \
+                Vhodné pro mobilní RTX 4070 s 8 GB VRAM (cca 2.6 GB model)."
+                .into(),
+            size_bytes: 2_560_000_000,
+            download_url: "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
+        RecommendedModel {
+            id: "gemma-4-e4b-it".into(),
+            name: "Gemma 4 E4B Instruct".into(),
+            description: "Nová Gemma 4 pro svižný lokální chat — velmi dobrý poměr kvality a rychlosti. \
+                Bezpečná volba pro mobilní RTX 4070 s 8 GB VRAM (cca 5 GB model)."
+                .into(),
+            size_bytes: 4_980_000_000,
+            download_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
+        RecommendedModel {
+            id: "gemma-3-12b-it".into(),
+            name: "Gemma 3 12B Instruct".into(),
+            description: "Středně velká Gemma 3 — kvalitnější psaní a vícejazyčnost než 4B. \
+                Na 8GB mobilní RTX 4070 jen podle volné VRAM; pro RTX 3090 bez problému."
+                .into(),
+            size_bytes: 7_300_000_000,
+            download_url: "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
+        RecommendedModel {
             id: "tiger-gemma-12b-v3".into(),
             name: "Tiger Gemma 12B v3".into(),
             description: "Doladěný Gemma 3 12B — silná vícejazyčnost (i čeština), otevřenější \
@@ -126,6 +156,26 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
                 .into(),
             size_bytes: 16_546_688_736,
             download_url: "https://huggingface.co/unsloth/gemma-3-27b-it-GGUF/resolve/main/gemma-3-27b-it-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
+        RecommendedModel {
+            id: "gemma-4-26b-a4b-it".into(),
+            name: "Gemma 4 26B-A4B Instruct".into(),
+            description: "Gemma 4 MoE pro RTX 3090 — velmi silný model s aktivními ~4B parametry \
+                na token, ale s kvalitou větší rodiny. Potřebuje cca 17 GB VRAM."
+                .into(),
+            size_bytes: 16_900_000_000,
+            download_url: "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
+        RecommendedModel {
+            id: "gemma-4-31b-it".into(),
+            name: "Gemma 4 31B Instruct".into(),
+            description: "Nejsilnější Gemma 4 z nabídky pro RTX 3090 — výborný chat, psaní a \
+                vícejazyčnost. Q4_K_M se vejde na 24GB kartu s rezervou (cca 18.3 GB)."
+                .into(),
+            size_bytes: 18_300_000_000,
+            download_url: "https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/resolve/main/gemma-4-31B-it-Q4_K_M.gguf".into(),
             recommended_gpu_layers: 999,
         },
         RecommendedModel {
@@ -198,5 +248,22 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), models.len());
+    }
+
+    #[test]
+    fn includes_gemma_targets_for_mobile_and_rtx3090() {
+        let models = recommended_models();
+        let ids: std::collections::HashSet<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        for expected in [
+            "gemma-3-4b-it",
+            "gemma-4-e4b-it",
+            "gemma-3-27b-it",
+            "gemma-4-31b-it",
+        ] {
+            assert!(
+                ids.contains(expected),
+                "missing recommended model {expected}"
+            );
+        }
     }
 }

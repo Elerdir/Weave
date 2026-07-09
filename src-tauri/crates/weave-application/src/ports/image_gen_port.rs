@@ -6,8 +6,16 @@ use crate::error::AppResult;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageRequest {
+    /// Puvodni uzivatelsky prompt pred prekladem/vylepsenim pro ComfyUI.
+    #[serde(default)]
+    pub original_prompt: Option<String>,
     pub prompt: String,
     pub negative_prompt: Option<String>,
+    /// Co ma byt zachovano z referencnich obrazku (postava, obleceni,
+    /// kompozice apod.). Orchestrace to prevede do anglickeho promptu, ale
+    /// puvodni poznamka se uklada do metadat galerie.
+    #[serde(default)]
+    pub reference_preservation: Option<String>,
     pub width: u32,
     pub height: u32,
     pub steps: u32,
@@ -66,6 +74,9 @@ impl StylePreset {
             "polorealist",
             "stylizovan",
             "stylized",
+            "animovan",
+            "animated",
+            "cartoon",
         ];
         const ANIME: &[&str] = &["anime", "manga", "chibi", "waifu", "ghibli"];
         const THREE_D: &[&str] = &["3d", "render", "blender", "pixar", "low poly", "voxel"];
@@ -100,6 +111,7 @@ impl StylePreset {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ImageProgress {
     Progress { step: u32, total: u32 },
+    Status { detail: String, percent: Option<u8> },
     Done { output_path: String },
     Error(String),
 }
@@ -152,6 +164,14 @@ mod tests {
         );
         assert_eq!(
             StylePreset::classify("polorealistický portrét dívky"),
+            StylePreset::SemiRealistic
+        );
+    }
+
+    #[test]
+    fn classify_animated_character_as_semi_realistic() {
+        assert_eq!(
+            StylePreset::classify("stylized animated character on a beach"),
             StylePreset::SemiRealistic
         );
     }
