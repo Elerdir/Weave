@@ -383,6 +383,16 @@ const cs = {
       diagOk: "OK",
       diagMissing: "Chybi",
     },
+    civitai: {
+      title: "Prohlížet CivitAI",
+      hint: "Hledej checkpointy a LoRA s náhledy — stažené soubory jdou rovnou do ComfyUI (checkpoints/loras). U LoRA si poznamenej trigger words (🔑), bez nich se v promptu neprojeví.",
+      searchPlaceholder: "např. realistic portrait, anime style…",
+      searchButton: "Hledat",
+      searching: "Hledám…",
+      empty: "Nic nenalezeno — zkus jiný dotaz.",
+      kindCheckpoint: "Checkpoint",
+      kindLora: "LoRA",
+    },
     models: {
       title: "Místní modely",
       noModels: "Žádné lokální modely",

@@ -11,6 +11,7 @@
   import type { ApiServiceId } from "$lib/stores/settings.svelte";
   import { modelsStore, formatBytes, formatSpeed, formatEta } from "$lib/stores/models.svelte";
   import { modelSearchStore, modelIdForFile } from "$lib/stores/model-search.svelte";
+  import { civitaiBrowserStore } from "$lib/stores/civitai-browser.svelte";
   import { comfyInstallStore } from "$lib/stores/comfy-install.svelte";
   import { openvinoInstallStore } from "$lib/stores/openvino-install.svelte";
   import { updaterStore } from "$lib/stores/updater.svelte";
@@ -1141,6 +1142,95 @@
                 </div>
               {/each}
             </div>
+
+            <h4 class="sub-heading">{i18n.m.settings.civitai.title}</h4>
+            <p class="hint">{i18n.m.settings.civitai.hint}</p>
+            <div class="comfyui-row">
+              <select
+                class="civitai-kind"
+                value={civitaiBrowserStore.kind}
+                onchange={(e) =>
+                  civitaiBrowserStore.setKind(
+                    (e.target as HTMLSelectElement).value as "checkpoint" | "lora"
+                  )}
+              >
+                <option value="checkpoint">{i18n.m.settings.civitai.kindCheckpoint}</option>
+                <option value="lora">{i18n.m.settings.civitai.kindLora}</option>
+              </select>
+              <input
+                type="text"
+                placeholder={i18n.m.settings.civitai.searchPlaceholder}
+                value={civitaiBrowserStore.query}
+                oninput={(e) => civitaiBrowserStore.setQuery((e.target as HTMLInputElement).value)}
+                onkeydown={(e) => e.key === "Enter" && civitaiBrowserStore.search()}
+              />
+              <button
+                class="btn-sm primary"
+                disabled={civitaiBrowserStore.searching || !civitaiBrowserStore.query.trim()}
+                onclick={() => civitaiBrowserStore.search()}
+              >
+                {civitaiBrowserStore.searching
+                  ? i18n.m.settings.civitai.searching
+                  : i18n.m.settings.civitai.searchButton}
+              </button>
+            </div>
+
+            {#if civitaiBrowserStore.error}
+              <span class="conn-status disconnected">{civitaiBrowserStore.error}</span>
+            {/if}
+            {#if civitaiBrowserStore.searched && civitaiBrowserStore.results.length === 0 && !civitaiBrowserStore.searching}
+              <p class="hint">{i18n.m.settings.civitai.empty}</p>
+            {/if}
+
+            {#if civitaiBrowserStore.results.length > 0}
+              <div class="civitai-grid">
+                {#each civitaiBrowserStore.results as item (item.file_name)}
+                  {@const isDownloading = civitaiBrowserStore.downloadingFile === item.file_name}
+                  <div class="civitai-card">
+                    {#if item.preview_image_url}
+                      <img
+                        class="civitai-preview"
+                        src={item.preview_image_url}
+                        alt={item.name}
+                        loading="lazy"
+                      />
+                    {:else}
+                      <div class="civitai-preview civitai-noimg">🖼</div>
+                    {/if}
+                    <div class="civitai-meta">
+                      <div class="civitai-name" title={item.name}>
+                        {item.name}
+                        {#if item.nsfw}<span class="nsfw-badge">18+</span>{/if}
+                      </div>
+                      <div class="civitai-sub">
+                        {item.creator} · ⬇ {item.downloads.toLocaleString()}
+                      </div>
+                      <div class="civitai-sub">
+                        {item.base_model} · {formatBytes(item.size_bytes)}
+                      </div>
+                      {#if item.trigger_words.length > 0}
+                        <div class="civitai-triggers" title={item.trigger_words.join(", ")}>
+                          🔑 {item.trigger_words.join(", ")}
+                        </div>
+                      {/if}
+                      {#if civitaiBrowserStore.isDownloaded(item.file_name)}
+                        <span class="dl-inline">✓ {i18n.m.wizard.steps.models.ready}</span>
+                      {:else if isDownloading}
+                        <span class="dl-inline">{civitaiBrowserStore.progressLine || i18n.m.common.loading}</span>
+                      {:else}
+                        <button
+                          class="btn-sm primary"
+                          disabled={!!civitaiBrowserStore.downloadingFile}
+                          onclick={() => civitaiBrowserStore.download(item).then(() => comfyInstallStore.load())}
+                        >
+                          {i18n.m.settings.llm.download}
+                        </button>
+                      {/if}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
           {/if}
         {:else if section === "models"}
           <h3>{i18n.m.settings.models.title}</h3>
@@ -2051,6 +2141,78 @@
   }
   .fit.over {
     color: var(--color-error);
+  }
+
+  /* CivitAI prohlížeč: karty s náhledy */
+  .civitai-kind {
+    background: var(--color-surface-2);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.45rem 0.5rem;
+    font-size: 0.85rem;
+  }
+  .civitai-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+  }
+  .civitai-card {
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    background: var(--color-surface-2);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .civitai-preview {
+    width: 100%;
+    height: 200px;
+    object-fit: cover;
+    display: block;
+    background: var(--color-surface);
+  }
+  .civitai-noimg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2rem;
+    color: var(--color-text-muted);
+  }
+  .civitai-meta {
+    padding: 0.5rem 0.65rem 0.65rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .civitai-name {
+    font-size: 0.82rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .nsfw-badge {
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: var(--color-error);
+    border: 1px solid var(--color-error);
+    border-radius: 4px;
+    padding: 0 0.25rem;
+    margin-left: 0.3rem;
+    vertical-align: middle;
+  }
+  .civitai-sub {
+    font-size: 0.72rem;
+    color: var(--color-text-muted);
+  }
+  .civitai-triggers {
+    font-size: 0.7rem;
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .advanced-details {

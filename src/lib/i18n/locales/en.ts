@@ -385,6 +385,16 @@ const en: Messages = {
       diagOk: "OK",
       diagMissing: "Missing",
     },
+    civitai: {
+      title: "Browse CivitAI",
+      hint: "Search checkpoints and LoRAs with previews — downloads go straight into ComfyUI (checkpoints/loras). For LoRAs note the trigger words (🔑), without them the LoRA has no effect.",
+      searchPlaceholder: "e.g. realistic portrait, anime style…",
+      searchButton: "Search",
+      searching: "Searching…",
+      empty: "Nothing found — try a different query.",
+      kindCheckpoint: "Checkpoint",
+      kindLora: "LoRA",
+    },
     models: {
       title: "Local Models",
       noModels: "No local models",
