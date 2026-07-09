@@ -509,7 +509,8 @@
                                   <button
                                     class="btn-sm primary"
                                     disabled={!!modelsStore.download}
-                                    onclick={() => modelsStore.downloadModel(fileId, file.download_url)}
+                                    onclick={() =>
+                                      modelsStore.downloadModel(fileId, file.download_url, file.sha256)}
                                   >
                                     {i18n.m.settings.llm.download}
                                   </button>

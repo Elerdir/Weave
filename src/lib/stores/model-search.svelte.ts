@@ -15,6 +15,8 @@ export interface CatalogFile {
   size_bytes: number;
   quant: string | null;
   download_url: string;
+  /** SHA256 z HF LFS metadat — backend ho po stažení ověří. */
+  sha256: string | null;
 }
 
 /**

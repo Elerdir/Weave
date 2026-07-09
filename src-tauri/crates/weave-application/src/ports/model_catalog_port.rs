@@ -28,6 +28,8 @@ pub struct CatalogFile {
     pub quant: Option<String>,
     /// Přímá URL ke stažení (`…/resolve/main/<path>`).
     pub download_url: String,
+    /// SHA256 souboru z HF LFS metadat (`lfs.oid`) — ověří se po stažení.
+    pub sha256: Option<String>,
 }
 
 /// Vyhledávání modelů ve vzdáleném katalogu (HuggingFace) — jen čtení,
