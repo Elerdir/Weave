@@ -67,4 +67,10 @@ pub trait LlmPort: Send + Sync {
     /// inference tím na dobu generování obrázku uvolní VRAM pro ComfyUI;
     /// model se pak líně načte při další zprávě. Cloud/HTTP backendy no-op.
     async fn unload(&self) {}
+
+    /// Drží backend právě model v (V)RAM? Pro VRAM indikátor v UI —
+    /// cloud/HTTP backendy nic nedrží (výchozí `false`).
+    async fn is_loaded(&self) -> bool {
+        false
+    }
 }

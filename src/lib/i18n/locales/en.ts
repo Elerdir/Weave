@@ -100,6 +100,10 @@ const en: Messages = {
       unload: "Unload local model from RAM/VRAM",
       unloaded: "Model unloaded",
     },
+    vram: {
+      holding: "In memory: {holders}",
+      idle: "VRAM is free — nothing from Weave is holding it",
+    },
     newConversation: "New Conversation",
     thinking: "Thinking...",
     generating: "Generating image...",
