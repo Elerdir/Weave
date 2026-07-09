@@ -142,9 +142,11 @@ pub fn open_image_external(path: String) -> Result<(), String> {
         #[cfg(target_os = "windows")]
         {
             // `cmd /C start "" "<cesta>"` — první "" je (prázdný) titulek okna.
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "", &path])
-                .spawn()
+            // hide_console_std skryje okno cmd.exe, prohlížeč fotek se otevře normálně.
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.args(["/C", "start", "", &path]);
+            weave_infrastructure::spawn::hide_console_std(&mut cmd);
+            cmd.spawn()
         }
         #[cfg(target_os = "macos")]
         {

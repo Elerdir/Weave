@@ -199,6 +199,7 @@ async fn emit_output(window: &Window, line: impl Into<String>) {
 fn run_command(program: &str, args: &[String], cwd: Option<&Path>) -> Result<String, String> {
     let mut cmd = Command::new(program);
     cmd.args(args);
+    weave_infrastructure::spawn::hide_console_std(&mut cmd);
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
@@ -220,6 +221,19 @@ fn run_command(program: &str, args: &[String], cwd: Option<&Path>) -> Result<Str
     }
 
     Ok(combined)
+}
+
+/// Blokující příkaz (venv/pip, klidně minuty) spuštěný mimo async runtime —
+/// `run_command` volaný přímo v tauri commandu by po dobu instalace blokoval
+/// tokio worker vlákno.
+async fn run_command_async(
+    program: String,
+    args: Vec<String>,
+    cwd: Option<PathBuf>,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || run_command(&program, &args, cwd.as_deref()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 fn write_runtime_files(root: &Path) -> Result<(), String> {
@@ -423,46 +437,49 @@ pub async fn install_openvino_runtime(
             ]
         };
         let launcher = if cfg!(windows) { "py" } else { "python3" };
-        let out = run_command(launcher, &args, Some(&root))?;
+        let out = run_command_async(launcher.to_string(), args, Some(root.clone())).await?;
         if !out.trim().is_empty() {
             emit_output(&window, out).await;
         }
     }
 
     emit_step(&window, "Aktualizuji pip").await;
-    let out = run_command(
-        &venv_python(&root).display().to_string(),
-        &[
+    let out = run_command_async(
+        venv_python(&root).display().to_string(),
+        vec![
             "-m".to_string(),
             "pip".to_string(),
             "install".to_string(),
             "--upgrade".to_string(),
             "pip".to_string(),
         ],
-        Some(&root),
-    )?;
+        Some(root.clone()),
+    )
+    .await?;
     emit_output(&window, out).await;
 
     emit_step(&window, "Instaluji OpenVINO GenAI runtime").await;
-    let out = run_command(
-        &venv_python(&root).display().to_string(),
-        &[
+    let out = run_command_async(
+        venv_python(&root).display().to_string(),
+        vec![
             "-m".to_string(),
             "pip".to_string(),
             "install".to_string(),
             "-r".to_string(),
             requirements_path(&root).display().to_string(),
         ],
-        Some(&root),
-    )?;
+        Some(root.clone()),
+    )
+    .await?;
     emit_output(&window, out).await;
 
     emit_step(&window, "Overuji OpenVINO a NPU plugin").await;
-    let out = run_command(
-        &venv_python(&root).display().to_string(),
-        &[root.join("smoke_openvino.py").display().to_string()],
-        Some(&root),
-    )?;
+    let out = run_command_async(
+        venv_python(&root).display().to_string(),
+        vec![root.join("smoke_openvino.py").display().to_string()],
+        Some(root.clone()),
+    )
+    .await?;
     emit_output(&window, out).await;
 
     std::fs::write(marker_path(&root), "installed").map_err(|e| e.to_string())?;
@@ -549,8 +566,8 @@ pub async fn start_openvino_runtime_server(
         .try_clone()
         .map_err(|e| format!("Priprava OpenVINO server logu selhala: {e}"))?;
 
-    let child = tokio::process::Command::new(venv_python(&root))
-        .arg(server_script_path(&root))
+    let mut cmd = tokio::process::Command::new(venv_python(&root));
+    cmd.arg(server_script_path(&root))
         .arg("--model-dir")
         .arg(&model_dir)
         .arg("--device")
@@ -561,7 +578,9 @@ pub async fn start_openvino_runtime_server(
         .arg(OPENVINO_SERVER_PORT.to_string())
         .current_dir(&root)
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
+        .stderr(Stdio::from(stderr));
+    weave_infrastructure::spawn::hide_console(&mut cmd);
+    let child = cmd
         .spawn()
         .map_err(|e| format!("Spusteni OpenVINO serveru selhalo: {e}"))?;
     *guard = Some(child);
@@ -640,23 +659,16 @@ pub async fn download_openvino_model_profile(
 
     let target = PathBuf::from(profile.target_dir);
     std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-    let python = venv_python(&root);
-    let script = model_download_script_path(&root);
-    let root_for_task = root.clone();
-    let target_for_task = target.clone();
-    tokio::task::spawn_blocking(move || {
-        run_command(
-            &python.display().to_string(),
-            &[
-                script.display().to_string(),
-                target_for_task.display().to_string(),
-                repo_id,
-            ],
-            Some(&root_for_task),
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    run_command_async(
+        venv_python(&root).display().to_string(),
+        vec![
+            model_download_script_path(&root).display().to_string(),
+            target.display().to_string(),
+            repo_id,
+        ],
+        Some(root.clone()),
+    )
+    .await?;
 
     Ok(status_for(&root).await)
 }
