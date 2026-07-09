@@ -91,6 +91,10 @@ const FACE_DETECTOR_FILENAME: &str = "face_yolov8m.pt";
 const FACE_DETECTOR_URL: &str =
     "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8m.pt";
 
+// set_readonly(false) je tu záměr: git objekty mají na Windows readonly flag,
+// který blokuje remove_dir_all při odinstalaci. Volá se těsně před smazáním
+// složky, takže „world writable" na Unixu je bez praktického dopadu.
+#[allow(clippy::permissions_set_readonly_false)]
 fn clear_readonly_flags(path: &Path) -> AppResult<()> {
     if !path.exists() {
         return Ok(());

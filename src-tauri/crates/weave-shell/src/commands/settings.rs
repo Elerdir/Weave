@@ -1,4 +1,8 @@
-use serde::{Deserialize, Serialize};
+// Deserialize používá jen windows-only WindowsNpuDevice — na Linuxu (CI
+// clippy -D warnings) by byl import nepoužitý.
+#[cfg(target_os = "windows")]
+use serde::Deserialize;
+use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use weave_application::{
     ports::keychain_port::ApiService, use_cases::manage_api_keys::ManageApiKeysUseCase,
@@ -30,6 +34,9 @@ pub struct RuntimeRestartResult {
     pub openvino_started: bool,
 }
 
+// Používá se jen ve windows detekci NPU (detect_npu_impl) — na jiných
+// platformách by byl dead code a CI clippy (-D warnings na Linuxu) by spadl.
+#[cfg(target_os = "windows")]
 #[derive(Debug, Deserialize)]
 struct WindowsNpuDevice {
     #[serde(rename = "Name")]

@@ -413,6 +413,7 @@ impl SendMessageUseCase {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute(
         &self,
         conversation_id: ConversationId,
@@ -878,8 +879,7 @@ impl SendMessageUseCase {
             (prompt_for_generator.clone(), None)
         };
         sd_prompt = reinforce_known_subject_tags(&sd_prompt, &prompt_for_generator);
-        let lora_query =
-            detect_lora_query(&prompt_for_generator, &sd_prompt).or(lora_query);
+        let lora_query = detect_lora_query(&prompt_for_generator, &sd_prompt).or(lora_query);
 
         // U generování podle reference (PuLID) jde vždy o osobu — přidáme
         // tagy na věrné oči, nejčastější zdroj „divných" výsledků.
@@ -2183,10 +2183,8 @@ mod tests {
         assert!(ref_prompt.contains("same person as reference image"));
         assert!(ref_prompt.contains("consistent facial identity"));
 
-        let cat_prompt = fallback_image_prompt(
-            "vygeneruj mi obr\u{00E1}zek ko\u{010D}ky v klobouku",
-            false,
-        );
+        let cat_prompt =
+            fallback_image_prompt("vygeneruj mi obr\u{00E1}zek ko\u{010D}ky v klobouku", false);
         assert!(cat_prompt.contains("cat"));
         assert!(cat_prompt.contains("hat"));
         assert!(!cat_prompt.contains("kocky"));

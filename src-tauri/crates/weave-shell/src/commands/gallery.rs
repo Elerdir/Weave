@@ -185,10 +185,7 @@ pub async fn open_gallery_window(app: tauri::AppHandle) -> Result<(), String> {
 
 /// Otevře detail jednoho obrázku v samostatném okně.
 #[tauri::command]
-pub async fn open_gallery_detail_window(
-    app: tauri::AppHandle,
-    path: String,
-) -> Result<(), String> {
+pub async fn open_gallery_detail_window(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let label = stable_detail_label(&path);
     if let Some(win) = app.get_webview_window(&label) {
         win.show().map_err(|e| e.to_string())?;

@@ -1,5 +1,5 @@
-use std::{path::Path, sync::Arc};
 use serde::Serialize;
+use std::{path::Path, sync::Arc};
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tokio::sync::mpsc;
 use weave_application::ports::comfy_installer_port::{
@@ -77,9 +77,7 @@ pub async fn diagnose_comfyui(
         venv_python_exists: path_exists(&venv_python),
         pulid_node_exists: path_exists(&install_dir.join("custom_nodes").join("PuLID_ComfyUI")),
         impact_pack_exists: path_exists(
-            &install_dir
-                .join("custom_nodes")
-                .join("ComfyUI-Impact-Pack"),
+            &install_dir.join("custom_nodes").join("ComfyUI-Impact-Pack"),
         ),
         server_log_tail: read_tail(&server_log_path, 80),
         server_log_path: server_log_path.to_string_lossy().into_owned(),

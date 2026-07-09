@@ -103,7 +103,8 @@ pub fn stamp_ai_image_with_details(
             reference_preservation: reference_preservation.map(ToOwned::to_owned),
         };
         if prompt_metadata.has_any() {
-            let json = serde_json::to_vec(&prompt_metadata).context("serializace prompt metadat")?;
+            let json =
+                serde_json::to_vec(&prompt_metadata).context("serializace prompt metadat")?;
             encoder
                 .add_text_chunk(
                     PROMPT_METADATA_B64_KEY.into(),
