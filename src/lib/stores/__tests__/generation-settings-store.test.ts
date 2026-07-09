@@ -61,6 +61,7 @@ describe("generationSettingsStore", () => {
       pulid_weight: null,
       face_detailer: null,
       runtime_backend: null,
+      image_checkpoint: null,
     });
     await generationSettingsStore.load("conv-1");
 
@@ -69,6 +70,7 @@ describe("generationSettingsStore", () => {
     generationSettingsStore.setMaxTokens(0);
     generationSettingsStore.setPulidWeight(0.75);
     generationSettingsStore.setFaceDetailer(true);
+    generationSettingsStore.setImageCheckpoint("realvis_ultra.safetensors");
 
     mockInvoke.mockResolvedValueOnce(undefined);
     await generationSettingsStore.save();
@@ -82,8 +84,33 @@ describe("generationSettingsStore", () => {
         pulid_weight: 0.75,
         face_detailer: true,
         runtime_backend: "default",
+        image_checkpoint: "realvis_ultra.safetensors",
       },
     });
+  });
+
+  it("save() posílá prázdný checkpoint (automatika) jako null", async () => {
+    mockInvoke.mockResolvedValueOnce({
+      context_length: null,
+      temperature: null,
+      max_tokens: null,
+      pulid_weight: null,
+      face_detailer: null,
+      runtime_backend: null,
+      image_checkpoint: null,
+    });
+    await generationSettingsStore.load("conv-2");
+    generationSettingsStore.setImageCheckpoint("  ");
+
+    mockInvoke.mockResolvedValueOnce(undefined);
+    await generationSettingsStore.save();
+
+    const lastCall = mockInvoke.mock.calls.at(-1);
+    expect(lastCall?.[0]).toBe("set_conversation_settings");
+    expect(
+      (lastCall?.[1] as { settings: { image_checkpoint: string | null } }).settings
+        .image_checkpoint
+    ).toBeNull();
   });
 
   it("setTemperature() zaokrouhluje float artefakty posuvníku", () => {

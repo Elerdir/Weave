@@ -135,6 +135,10 @@ const en: Messages = {
       pulidWeightHint:
         "How strongly the reference photos are followed. Higher = truer face, but less room for the prompt (risk of artifacts).",
       faceDetailer: "Refine face / eyes",
+      imageCheckpoint: "Image model (checkpoint)",
+      imageCheckpointAuto: "Automatic by prompt style",
+      imageCheckpointHint:
+        "Custom checkpoint (e.g. downloaded from CivitAI) instead of the automatic choice. Must be SDXL architecture, otherwise references (PuLID) won't work.",
       faceDetailerHint:
         "A second pass re-samples the detected face — helps the eyes most. First use downloads the Impact Pack (~hundreds of MB) and adds time to generation.",
     },

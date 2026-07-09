@@ -24,7 +24,8 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
     async fn get(&self, id: &ConversationId) -> AppResult<GenerationSettings> {
         let id_str = id.as_uuid().to_string();
         let row = sqlx::query(
-            "SELECT context_length, temperature, max_tokens, pulid_weight, face_detailer, runtime_backend
+            "SELECT context_length, temperature, max_tokens, pulid_weight, face_detailer,
+                    runtime_backend, image_checkpoint
              FROM conversation_settings WHERE conversation_id = ?",
         )
         .bind(&id_str)
@@ -60,6 +61,9 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
             runtime_backend: row
                 .try_get::<Option<String>, _>("runtime_backend")
                 .map_err(|e| AppError::Repository(e.to_string()))?,
+            image_checkpoint: row
+                .try_get::<Option<String>, _>("image_checkpoint")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
         })
     }
 
@@ -67,15 +71,17 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
         let id_str = id.as_uuid().to_string();
         sqlx::query(
             "INSERT INTO conversation_settings
-                 (conversation_id, context_length, temperature, max_tokens, pulid_weight, face_detailer, runtime_backend)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+                 (conversation_id, context_length, temperature, max_tokens, pulid_weight,
+                  face_detailer, runtime_backend, image_checkpoint)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(conversation_id) DO UPDATE SET
                  context_length = excluded.context_length,
                  temperature = excluded.temperature,
                  max_tokens = excluded.max_tokens,
                  pulid_weight = excluded.pulid_weight,
                  face_detailer = excluded.face_detailer,
-                 runtime_backend = excluded.runtime_backend",
+                 runtime_backend = excluded.runtime_backend,
+                 image_checkpoint = excluded.image_checkpoint",
         )
         .bind(&id_str)
         .bind(settings.context_length.map(|v| v as i64))
@@ -84,6 +90,7 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
         .bind(settings.pulid_weight.map(|v| v as f64))
         .bind(settings.face_detailer.map(i64::from))
         .bind(settings.runtime_backend.as_deref())
+        .bind(settings.image_checkpoint.as_deref())
         .execute(&self.pool)
         .await
         .map_err(|e| AppError::Repository(e.to_string()))?;
@@ -134,6 +141,7 @@ mod tests {
             pulid_weight: Some(0.8),
             face_detailer: Some(true),
             runtime_backend: Some("openvino_npu".to_string()),
+            image_checkpoint: Some("realvis_ultra.safetensors".to_string()),
         };
         repo.set(&conv, &first).await.unwrap();
         assert_eq!(repo.get(&conv).await.unwrap(), first);
@@ -146,6 +154,7 @@ mod tests {
             pulid_weight: None,
             face_detailer: Some(false),
             runtime_backend: Some("default".to_string()),
+            image_checkpoint: None,
         };
         repo.set(&conv, &second).await.unwrap();
         assert_eq!(repo.get(&conv).await.unwrap(), second);

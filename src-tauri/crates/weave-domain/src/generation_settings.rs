@@ -19,6 +19,10 @@ pub struct GenerationSettings {
     pub face_detailer: Option<bool>,
     /// Per-chat override LLM runtime. `None` nebo `default` = globalni nastaveni.
     pub runtime_backend: Option<String>,
+    /// Checkpoint pro generování obrázků (název souboru v ComfyUI
+    /// `models/checkpoints`, např. stažený z CivitAI). `None`/prázdný =
+    /// automatická volba podle stylu promptu (RealVisXL/Pony/SDXL).
+    pub image_checkpoint: Option<String>,
 }
 
 impl GenerationSettings {
@@ -36,6 +40,14 @@ impl GenerationSettings {
     pub fn face_detailer_enabled(&self) -> bool {
         self.face_detailer.unwrap_or(false)
     }
+
+    /// Vybraný checkpoint obrázků, pokud je nastavený a neprázdný.
+    pub fn image_checkpoint(&self) -> Option<&str> {
+        self.image_checkpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
 }
 
 #[cfg(test)]
@@ -51,9 +63,22 @@ mod tests {
         assert!(s.pulid_weight.is_none());
         assert!(s.face_detailer.is_none());
         assert!(s.runtime_backend.is_none());
+        assert!(s.image_checkpoint.is_none());
         assert_eq!(s.temperature_or_default(), 0.7);
         assert_eq!(s.pulid_weight_or_default(), 1.0);
         assert!(!s.face_detailer_enabled());
+        assert!(s.image_checkpoint().is_none());
+    }
+
+    #[test]
+    fn image_checkpoint_ignores_blank_values() {
+        let mut s = GenerationSettings {
+            image_checkpoint: Some("  ".into()),
+            ..Default::default()
+        };
+        assert!(s.image_checkpoint().is_none());
+        s.image_checkpoint = Some(" custom.safetensors ".into());
+        assert_eq!(s.image_checkpoint(), Some("custom.safetensors"));
     }
 
     #[test]
