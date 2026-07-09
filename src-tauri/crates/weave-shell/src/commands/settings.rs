@@ -1,4 +1,8 @@
-use serde::{Deserialize, Serialize};
+// Deserialize používá jen windows-only WindowsNpuDevice — na Linuxu (CI
+// clippy -D warnings) by byl import nepoužitý.
+#[cfg(target_os = "windows")]
+use serde::Deserialize;
+use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use weave_application::{
     ports::keychain_port::ApiService, use_cases::manage_api_keys::ManageApiKeysUseCase,
