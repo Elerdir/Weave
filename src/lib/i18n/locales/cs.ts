@@ -98,6 +98,10 @@ const cs = {
       unload: "Uvolnit lokální model z RAM/VRAM",
       unloaded: "Model uvolněn",
     },
+    vram: {
+      holding: "V paměti: {holders}",
+      idle: "VRAM je volná — nic z Weave ji nedrží",
+    },
     newConversation: "Nová konverzace",
     thinking: "Přemýšlím...",
     generating: "Generuji obrázek...",

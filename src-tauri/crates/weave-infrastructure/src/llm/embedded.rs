@@ -39,11 +39,14 @@ struct WorkerRequest {
     tx: mpsc::Sender<StreamChunk>,
 }
 
-/// Zpráva pro worker vlákno: buď inference, nebo uvolnění modelu z VRAM.
+/// Zpráva pro worker vlákno: inference, uvolnění modelu z VRAM, nebo dotaz
+/// na stav (drží worker právě model ve VRAM?).
 enum WorkerMsg {
     Infer(WorkerRequest),
     /// Uvolní model z paměti; `ack` se odešle, až je VRAM skutečně volná.
     Unload(tokio::sync::oneshot::Sender<()>),
+    /// Je model právě načtený? (pro VRAM indikátor v UI)
+    IsLoaded(tokio::sync::oneshot::Sender<bool>),
 }
 
 pub struct EmbeddedLlamaClient {
@@ -88,6 +91,14 @@ impl LlmPort for EmbeddedLlamaClient {
         if self.tx_req.send(WorkerMsg::Unload(ack_tx)).is_ok() {
             let _ = ack_rx.await;
         }
+    }
+
+    async fn is_loaded(&self) -> bool {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if self.tx_req.send(WorkerMsg::IsLoaded(tx)).is_err() {
+            return false;
+        }
+        rx.await.unwrap_or(false)
     }
 }
 
@@ -189,6 +200,9 @@ fn worker_loop(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32, rx: Receiver<
                 }
                 let _ = ack.send(());
             }
+            WorkerMsg::IsLoaded(tx) => {
+                let _ = tx.send(model.is_some());
+            }
             WorkerMsg::Infer(req) => {
                 if model.is_none() {
                     match load_model(&backend, &model_path, n_gpu_layers) {
@@ -220,6 +234,9 @@ fn drain_with_error(rx: Receiver<WorkerMsg>, msg: &str) {
             }
             WorkerMsg::Unload(ack) => {
                 let _ = ack.send(());
+            }
+            WorkerMsg::IsLoaded(tx) => {
+                let _ = tx.send(false);
             }
         }
     }

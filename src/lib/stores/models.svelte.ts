@@ -24,6 +24,8 @@ export interface RecommendedModel {
 export interface GpuInfo {
   name: string;
   vram_mb: number;
+  /** Volná VRAM v MB — 0, když ji nešlo zjistit (non-NVIDIA GPU). */
+  free_vram_mb: number;
   backend: "cuda" | "metal" | "vulkan" | "cpu";
 }
 

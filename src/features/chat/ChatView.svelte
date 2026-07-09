@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -10,6 +10,7 @@
   import { subjectsStore, type Subject } from "$lib/stores/subjects.svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import { generationSettingsStore } from "$lib/stores/generation-settings.svelte";
+  import { vramStore } from "$lib/stores/vram.svelte";
   import type { RuntimeBackend } from "$lib/stores/generation-settings.svelte";
   import {
     editImageMessage,
@@ -302,6 +303,22 @@
     mentions = mentions.filter((m) => m.path !== path);
   }
 
+  onMount(() => {
+    vramStore.start();
+    return () => vramStore.stop();
+  });
+
+  /** Tooltip VRAM chipu: GPU + kdo paměť právě drží. */
+  function vramTooltip(): string {
+    const gpu = vramStore.status?.gpu;
+    if (!gpu) return "";
+    const holders = vramStore.holders;
+    const holderLine = holders.length
+      ? i18n.t("chat.vram.holding", { holders: holders.join(", ") })
+      : i18n.m.chat.vram.idle;
+    return `${gpu.name}\n${holderLine}`;
+  }
+
   async function unloadModelMemory() {
     if (unloadingModel || conversationStore.loading) return;
     unloadingModel = true;
@@ -425,6 +442,23 @@
       <PersonaPicker />
     </div>
     <div class="header-right">
+      {#if vramStore.status?.gpu && vramStore.usedMb !== null}
+        {@const gpu = vramStore.status.gpu}
+        {@const usedGb = (vramStore.usedMb / 1024).toFixed(1)}
+        {@const totalGb = Math.round(gpu.vram_mb / 1024)}
+        {@const pct = Math.min(100, Math.round((vramStore.usedMb / gpu.vram_mb) * 100))}
+        <span
+          class="vram-chip"
+          class:busy={vramStore.holders.length > 0}
+          class:hot={pct >= 90}
+          title={vramTooltip()}
+        >
+          ⚡ {usedGb}/{totalGb} GB
+          <span class="vram-bar" aria-hidden="true">
+            <span class="vram-fill" style="width: {pct}%"></span>
+          </span>
+        </span>
+      {/if}
       {#if conversationStore.currentStats}
         <div class="runtime-cluster">
           <span
@@ -894,6 +928,44 @@
     background: color-mix(in srgb, #0ea5e9 12%, transparent);
     border-color: color-mix(in srgb, #0ea5e9 55%, var(--color-border));
     color: #0284c7;
+  }
+
+  /* VRAM indikátor: čip s využitím paměti GPU + mini progress bar */
+  .vram-chip {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 0.2rem 0.5rem;
+    white-space: nowrap;
+    cursor: default;
+  }
+  .vram-chip.busy {
+    color: var(--color-accent);
+    border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  }
+  .vram-chip.hot {
+    color: var(--color-error);
+    border-color: color-mix(in srgb, var(--color-error) 55%, var(--color-border));
+  }
+  .vram-bar {
+    display: block;
+    width: 100%;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--color-surface-2);
+    overflow: hidden;
+  }
+  .vram-fill {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: currentColor;
+    transition: width 0.4s ease;
   }
 
   .unload-notice {

@@ -251,6 +251,66 @@ pub async fn detect_npu() -> Result<NpuInfo, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Stav (V)RAM pro indikátor v UI: čísla z GPU + kdo paměť právě drží.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VramStatus {
+    pub gpu: Option<weave_application::ports::model_manager_port::GpuInfo>,
+    /// Vestavěný model skutečně načtený ve VRAM (ne jen kešovaný záznam —
+    /// po unloadu záznam zůstává, ale model v paměti není).
+    pub embedded_loaded: bool,
+    /// Název souboru načteného modelu (bez cesty), když je co ukázat.
+    pub embedded_model: Option<String>,
+    pub comfyui_running: bool,
+    pub openvino_running: bool,
+}
+
+/// Snímek využití (V)RAM: celkem/volno z nvidia-smi + kteří držitelé běží
+/// (vestavěný LLM, ComfyUI server, OpenVINO server). Volá se periodicky
+/// z indikátoru v hlavičce chatu.
+#[tauri::command]
+pub async fn get_vram_status(state: State<'_, AppState>) -> Result<VramStatus, String> {
+    let gpu = state.model_manager.detect_gpu().await.ok().flatten();
+
+    let (client, model_path) = {
+        let cache = state
+            .embedded_llm
+            .lock()
+            .expect("embedded_llm mutex poisoned");
+        match cache.as_ref() {
+            Some((key, client)) => (Some(client.clone()), Some(key.0.clone())),
+            None => (None, None),
+        }
+    };
+    let embedded_loaded = match &client {
+        Some(client) => client.is_loaded().await,
+        None => false,
+    };
+    let embedded_model = embedded_loaded
+        .then(|| {
+            model_path.and_then(|p| {
+                std::path::Path::new(&p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+            })
+        })
+        .flatten();
+
+    let comfyui_running = matches!(
+        state.comfy_installer.status().await,
+        Ok(weave_application::ports::comfy_installer_port::ComfyStatus::Running)
+    );
+    let openvino_running = crate::commands::openvino_installer::is_server_running().await;
+
+    Ok(VramStatus {
+        gpu,
+        embedded_loaded,
+        embedded_model,
+        comfyui_running,
+        openvino_running,
+    })
+}
+
 /// Uvolní vestavěný model z VRAM, pokud je zrovna načtený (kešovaný v
 /// `AppState.embedded_llm`) — bez tohle by uživatel musel čekat na další
 /// akci, co si o uvolnění řekne sama (generování obrázku, přepnutí backendu).

@@ -143,7 +143,7 @@ fn openvino_model_profile(root: &Path, profile_id: &str) -> Result<OpenvinoModel
         .ok_or_else(|| format!("Neznamy OpenVINO model profil: {profile_id}"))
 }
 
-async fn is_server_running() -> bool {
+pub async fn is_server_running() -> bool {
     server_state().lock().await.is_some()
 }
 
