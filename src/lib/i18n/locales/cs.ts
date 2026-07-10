@@ -233,6 +233,15 @@ const cs = {
       notifications: "Oznámení",
       logs: "Logy",
       updates: "Aktualizace",
+      backup: "Záloha",
+    },
+    backup: {
+      hint: "Záloha obsahuje konverzace, postavy, persony a nastavení (databázi) + referenční fotky. Galerie vygenerovaných obrázků se nebalí — bývá obří; obrázky ulož jednotlivě.",
+      exportButton: "Exportovat zálohu…",
+      importButton: "Obnovit ze zálohy…",
+      exportDone: "Záloha uložena ({size}).",
+      importConfirm: "Obnovit data ze zálohy? Současné konverzace, postavy a nastavení budou při příštím startu NAHRAZENY obsahem zálohy.",
+      restartRequired: "Obnova je připravená — data se vymění při restartu aplikace.",
     },
     updates: {
       currentVersion: "Aktuální verze:",

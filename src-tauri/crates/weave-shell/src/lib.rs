@@ -21,6 +21,14 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
         .expect("Nepodařilo se získat data dir");
     std::fs::create_dir_all(&data_dir)?;
 
+    // Připravená obnova ze zálohy se musí aplikovat PŘED otevřením DB poolu
+    // — otevřenou SQLite databázi nejde na Windows přepsat.
+    match weave_infrastructure::backup::apply_pending_restore(&data_dir) {
+        Ok(true) => tracing::info!("Data obnovena ze zálohy"),
+        Ok(false) => {}
+        Err(e) => tracing::error!("Obnova ze zálohy selhala: {e}"),
+    }
+
     let db_url = format!("sqlite://{}", data_dir.join("weave.db").to_string_lossy());
     let pool = db::create_pool(&db_url).await?;
 

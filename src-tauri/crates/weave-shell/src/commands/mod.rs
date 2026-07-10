@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod catalog;
 pub mod civitai;
 pub mod comfy_installer;
