@@ -143,6 +143,15 @@ pub async fn list_image_models(state: State<'_, AppState>) -> Result<Vec<Checkpo
         .map_err(|e| e.to_string())
 }
 
+/// Vypíše stažené LoRA soubory (models/loras) pro výběr v chatu.
+#[tauri::command]
+pub async fn list_lora_models(state: State<'_, AppState>) -> Result<Vec<CheckpointInfo>, String> {
+    make_installer(&state)
+        .list_loras()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Smaže stažený obrázkový checkpoint podle názvu souboru.
 #[tauri::command]
 pub async fn delete_image_model(

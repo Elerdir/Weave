@@ -659,6 +659,32 @@
         </select>
         <p class="gen-hint">{i18n.m.chat.genSettings.imageCheckpointHint}</p>
       </div>
+
+      <div class="gen-field">
+        <div class="gen-label-row">
+          <label for="gen-lora">{i18n.m.chat.genSettings.imageLora}</label>
+        </div>
+        <select
+          id="gen-lora"
+          class="gen-select"
+          value={generationSettingsStore.imageLora}
+          onchange={(e) => {
+            generationSettingsStore.setImageLora((e.target as HTMLSelectElement).value);
+            void generationSettingsStore.save();
+          }}
+        >
+          <option value="">{i18n.m.chat.genSettings.imageLoraAuto}</option>
+          {#each comfyInstallStore.loras as lora (lora.file_name)}
+            <option value={lora.file_name}>{lora.file_name}</option>
+          {/each}
+          {#if generationSettingsStore.imageLora && !comfyInstallStore.loras.some((l) => l.file_name === generationSettingsStore.imageLora)}
+            <option value={generationSettingsStore.imageLora}>
+              {generationSettingsStore.imageLora}
+            </option>
+          {/if}
+        </select>
+        <p class="gen-hint">{i18n.m.chat.genSettings.imageLoraHint}</p>
+      </div>
     </div>
   {/if}
 

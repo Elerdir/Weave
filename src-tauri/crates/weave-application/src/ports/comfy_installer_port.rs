@@ -74,6 +74,8 @@ pub trait ComfyInstallerPort: Send + Sync {
     ) -> AppResult<()>;
     /// Vypíše stažené obrázkové checkpointy (models/checkpoints).
     async fn list_checkpoints(&self) -> AppResult<Vec<CheckpointInfo>>;
+    /// Vypíše stažené LoRA soubory (models/loras).
+    async fn list_loras(&self) -> AppResult<Vec<CheckpointInfo>>;
     /// Smaže stažený checkpoint podle názvu souboru.
     async fn delete_checkpoint(&self, file_name: &str) -> AppResult<()>;
 }

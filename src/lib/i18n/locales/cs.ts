@@ -137,6 +137,10 @@ const cs = {
       imageCheckpointAuto: "Automaticky podle stylu promptu",
       imageCheckpointHint:
         "Vlastní checkpoint (např. stažený z CivitAI) místo automatické volby. Musí být SDXL architektura, jinak reference (PuLID) nefungují.",
+      imageLora: "LoRA (doplněk stylu/postavy)",
+      imageLoraAuto: "Automaticky (hledání na CivitAI podle promptu)",
+      imageLoraHint:
+        "Ručně zvolená LoRA vypne automatické hledání. Trigger words LoRA napiš do promptu sám — bez nich se neprojeví.",
       faceDetailerHint:
         "Druhý průchod přesampluje detekovaný obličej — nejvíc pomůže očím. Poprvé stáhne Impact Pack (~stovky MB) a přidá čas ke generování.",
     },

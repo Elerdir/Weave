@@ -23,6 +23,10 @@ pub struct GenerationSettings {
     /// `models/checkpoints`, např. stažený z CivitAI). `None`/prázdný =
     /// automatická volba podle stylu promptu (RealVisXL/Pony/SDXL).
     pub image_checkpoint: Option<String>,
+    /// LoRA pro generování obrázků (název souboru v ComfyUI `models/loras`).
+    /// `None`/prázdný = automatické vyhledání na CivitAI podle promptu.
+    /// Trigger words si musí uživatel napsat do promptu sám.
+    pub image_lora: Option<String>,
 }
 
 impl GenerationSettings {
@@ -48,6 +52,14 @@ impl GenerationSettings {
             .map(str::trim)
             .filter(|s| !s.is_empty())
     }
+
+    /// Vybraná LoRA obrázků, pokud je nastavená a neprázdná.
+    pub fn image_lora(&self) -> Option<&str> {
+        self.image_lora
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
 }
 
 #[cfg(test)]
@@ -64,6 +76,8 @@ mod tests {
         assert!(s.face_detailer.is_none());
         assert!(s.runtime_backend.is_none());
         assert!(s.image_checkpoint.is_none());
+        assert!(s.image_lora.is_none());
+        assert!(s.image_lora().is_none());
         assert_eq!(s.temperature_or_default(), 0.7);
         assert_eq!(s.pulid_weight_or_default(), 1.0);
         assert!(!s.face_detailer_enabled());

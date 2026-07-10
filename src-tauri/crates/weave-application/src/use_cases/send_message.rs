@@ -712,6 +712,7 @@ impl SendMessageUseCase {
                     gen.pulid_weight_or_default(),
                     gen.face_detailer_enabled(),
                     gen.image_checkpoint().map(str::to_string),
+                    gen.image_lora().map(str::to_string),
                     tee_tx,
                 )
                 .await
@@ -840,6 +841,7 @@ impl SendMessageUseCase {
         pulid_weight: f32,
         face_detailer: bool,
         checkpoint_override: Option<String>,
+        lora_override: Option<String>,
         stream_tx: mpsc::Sender<StreamChunk>,
     ) -> AppResult<()> {
         use crate::ports::comfy_installer_port::ComfyStatus;
@@ -987,8 +989,13 @@ impl SendMessageUseCase {
         // vhodnou LoRA, stáhnout ji (pokud chybí) a zapojit: soubor do
         // workflow, trigger words do promptu. Jakékoli selhání = generuje
         // se bez LoRA, nikdy to neshodí celou pipeline.
-        let mut lora_file = None;
-        if let Some(query) = lora_query {
+        // Ruční volba LoRA (per konverzace) má přednost — automatické hledání
+        // na CivitAI se pak vynechá. Trigger words si píše uživatel do promptu
+        // sám (u ručně stažených LoRA je nemáme jak zjistit).
+        let mut lora_file = lora_override;
+        if lora_file.is_some() {
+            tracing::info!(lora = ?lora_file, "Použita ručně zvolená LoRA");
+        } else if let Some(query) = lora_query {
             let base_model = match style {
                 StylePreset::SemiRealistic | StylePreset::Anime => "Pony",
                 _ => "SDXL 1.0",
@@ -2472,6 +2479,83 @@ mod tests {
         uc.execute(
             ConversationId::new(),
             "vygeneruj obrázek hradu".into(),
+            vec![],
+            vec![],
+            None,
+            true,
+            tx,
+        )
+        .await
+        .unwrap();
+        while let Some(chunk) = rx.recv().await {
+            if let StreamChunk::Error(e) = chunk {
+                panic!("necekana chyba: {e}");
+            }
+        }
+    }
+
+    /// Ručně zvolená LoRA (per konverzace) musí doletět do ImageRequestu
+    /// a automatické hledání na CivitAI se nesmí spustit.
+    #[tokio::test]
+    async fn image_lora_override_reaches_request_and_skips_civitai_search() {
+        let mut conv_repo = MockConversationRepository::new();
+        conv_repo
+            .expect_find_by_id()
+            .returning(|_| Box::pin(async { Ok(Some(dummy_conversation())) }));
+        let mut msg_repo = MockMessageRepository::new();
+        msg_repo
+            .expect_save()
+            .returning(|_| Box::pin(async { Ok(()) }));
+
+        let mut gen_repo = MockGenerationSettingsRepository::new();
+        gen_repo.expect_get().returning(|_| {
+            Box::pin(async {
+                Ok(weave_domain::generation_settings::GenerationSettings {
+                    image_lora: Some("nikol_v1.safetensors".into()),
+                    ..Default::default()
+                })
+            })
+        });
+
+        // Klíčové: automatické hledání LoRA se při ruční volbě nevolá
+        let mut catalog = MockLoraCatalogPort::new();
+        catalog.expect_find_lora().never();
+
+        let mut image_gen = MockImageGenPort::new();
+        image_gen
+            .expect_generate()
+            .withf(|req: &ImageRequest, _tx| {
+                req.lora_file.as_deref() == Some("nikol_v1.safetensors")
+            })
+            .returning(|_req, tx| {
+                Box::pin(async move {
+                    let _ = tx
+                        .send(ImageProgress::Done {
+                            output_path: "/gallery/lora.png".into(),
+                        })
+                        .await;
+                    Ok(())
+                })
+            });
+
+        let uc = SendMessageUseCase::new(
+            Arc::new(conv_repo),
+            Arc::new(msg_repo),
+            Arc::new(image_prompt_llm()),
+            Arc::new(image_gen),
+            Arc::new(MockWorkspaceRepository::new()),
+            Arc::new(MockPersonaRepository::new()),
+            Arc::new(MockAttachmentStorePort::new()),
+            Arc::new(gen_repo),
+            Arc::new(default_comfy_installer()),
+            Arc::new(catalog),
+            Arc::new(default_subject_repo()),
+        );
+
+        let (tx, mut rx) = mpsc::channel(64);
+        uc.execute(
+            ConversationId::new(),
+            "vygeneruj obrázek portrétu".into(),
             vec![],
             vec![],
             None,

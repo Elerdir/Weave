@@ -139,6 +139,10 @@ const en: Messages = {
       imageCheckpointAuto: "Automatic by prompt style",
       imageCheckpointHint:
         "Custom checkpoint (e.g. downloaded from CivitAI) instead of the automatic choice. Must be SDXL architecture, otherwise references (PuLID) won't work.",
+      imageLora: "LoRA (style/character add-on)",
+      imageLoraAuto: "Automatic (CivitAI search by prompt)",
+      imageLoraHint:
+        "A manually chosen LoRA disables the automatic search. Write the LoRA trigger words into the prompt yourself — without them it has no effect.",
       faceDetailerHint:
         "A second pass re-samples the detected face — helps the eyes most. First use downloads the Impact Pack (~hundreds of MB) and adds time to generation.",
     },

@@ -37,12 +37,16 @@ function createComfyInstallStore() {
   let starting = $state(false);
   let uninstalling = $state(false);
   let checkpoints = $state<CheckpointInfo[]>([]);
+  let loras = $state<CheckpointInfo[]>([]);
   let diagnostics = $state<ComfyDiagnostics | null>(null);
   let diagnosing = $state(false);
 
   return {
     get checkpoints() {
       return checkpoints;
+    },
+    get loras() {
+      return loras;
     },
     get status() {
       return status;
@@ -75,6 +79,7 @@ function createComfyInstallStore() {
     async load() {
       status = await invoke<ComfyStatus>("get_comfyui_status");
       checkpoints = await invoke<CheckpointInfo[]>("list_image_models");
+      loras = await invoke<CheckpointInfo[]>("list_lora_models");
     },
 
     async deleteCheckpoint(fileName: string) {
