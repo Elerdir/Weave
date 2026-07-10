@@ -36,6 +36,8 @@ struct SearchResponse {
 
 #[derive(Deserialize)]
 struct ModelItem {
+    #[serde(default)]
+    id: u64,
     name: String,
     #[serde(default)]
     nsfw: bool,
@@ -86,25 +88,63 @@ struct ModelFile {
     size_kb: f64,
 }
 
-/// Vybere z odpovědi první model se stažitelným .safetensors souborem.
-/// Čistá funkce kvůli testům.
-fn pick_lora(response: SearchResponse) -> Option<LoraInfo> {
-    for item in response.items {
+/// SDXL rodina architektur — LoRA z těchto bází se do SDXL workflow načtou
+/// (Pony/Illustrious/NoobAI jsou doladěné SDXL). SD 1.x/2.x/Flux LoRA by se
+/// nenačetly správně, ty se přeskakují.
+const SDXL_FAMILY: &[&str] = &[
+    "SDXL 1.0",
+    "SDXL 0.9",
+    "Pony",
+    "Illustrious",
+    "NoobAI",
+    "SDXL Turbo",
+    "SDXL Lightning",
+];
+
+/// Vybere nejvhodnější LoRA. Bere jen SDXL rodinu (kompatibilní
+/// architektura) a řadí podle: 1) shoda jména s dotazem (tag hledání vrací
+/// i tangenciální modely — „ahsoka tano" štítek nese třeba Star Wars lokace),
+/// 2) přesně požadovaná báze (`preferred_base`) před ostatními z rodiny,
+/// 3) pořadí z katalogu (řazeno podle stažení). Čistá funkce kvůli testům.
+fn pick_lora(items: &[ModelItem], query: &str, preferred_base: &str) -> Option<LoraInfo> {
+    let query_tokens: Vec<String> = query
+        .to_lowercase()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+
+    let mut best: Option<((usize, usize), LoraInfo)> = None;
+    for item in items {
+        let name = item.name.to_lowercase();
+        let name_rank = usize::from(
+            query_tokens.is_empty() || !query_tokens.iter().all(|t| name.contains(t.as_str())),
+        );
         for version in &item.model_versions {
-            let file = version.files.iter().find(|f| {
+            if !SDXL_FAMILY.contains(&version.base_model.as_str()) {
+                continue;
+            }
+            let Some(file) = version.files.iter().find(|f| {
                 f.name.to_ascii_lowercase().ends_with(".safetensors") && f.download_url.is_some()
-            });
-            if let Some(file) = file {
-                return Some(LoraInfo {
+            }) else {
+                continue;
+            };
+            let rank = (name_rank, usize::from(version.base_model != preferred_base));
+            if best.as_ref().is_none_or(|(r, _)| rank < *r) {
+                let info = LoraInfo {
                     name: item.name.clone(),
                     file_name: file.name.clone(),
                     download_url: file.download_url.clone().expect("filtrováno výše"),
                     trigger_words: version.trained_words.clone(),
-                });
+                };
+                let done = rank == (0, 0);
+                best = Some((rank, info));
+                if done {
+                    return best.map(|(_, i)| i);
+                }
             }
         }
     }
-    None
+    best.map(|(_, i)| i)
 }
 
 impl CivitAiClient {
@@ -154,19 +194,21 @@ fn to_browse_item(item: &ModelItem, kind: ImageModelKind) -> Option<CatalogBrows
     None
 }
 
-#[async_trait]
-impl LoraCatalogPort for CivitAiClient {
-    async fn find_lora(&self, query: &str, base_model: &str) -> AppResult<Option<LoraInfo>> {
+impl CivitAiClient {
+    /// Jeden dotaz na `/api/v1/models` s daným vyhledávacím parametrem
+    /// (`query` = fulltext, `tag` = přesný štítek). `nsfw=true` je nutné —
+    /// API jinak NSFW modely tiše skrývá (u LoRA postav velmi časté).
+    async fn search_loras(&self, param: (&str, &str)) -> AppResult<Vec<ModelItem>> {
         let url = format!("{}/api/v1/models", self.base_url);
         let resp = self
             .http
             .get(&url)
             .query(&[
-                ("limit", "5"),
+                ("limit", "15"),
                 ("types", "LORA"),
-                ("sort", "Highest Rated"),
-                ("query", query),
-                ("baseModels", base_model),
+                ("sort", "Most Downloaded"),
+                ("nsfw", "true"),
+                param,
             ])
             .send()
             .await
@@ -183,8 +225,31 @@ impl LoraCatalogPort for CivitAiClient {
             .json()
             .await
             .map_err(|e| AppError::ComfyUi(format!("CivitAI odpověď nejde přečíst: {e}")))?;
+        Ok(parsed.items)
+    }
+}
 
-        Ok(pick_lora(parsed).map(|mut lora| {
+#[async_trait]
+impl LoraCatalogPort for CivitAiClient {
+    async fn find_lora(&self, query: &str, base_model: &str) -> AppResult<Option<LoraInfo>> {
+        // Fulltext `query` je na CivitAI překvapivě slabý (např. „ahsoka"
+        // nenajde nic) — `tag` hledání bývá výrazně bohatší. Kombinují se
+        // oba zdroje; kompatibilitu architektury (SDXL rodina) a preferenci
+        // base modelu řeší až pick_lora, serverový `baseModels` filtr by
+        // zahodil použitelné Pony/Illustrious LoRA.
+        let mut items = self.search_loras(("query", query)).await?;
+        match self.search_loras(("tag", &query.to_lowercase())).await {
+            Ok(tagged) => {
+                for item in tagged {
+                    if !items.iter().any(|i| i.id == item.id) {
+                        items.push(item);
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("CivitAI tag hledání selhalo ({e}) — pokračuji jen s query"),
+        }
+
+        Ok(pick_lora(&items, query, base_model).map(|mut lora| {
             lora.download_url = self.with_token(lora.download_url);
             lora
         }))
@@ -251,13 +316,16 @@ mod tests {
         serde_json::json!({
             "items": [
                 {
+                    "id": 1,
                     "name": "Bez souboru",
-                    "modelVersions": [ { "trainedWords": [], "files": [] } ]
+                    "modelVersions": [ { "baseModel": "Pony", "trainedWords": [], "files": [] } ]
                 },
                 {
+                    "id": 2,
                     "name": "Nikol Style",
                     "modelVersions": [
                         {
+                            "baseModel": "Pony",
                             "trainedWords": ["nikol woman"],
                             "files": [
                                 { "name": "readme.txt", "downloadUrl": "https://cdn/x.txt" },
@@ -276,7 +344,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/api/v1/models"))
             .and(query_param("types", "LORA"))
-            .and(query_param("baseModels", "Pony"))
+            .and(query_param("nsfw", "true"))
             .respond_with(ResponseTemplate::new(200).set_body_json(sample_body()))
             .mount(&server)
             .await;
@@ -406,6 +474,83 @@ mod tests {
             "https://cdn/realvis_ultra.safetensors?token=tajny"
         );
         assert_eq!(items[0].kind, ImageModelKind::Lora);
+    }
+
+    #[test]
+    fn pick_lora_prefers_exact_base_and_skips_incompatible() {
+        let items: Vec<ModelItem> = serde_json::from_value(serde_json::json!([
+            {
+                "id": 1,
+                "name": "SD15 only",
+                "modelVersions": [
+                    { "baseModel": "SD 1.5", "trainedWords": [],
+                      "files": [ { "name": "old.safetensors", "downloadUrl": "https://cdn/old" } ] }
+                ]
+            },
+            {
+                "id": 2,
+                "name": "Illustrious verze",
+                "modelVersions": [
+                    { "baseModel": "Illustrious", "trainedWords": ["ahsoka"],
+                      "files": [ { "name": "ill.safetensors", "downloadUrl": "https://cdn/ill" } ] }
+                ]
+            },
+            {
+                "id": 3,
+                "name": "Presna baze",
+                "modelVersions": [
+                    { "baseModel": "SDXL 1.0", "trainedWords": ["ahsoka tano"],
+                      "files": [ { "name": "sdxl.safetensors", "downloadUrl": "https://cdn/sdxl" } ] }
+                ]
+            }
+        ]))
+        .unwrap();
+
+        // Bez jmenné shody rozhoduje báze: přesná vyhrává nad Illustrious
+        let picked = pick_lora(&items, "zzz", "SDXL 1.0").unwrap();
+        assert_eq!(picked.file_name, "sdxl.safetensors");
+
+        // Bez přesné shody se vezme první z SDXL rodiny (SD 1.5 se přeskočí)
+        let picked = pick_lora(&items, "zzz", "Pony").unwrap();
+        assert_eq!(picked.file_name, "ill.safetensors");
+
+        // Jmenná shoda s dotazem přebíjí přesnou bázi — tag hledání vrací
+        // i tangenciální modely (Star Wars lokace u štítku „ahsoka tano"),
+        // postava v názvu je silnější signál než báze.
+        let picked = pick_lora(&items, "Illustrious VERZE", "SDXL 1.0").unwrap();
+        assert_eq!(picked.file_name, "ill.safetensors");
+
+        // Jen nekompatibilní báze → nic
+        let sd15only = &items[..1];
+        assert!(pick_lora(sd15only, "zzz", "SDXL 1.0").is_none());
+    }
+
+    #[tokio::test]
+    async fn find_lora_falls_back_to_tag_search() {
+        // Fulltext `query` nic nenajde (reálná slabina CivitAI API),
+        // `tag` hledání ano — výsledek se musí použít.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models"))
+            .and(query_param("tag", "ahsoka tano"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(sample_body()))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "items": [] })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = CivitAiClient::with_base_url(server.uri(), None);
+        let lora = client
+            .find_lora("Ahsoka Tano", "Pony")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lora.file_name, "nikol_v1.safetensors");
     }
 
     #[tokio::test]

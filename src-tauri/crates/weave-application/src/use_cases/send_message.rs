@@ -1035,7 +1035,20 @@ impl SendMessageUseCase {
                         }
                     }
                 }
-                Ok(None) => tracing::info!(%query, "Žádná vhodná LoRA nenalezena"),
+                Ok(None) => {
+                    tracing::info!(%query, "Žádná vhodná LoRA nenalezena");
+                    // Ať to uživatel vidí v průběhu, ne jen v logu — jinak to
+                    // vypadá, že se hledání ani nepokusilo.
+                    let _ = stream_tx
+                        .send(StreamChunk::ImageStage(ImageStageInfo {
+                            stage: ImageStage::DownloadingModel,
+                            detail: Some(format!(
+                                "LoRA pro '{query}' nenalezena — generuji bez ní"
+                            )),
+                            percent: None,
+                        }))
+                        .await;
+                }
                 Err(e) => tracing::warn!("Hledání LoRA selhalo ({e}) — generuji bez ní"),
             }
         }
