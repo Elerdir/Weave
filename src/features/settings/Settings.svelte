@@ -5,7 +5,8 @@
   import type { Locale } from "$lib/i18n/index.svelte";
   import { themeStore } from "$lib/theme/index.svelte";
   import type { Theme } from "$lib/theme/index.svelte";
-  import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
+  import { open as openFilePicker, save as saveFileDialog } from "@tauri-apps/plugin-dialog";
+  import { relaunch } from "@tauri-apps/plugin-process";
   import { open as openUrl } from "@tauri-apps/plugin-shell";
   import { settingsStore } from "$lib/stores/settings.svelte";
   import type { ApiServiceId } from "$lib/stores/settings.svelte";
@@ -107,7 +108,55 @@
 
   let { onClose, windowMode = false }: { onClose: () => void; windowMode?: boolean } = $props();
 
-  type Section = "appearance" | "language" | "apiKeys" | "llm" | "runtime" | "downloads" | "comfyui" | "models" | "notifications" | "logs" | "updates";
+  type Section = "appearance" | "language" | "apiKeys" | "llm" | "runtime" | "downloads" | "comfyui" | "models" | "notifications" | "logs" | "updates" | "backup";
+  // Záloha dat: export/import ZIP (import se aplikuje po restartu)
+  let backupBusy = $state(false);
+  let backupNotice = $state<string | null>(null);
+  let backupError = $state<string | null>(null);
+  let restorePending = $state(false);
+
+  async function exportBackup() {
+    backupError = null;
+    backupNotice = null;
+    const date = new Date().toISOString().slice(0, 10);
+    const dest = await saveFileDialog({
+      defaultPath: `weave-zaloha-${date}.zip`,
+      filters: [{ name: "ZIP", extensions: ["zip"] }],
+    });
+    if (!dest) return;
+    backupBusy = true;
+    try {
+      const size = await invoke<number>("export_backup", { dest });
+      backupNotice = i18n.t("settings.backup.exportDone", {
+        size: formatBytes(size),
+      });
+    } catch (e) {
+      backupError = String(e);
+    } finally {
+      backupBusy = false;
+    }
+  }
+
+  async function importBackup() {
+    backupError = null;
+    backupNotice = null;
+    const src = await openFilePicker({
+      multiple: false,
+      filters: [{ name: "ZIP", extensions: ["zip"] }],
+    });
+    if (!src || Array.isArray(src)) return;
+    if (!confirm(i18n.m.settings.backup.importConfirm)) return;
+    backupBusy = true;
+    try {
+      await invoke("import_backup", { src });
+      restorePending = true;
+    } catch (e) {
+      backupError = String(e);
+    } finally {
+      backupBusy = false;
+    }
+  }
+
   let section = $state<Section>("appearance");
 
   let appVersion = $state("");
@@ -252,6 +301,9 @@
         </button>
         <button class:active={section === "updates"} onclick={() => (section = "updates")}>
           {i18n.m.settings.sections.updates}
+        </button>
+        <button class:active={section === "backup"} onclick={() => (section = "backup")}>
+          {i18n.m.settings.sections.backup}
         </button>
       </nav>
 
@@ -1449,6 +1501,31 @@
             🗗 {i18n.m.settings.logs.openWindow}
           </button>
           <LogViewer />
+        {:else if section === "backup"}
+          <h3>{i18n.m.settings.sections.backup}</h3>
+          <p class="hint">{i18n.m.settings.backup.hint}</p>
+
+          <div class="option-row">
+            <button class="btn-sm primary" disabled={backupBusy} onclick={exportBackup}>
+              {backupBusy ? i18n.m.common.loading : i18n.m.settings.backup.exportButton}
+            </button>
+            <button class="btn-sm" disabled={backupBusy || restorePending} onclick={importBackup}>
+              {i18n.m.settings.backup.importButton}
+            </button>
+          </div>
+
+          {#if backupNotice}
+            <span class="conn-status connected">{backupNotice}</span>
+          {/if}
+          {#if backupError}
+            <span class="conn-status disconnected">{backupError}</span>
+          {/if}
+          {#if restorePending}
+            <p class="hint">{i18n.m.settings.backup.restartRequired}</p>
+            <button class="btn-sm primary" onclick={() => relaunch()}>
+              {i18n.m.settings.updates.restartNow}
+            </button>
+          {/if}
         {:else if section === "updates"}
           <h3>{i18n.m.settings.sections.updates}</h3>
           <div class="version-row">

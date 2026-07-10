@@ -212,6 +212,8 @@ pub fn run() {
             commands::subjects::add_subject_image,
             commands::subjects::remove_subject_image,
             commands::subjects::open_subjects_window,
+            commands::backup::export_backup,
+            commands::backup::import_backup,
             commands::catalog::search_model_catalog,
             commands::civitai::browse_civitai,
             commands::civitai::download_civitai_model,

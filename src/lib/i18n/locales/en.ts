@@ -235,6 +235,15 @@ const en: Messages = {
       notifications: "Notifications",
       logs: "Logs",
       updates: "Updates",
+      backup: "Backup",
+    },
+    backup: {
+      hint: "A backup contains conversations, characters, personas and settings (the database) + reference photos. The generated images gallery is not included — it tends to be huge; save images individually.",
+      exportButton: "Export backup…",
+      importButton: "Restore from backup…",
+      exportDone: "Backup saved ({size}).",
+      importConfirm: "Restore data from backup? Current conversations, characters and settings will be REPLACED on next start.",
+      restartRequired: "Restore is staged — data will be swapped on app restart.",
     },
     updates: {
       currentVersion: "Current version:",
