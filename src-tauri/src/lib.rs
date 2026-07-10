@@ -192,6 +192,7 @@ pub fn run() {
             commands::comfy_installer::start_comfyui_server,
             commands::comfy_installer::stop_comfyui_server,
             commands::comfy_installer::list_image_models,
+            commands::comfy_installer::list_lora_models,
             commands::comfy_installer::delete_image_model,
             commands::comfy_installer::save_file_copy,
             commands::settings::test_local_llm_connection,

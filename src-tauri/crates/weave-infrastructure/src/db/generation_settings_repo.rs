@@ -25,7 +25,7 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
         let id_str = id.as_uuid().to_string();
         let row = sqlx::query(
             "SELECT context_length, temperature, max_tokens, pulid_weight, face_detailer,
-                    runtime_backend, image_checkpoint
+                    runtime_backend, image_checkpoint, image_lora
              FROM conversation_settings WHERE conversation_id = ?",
         )
         .bind(&id_str)
@@ -64,6 +64,9 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
             image_checkpoint: row
                 .try_get::<Option<String>, _>("image_checkpoint")
                 .map_err(|e| AppError::Repository(e.to_string()))?,
+            image_lora: row
+                .try_get::<Option<String>, _>("image_lora")
+                .map_err(|e| AppError::Repository(e.to_string()))?,
         })
     }
 
@@ -72,8 +75,8 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
         sqlx::query(
             "INSERT INTO conversation_settings
                  (conversation_id, context_length, temperature, max_tokens, pulid_weight,
-                  face_detailer, runtime_backend, image_checkpoint)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  face_detailer, runtime_backend, image_checkpoint, image_lora)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(conversation_id) DO UPDATE SET
                  context_length = excluded.context_length,
                  temperature = excluded.temperature,
@@ -81,7 +84,8 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
                  pulid_weight = excluded.pulid_weight,
                  face_detailer = excluded.face_detailer,
                  runtime_backend = excluded.runtime_backend,
-                 image_checkpoint = excluded.image_checkpoint",
+                 image_checkpoint = excluded.image_checkpoint,
+                 image_lora = excluded.image_lora",
         )
         .bind(&id_str)
         .bind(settings.context_length.map(|v| v as i64))
@@ -91,6 +95,7 @@ impl GenerationSettingsRepository for SqliteGenerationSettingsRepository {
         .bind(settings.face_detailer.map(i64::from))
         .bind(settings.runtime_backend.as_deref())
         .bind(settings.image_checkpoint.as_deref())
+        .bind(settings.image_lora.as_deref())
         .execute(&self.pool)
         .await
         .map_err(|e| AppError::Repository(e.to_string()))?;
@@ -142,6 +147,7 @@ mod tests {
             face_detailer: Some(true),
             runtime_backend: Some("openvino_npu".to_string()),
             image_checkpoint: Some("realvis_ultra.safetensors".to_string()),
+            image_lora: Some("nikol_v1.safetensors".to_string()),
         };
         repo.set(&conv, &first).await.unwrap();
         assert_eq!(repo.get(&conv).await.unwrap(), first);
@@ -155,6 +161,7 @@ mod tests {
             face_detailer: Some(false),
             runtime_backend: Some("default".to_string()),
             image_checkpoint: None,
+            image_lora: None,
         };
         repo.set(&conv, &second).await.unwrap();
         assert_eq!(repo.get(&conv).await.unwrap(), second);

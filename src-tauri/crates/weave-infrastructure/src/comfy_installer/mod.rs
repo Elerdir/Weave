@@ -115,6 +115,32 @@ fn clear_readonly_flags(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// Vypíše model soubory (.safetensors/.ckpt) ve složce, seřazené podle názvu.
+/// Neexistující složka = prázdný seznam (nic se zatím nestáhlo).
+fn list_model_files(dir: &Path) -> Vec<CheckpointInfo> {
+    let mut result = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return result;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_model = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+            e.eq_ignore_ascii_case("safetensors") || e.eq_ignore_ascii_case("ckpt")
+        });
+        if !is_model {
+            continue;
+        }
+        if let (Some(name), Ok(meta)) = (path.file_name(), entry.metadata()) {
+            result.push(CheckpointInfo {
+                file_name: name.to_string_lossy().into_owned(),
+                size_bytes: meta.len(),
+            });
+        }
+    }
+    result.sort_by(|a, b| a.file_name.cmp(&b.file_name));
+    result
+}
+
 pub struct LocalComfyInstaller {
     install_dir: PathBuf,
     server: Arc<Mutex<Option<Child>>>,
@@ -757,28 +783,11 @@ impl ComfyInstallerPort for LocalComfyInstaller {
     }
 
     async fn list_checkpoints(&self) -> AppResult<Vec<CheckpointInfo>> {
-        let dir = self.checkpoints_dir();
-        let mut result = Vec::new();
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return Ok(result); // složka ještě neexistuje = žádné modely
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let is_model = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
-                e.eq_ignore_ascii_case("safetensors") || e.eq_ignore_ascii_case("ckpt")
-            });
-            if !is_model {
-                continue;
-            }
-            if let (Some(name), Ok(meta)) = (path.file_name(), entry.metadata()) {
-                result.push(CheckpointInfo {
-                    file_name: name.to_string_lossy().into_owned(),
-                    size_bytes: meta.len(),
-                });
-            }
-        }
-        result.sort_by(|a, b| a.file_name.cmp(&b.file_name));
-        Ok(result)
+        Ok(list_model_files(&self.checkpoints_dir()))
+    }
+
+    async fn list_loras(&self) -> AppResult<Vec<CheckpointInfo>> {
+        Ok(list_model_files(&self.loras_dir()))
     }
 
     async fn delete_checkpoint(&self, file_name: &str) -> AppResult<()> {

@@ -62,6 +62,7 @@ describe("generationSettingsStore", () => {
       face_detailer: null,
       runtime_backend: null,
       image_checkpoint: null,
+      image_lora: null,
     });
     await generationSettingsStore.load("conv-1");
 
@@ -71,6 +72,7 @@ describe("generationSettingsStore", () => {
     generationSettingsStore.setPulidWeight(0.75);
     generationSettingsStore.setFaceDetailer(true);
     generationSettingsStore.setImageCheckpoint("realvis_ultra.safetensors");
+    generationSettingsStore.setImageLora("nikol_v1.safetensors");
 
     mockInvoke.mockResolvedValueOnce(undefined);
     await generationSettingsStore.save();
@@ -85,6 +87,7 @@ describe("generationSettingsStore", () => {
         face_detailer: true,
         runtime_backend: "default",
         image_checkpoint: "realvis_ultra.safetensors",
+        image_lora: "nikol_v1.safetensors",
       },
     });
   });
@@ -98,9 +101,11 @@ describe("generationSettingsStore", () => {
       face_detailer: null,
       runtime_backend: null,
       image_checkpoint: null,
+      image_lora: null,
     });
     await generationSettingsStore.load("conv-2");
     generationSettingsStore.setImageCheckpoint("  ");
+    generationSettingsStore.setImageLora("");
 
     mockInvoke.mockResolvedValueOnce(undefined);
     await generationSettingsStore.save();

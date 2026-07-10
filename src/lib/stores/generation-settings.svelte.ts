@@ -9,6 +9,7 @@ export interface GenerationSettings {
   face_detailer: boolean | null;
   runtime_backend: RuntimeBackend | null;
   image_checkpoint: string | null;
+  image_lora: string | null;
 }
 
 export type RuntimeBackend = "default" | "mistral" | "local" | "embedded" | "openvino_npu";
@@ -31,6 +32,8 @@ function createGenerationSettingsStore() {
   let runtimeBackend = $state<RuntimeBackend>("default");
   /** Checkpoint obrázků; "" = automaticky podle stylu promptu. */
   let imageCheckpoint = $state("");
+  /** LoRA obrázků; "" = automatické hledání na CivitAI podle promptu. */
+  let imageLora = $state("");
 
   return {
     get contextLength() {
@@ -54,6 +57,9 @@ function createGenerationSettingsStore() {
     get imageCheckpoint() {
       return imageCheckpoint;
     },
+    get imageLora() {
+      return imageLora;
+    },
 
     async load(id: string) {
       conversationId = id;
@@ -67,6 +73,7 @@ function createGenerationSettingsStore() {
       faceDetailer = s.face_detailer ?? false;
       runtimeBackend = s.runtime_backend ?? "default";
       imageCheckpoint = s.image_checkpoint ?? "";
+      imageLora = s.image_lora ?? "";
     },
 
     setContextLength(value: number) {
@@ -99,6 +106,10 @@ function createGenerationSettingsStore() {
       imageCheckpoint = value;
     },
 
+    setImageLora(value: string) {
+      imageLora = value;
+    },
+
     async save() {
       if (!conversationId) return;
       const settings: GenerationSettings = {
@@ -109,6 +120,7 @@ function createGenerationSettingsStore() {
         face_detailer: faceDetailer,
         runtime_backend: runtimeBackend,
         image_checkpoint: imageCheckpoint.trim() ? imageCheckpoint.trim() : null,
+        image_lora: imageLora.trim() ? imageLora.trim() : null,
       };
       await invoke("set_conversation_settings", { conversationId, settings });
     },
