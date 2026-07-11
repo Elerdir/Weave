@@ -194,38 +194,72 @@ fn to_browse_item(item: &ModelItem, kind: ImageModelKind) -> Option<CatalogBrows
     None
 }
 
+/// Kolikrát zkusit hledání znovu při přechodné chybě (503/429). CivitAI je
+/// notoricky nespolehlivé a rate-limituje — jeden 503 nesmí shodit celé
+/// generování.
+const SEARCH_ATTEMPTS: u32 = 3;
+
 impl CivitAiClient {
+    /// Přidá `Authorization: Bearer <token>`, pokud ho máme. Autentizované
+    /// dotazy mají u CivitAI vyšší rate limity a spolehlivější přístup
+    /// k NSFW obsahu — právě tam bez tokenu chodí 503.
+    fn authed(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.token {
+            Some(token) => req.bearer_auth(token),
+            None => req,
+        }
+    }
+
     /// Jeden dotaz na `/api/v1/models` s daným vyhledávacím parametrem
     /// (`query` = fulltext, `tag` = přesný štítek). `nsfw=true` je nutné —
     /// API jinak NSFW modely tiše skrývá (u LoRA postav velmi časté).
+    /// Retry na 503/429 s narůstajícím backoffem.
     async fn search_loras(&self, param: (&str, &str)) -> AppResult<Vec<ModelItem>> {
         let url = format!("{}/api/v1/models", self.base_url);
-        let resp = self
-            .http
-            .get(&url)
-            .query(&[
-                ("limit", "15"),
-                ("types", "LORA"),
-                ("sort", "Most Downloaded"),
-                ("nsfw", "true"),
-                param,
-            ])
-            .send()
-            .await
-            .map_err(|e| AppError::ComfyUi(format!("CivitAI hledání selhalo: {e}")))?;
+        let mut last_err = String::new();
+        for attempt in 1..=SEARCH_ATTEMPTS {
+            let resp = self
+                .authed(self.http.get(&url))
+                .query(&[
+                    ("limit", "15"),
+                    ("types", "LORA"),
+                    ("sort", "Most Downloaded"),
+                    ("nsfw", "true"),
+                    param,
+                ])
+                .send()
+                .await;
 
-        if !resp.status().is_success() {
-            return Err(AppError::ComfyUi(format!(
-                "CivitAI hledání selhalo: HTTP {}",
-                resp.status()
-            )));
+            match resp {
+                Ok(resp) if resp.status().is_success() => {
+                    let parsed: SearchResponse = resp.json().await.map_err(|e| {
+                        AppError::ComfyUi(format!("CivitAI odpověď nejde přečíst: {e}"))
+                    })?;
+                    return Ok(parsed.items);
+                }
+                // 503/429 (a 5xx obecně) = přechodné → zkusit znovu.
+                Ok(resp) if resp.status().is_server_error() || resp.status().as_u16() == 429 => {
+                    last_err = format!("HTTP {}", resp.status());
+                }
+                // Ostatní HTTP chyby (4xx mimo 429) nemá smysl opakovat.
+                Ok(resp) => {
+                    return Err(AppError::ComfyUi(format!(
+                        "CivitAI hledání selhalo: HTTP {}",
+                        resp.status()
+                    )));
+                }
+                Err(e) => last_err = e.to_string(),
+            }
+
+            if attempt < SEARCH_ATTEMPTS {
+                tracing::warn!(attempt, error = %last_err, "CivitAI hledání — přechodná chyba, zkouším znovu");
+                tokio::time::sleep(std::time::Duration::from_millis(800 * u64::from(attempt)))
+                    .await;
+            }
         }
-
-        let parsed: SearchResponse = resp
-            .json()
-            .await
-            .map_err(|e| AppError::ComfyUi(format!("CivitAI odpověď nejde přečíst: {e}")))?;
-        Ok(parsed.items)
+        Err(AppError::ComfyUi(format!(
+            "CivitAI hledání selhalo po {SEARCH_ATTEMPTS} pokusech: {last_err}"
+        )))
     }
 }
 
@@ -237,16 +271,38 @@ impl LoraCatalogPort for CivitAiClient {
         // oba zdroje; kompatibilitu architektury (SDXL rodina) a preferenci
         // base modelu řeší až pick_lora, serverový `baseModels` filtr by
         // zahodil použitelné Pony/Illustrious LoRA.
-        let mut items = self.search_loras(("query", query)).await?;
-        match self.search_loras(("tag", &query.to_lowercase())).await {
-            Ok(tagged) => {
-                for item in tagged {
-                    if !items.iter().any(|i| i.id == item.id) {
-                        items.push(item);
-                    }
+        // Obě hledání jsou tolerantní — CivitAI běžně na jednom endpointu
+        // vrátí 503. Použije se, co projde; chyba se hlásí jen když selžou
+        // OBĚ (jinak by přechodný 503 na `query` zbytečně shodil celé hledání,
+        // i kdyby `tag` vrátilo výsledky).
+        let lower = query.to_lowercase();
+        let (query_result, tag_result) = tokio::join!(
+            self.search_loras(("query", query)),
+            self.search_loras(("tag", &lower)),
+        );
+
+        let mut items: Vec<ModelItem> = Vec::new();
+        let mut push_unique = |source: Vec<ModelItem>| {
+            for item in source {
+                if !items.iter().any(|i| i.id == item.id) {
+                    items.push(item);
                 }
             }
-            Err(e) => tracing::warn!("CivitAI tag hledání selhalo ({e}) — pokračuji jen s query"),
+        };
+        match (query_result, tag_result) {
+            (Ok(q), Ok(t)) => {
+                push_unique(q);
+                push_unique(t);
+            }
+            (Ok(q), Err(e)) => {
+                tracing::warn!("CivitAI tag hledání selhalo ({e}) — pokračuji jen s query");
+                push_unique(q);
+            }
+            (Err(e), Ok(t)) => {
+                tracing::warn!("CivitAI query hledání selhalo ({e}) — pokračuji jen s tag");
+                push_unique(t);
+            }
+            (Err(e), Err(_)) => return Err(e),
         }
 
         Ok(pick_lora(&items, query, base_model).map(|mut lora| {
@@ -275,8 +331,7 @@ impl LoraCatalogPort for CivitAiClient {
             params.push(("baseModels", base.into()));
         }
         let resp = self
-            .http
-            .get(&url)
+            .authed(self.http.get(&url))
             .query(&params)
             .send()
             .await
@@ -554,11 +609,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn propagates_http_error() {
+    async fn find_lora_tolerates_503_on_one_endpoint() {
+        // `query` endpoint trvale 503 (přechodná chyba CivitAI), `tag` projde
+        // → LoRA se přesto najde, celé hledání se kvůli jednomu 503 neshodí.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v1/models"))
-            .respond_with(ResponseTemplate::new(500))
+            .and(query_param("tag", "ahsoka tano"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(sample_body()))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models"))
+            .and(query_param("query", "Ahsoka Tano"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let client = CivitAiClient::with_base_url(server.uri(), None);
+        let lora = client
+            .find_lora("Ahsoka Tano", "Pony")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lora.file_name, "nikol_v1.safetensors");
+    }
+
+    #[tokio::test]
+    async fn search_retries_transient_503_then_succeeds() {
+        // První pokus 503, druhý 200 — retry to zvytáhne.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(sample_body()))
+            .mount(&server)
+            .await;
+
+        let client = CivitAiClient::with_base_url(server.uri(), None);
+        let lora = client.find_lora("nikol", "Pony").await.unwrap().unwrap();
+        assert_eq!(lora.file_name, "nikol_v1.safetensors");
+    }
+
+    #[tokio::test]
+    async fn find_lora_errors_only_when_both_searches_fail() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models"))
+            .respond_with(ResponseTemplate::new(503))
             .mount(&server)
             .await;
 
