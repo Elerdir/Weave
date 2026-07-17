@@ -37,7 +37,15 @@ pnpm tauri dev --features llm-vulkan
 
 Na Windows viz `run-dev.bat` — nastavuje `CMAKE_CUDA_ARCHITECTURES` (uprav podle
 GPU: RTX 30xx=86, RTX 40xx=89, RTX 20xx=75) a vybírá funkční CUDA verzi (CUDA 13.x
-pro novější MSVC/Visual Studio — CUDA 12.x starší VS odmítá).
+pro novější MSVC/Visual Studio — CUDA 12.x starší VS odmítá). Pro AMD/Intel GPU
+na Windows viz `run-dev-vulkan.bat` (vyžaduje Vulkan SDK).
+
+Na macOS (Apple Silicon) viz `run-dev-mac.sh` — Metal nepotřebuje žádný extra
+toolchain kromě Xcode Command Line Tools + CMake (`brew install cmake`). GPU
+sdílí unified memory, takže se v aplikaci nechávají offloadnuté všechny vrstvy.
+Release build pro macOS (`.dmg`, aarch64 + Metal) vzniká automaticky v release
+workflow vedle Windows instalátoru. Aplikace není podepsaná Apple Developer ID —
+při prvním spuštění je potřeba pravý klik → Otevřít (Gatekeeper).
 
 Model (`.gguf`) se nastaví v aplikaci: **Nastavení → AI model → Vestavěná GPU
 inference** → vyber doporučený model a klikni Stáhnout (appka po dokončení
