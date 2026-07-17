@@ -162,51 +162,21 @@ impl ModelManagerPort for LocalModelManager {
     }
 
     async fn detect_gpu(&self) -> AppResult<Option<GpuInfo>> {
-        // Detekce dle platformy — produkčně rozšíříme o nvml / metal query
         #[cfg(target_os = "macos")]
-        return Ok(Some(GpuInfo {
-            name: "Apple Silicon GPU".to_string(),
-            vram_mb: 0,
-            // Unified memory — volnou VRAM přes nvidia-smi zjistit nejde a
-            // nemáme (zatím) jinou metodu, 0 = "neznámá" (viz recommend_gpu_layers).
-            free_vram_mb: 0,
-            backend: GpuBackend::Metal,
-        }));
+        {
+            Ok(Some(detect_apple_gpu()))
+        }
 
         #[cfg(not(target_os = "macos"))]
         {
-            // Zkusíme CUDA přes nvidia-smi
-            let mut cmd = std::process::Command::new("nvidia-smi");
-            cmd.args([
-                "--query-gpu=name,memory.total,memory.free",
-                "--format=csv,noheader",
-            ]);
-            crate::spawn::hide_console_std(&mut cmd);
-            if let Ok(output) = cmd.output() {
-                if output.status.success() {
-                    let info = String::from_utf8_lossy(&output.stdout);
-                    let parts: Vec<&str> = info.trim().split(',').collect();
-                    let name = parts
-                        .first()
-                        .map(|s| s.trim().to_string())
-                        .unwrap_or_default();
-                    let vram = parts
-                        .get(1)
-                        .and_then(|s| s.split_whitespace().next())
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(0);
-                    let free_vram = parts
-                        .get(2)
-                        .and_then(|s| s.split_whitespace().next())
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(0);
-                    return Ok(Some(GpuInfo {
-                        name,
-                        vram_mb: vram,
-                        free_vram_mb: free_vram,
-                        backend: GpuBackend::Cuda,
-                    }));
-                }
+            if let Some(info) = detect_nvidia_gpu() {
+                return Ok(Some(info));
+            }
+            // Ne-NVIDIA GPU (AMD/Intel) — aspoň jméno adaptéru, aby wizard
+            // neukázal "GPU nenalezena"; akcelerace pak jde přes llm-vulkan.
+            #[cfg(windows)]
+            if let Some(info) = detect_windows_gpu_fallback() {
+                return Ok(Some(info));
             }
             Ok(None)
         }
@@ -280,6 +250,129 @@ async fn sha256_of_file(path: &std::path::Path) -> AppResult<String> {
     })
     .await
     .map_err(|e| AppError::Repository(e.to_string()))?
+}
+
+/// macOS: jméno čipu a velikost unified memory přes `sysctl`. Metal sdílí
+/// paměť s CPU, takže jako "VRAM" hlásíme celou unified memory; kolik z ní
+/// je volné, systém jednoduše zjistit nedá (0 = neznámá, viz
+/// `recommend_gpu_layers` — při neznámé volné VRAM se offloadují všechny vrstvy).
+#[cfg(target_os = "macos")]
+fn detect_apple_gpu() -> GpuInfo {
+    let brand = sysctl_value("machdep.cpu.brand_string");
+    let memsize = sysctl_value("hw.memsize").and_then(|s| s.parse::<u64>().ok());
+    apple_gpu_info(brand.as_deref(), memsize)
+}
+
+#[cfg(target_os = "macos")]
+fn sysctl_value(key: &str) -> Option<String> {
+    let mut cmd = std::process::Command::new("sysctl");
+    cmd.args(["-n", key]);
+    crate::spawn::hide_console_std(&mut cmd);
+    cmd.output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Čistá část Apple detekce — oddělená kvůli testům (běží i mimo macOS).
+pub fn apple_gpu_info(brand: Option<&str>, memsize_bytes: Option<u64>) -> GpuInfo {
+    GpuInfo {
+        name: brand
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Apple Silicon GPU")
+            .to_string(),
+        vram_mb: memsize_bytes.unwrap_or(0) / (1024 * 1024),
+        free_vram_mb: 0,
+        backend: GpuBackend::Metal,
+    }
+}
+
+/// NVIDIA GPU přes `nvidia-smi` (Windows/Linux).
+#[cfg(not(target_os = "macos"))]
+fn detect_nvidia_gpu() -> Option<GpuInfo> {
+    let mut cmd = std::process::Command::new("nvidia-smi");
+    cmd.args([
+        "--query-gpu=name,memory.total,memory.free",
+        "--format=csv,noheader",
+    ]);
+    crate::spawn::hide_console_std(&mut cmd);
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    // Multi-GPU stroj: bereme první (primární) kartu.
+    parse_nvidia_smi_line(text.lines().next()?)
+}
+
+/// Parsuje řádek `nvidia-smi --query-gpu=name,memory.total,memory.free
+/// --format=csv,noheader`, např. `NVIDIA GeForce RTX 3090, 24576 MiB, 20143 MiB`.
+pub fn parse_nvidia_smi_line(line: &str) -> Option<GpuInfo> {
+    let parts: Vec<&str> = line.trim().split(',').collect();
+    let name = parts
+        .first()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let mb = |i: usize| {
+        parts
+            .get(i)
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    Some(GpuInfo {
+        name,
+        vram_mb: mb(1),
+        free_vram_mb: mb(2),
+        backend: GpuBackend::Cuda,
+    })
+}
+
+/// Windows fallback pro ne-NVIDIA GPU (AMD/Intel): jméno adaptéru z WMI.
+/// VRAM přes WMI spolehlivě nejde (AdapterRAM je 32bit, ořezává na 4 GB),
+/// takže hlásíme jen jméno; backend odpovídá `llm-vulkan` akceleraci.
+#[cfg(windows)]
+fn detect_windows_gpu_fallback() -> Option<GpuInfo> {
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-Command",
+        "(Get-CimInstance Win32_VideoController).Name",
+    ]);
+    crate::spawn::hide_console_std(&mut cmd);
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    fallback_gpu_from_names(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Vybere první skutečný adaptér (přeskočí virtuální/softwarové) a určí
+/// backend podle výrobce — NVIDIA bez funkčního nvidia-smi je pořád CUDA.
+pub fn fallback_gpu_from_names(output: &str) -> Option<GpuInfo> {
+    let name = output
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .find(|l| {
+            let low = l.to_lowercase();
+            !low.contains("microsoft basic") && !low.contains("remote display")
+        })?
+        .to_string();
+    let backend = if name.to_lowercase().contains("nvidia") {
+        GpuBackend::Cuda
+    } else {
+        GpuBackend::Vulkan
+    };
+    Some(GpuInfo {
+        name,
+        vram_mb: 0,
+        free_vram_mb: 0,
+        backend,
+    })
 }
 
 #[cfg(test)]
@@ -450,5 +543,58 @@ mod tests {
         assert!(mgr.list_local().await.unwrap().is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_nvidia_smi_line_extracts_name_and_memory() {
+        let info = parse_nvidia_smi_line("NVIDIA GeForce RTX 3090, 24576 MiB, 20143 MiB").unwrap();
+        assert_eq!(info.name, "NVIDIA GeForce RTX 3090");
+        assert_eq!(info.vram_mb, 24576);
+        assert_eq!(info.free_vram_mb, 20143);
+        assert!(matches!(info.backend, GpuBackend::Cuda));
+    }
+
+    #[test]
+    fn parse_nvidia_smi_line_tolerates_missing_memory_columns() {
+        let info = parse_nvidia_smi_line("NVIDIA T4").unwrap();
+        assert_eq!(info.name, "NVIDIA T4");
+        assert_eq!(info.vram_mb, 0);
+        assert_eq!(info.free_vram_mb, 0);
+    }
+
+    #[test]
+    fn parse_nvidia_smi_line_rejects_empty_input() {
+        assert!(parse_nvidia_smi_line("").is_none());
+        assert!(parse_nvidia_smi_line("   ").is_none());
+    }
+
+    #[test]
+    fn apple_gpu_info_converts_memsize_and_uses_brand() {
+        let info = apple_gpu_info(Some("Apple M2 Max"), Some(32 * 1024 * 1024 * 1024));
+        assert_eq!(info.name, "Apple M2 Max");
+        assert_eq!(info.vram_mb, 32 * 1024);
+        assert_eq!(info.free_vram_mb, 0);
+        assert!(matches!(info.backend, GpuBackend::Metal));
+    }
+
+    #[test]
+    fn apple_gpu_info_falls_back_when_sysctl_unavailable() {
+        let info = apple_gpu_info(None, None);
+        assert_eq!(info.name, "Apple Silicon GPU");
+        assert_eq!(info.vram_mb, 0);
+    }
+
+    #[test]
+    fn fallback_gpu_skips_virtual_adapters_and_detects_vendor() {
+        let amd = fallback_gpu_from_names("Microsoft Basic Display Adapter\nAMD Radeon RX 7800 XT")
+            .unwrap();
+        assert_eq!(amd.name, "AMD Radeon RX 7800 XT");
+        assert!(matches!(amd.backend, GpuBackend::Vulkan));
+
+        let nv = fallback_gpu_from_names("NVIDIA GeForce GTX 1660\n").unwrap();
+        assert!(matches!(nv.backend, GpuBackend::Cuda));
+
+        assert!(fallback_gpu_from_names("Microsoft Basic Display Adapter\n").is_none());
+        assert!(fallback_gpu_from_names("").is_none());
     }
 }

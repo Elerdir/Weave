@@ -83,3 +83,74 @@ jobs:
             src-tauri/target/release/bundle/nsis/*-setup.exe
             src-tauri/target/release/bundle/nsis/*-setup.exe.sig
           retention-days: 14
+
+  # macOS (Apple Silicon) build s vestavěnou Metal GPU inferencí. Runner
+  # macos-latest je arm64 a má Xcode CLT + cmake, takže llama.cpp Metal build
+  # projde bez dalšího setupu. Aplikace není podepsaná Apple Developer ID
+  # (Gatekeeper při prvním spuštění vyžaduje pravý klik → Otevřít) — updater
+  # podpis (Ed25519) je na tom nezávislý a funguje.
+  build-macos:
+    name: build-macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install deps
+        run: pnpm install
+
+      - name: Build Tauri app (Metal)
+        run: pnpm tauri build --features llm-metal
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      # Updater artefakt na macOS je .app.tar.gz + .sig; ke stažení pro
+      # uživatele se navíc nahrává .dmg.
+      - name: Upload to UpdateHub
+        shell: bash
+        env:
+          UPDATEHUB_URL: ${{ secrets.UPDATEHUB_URL }}
+          UPDATEHUB_CI_TOKEN: ${{ secrets.UPDATEHUB_CI_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version }}"
+          if [ -z "$VERSION" ]; then VERSION="${GITHUB_REF_NAME#v}"; fi
+
+          BUNDLE=$(ls src-tauri/target/release/bundle/macos/*.app.tar.gz | head -n1)
+          SIGNATURE=$(cat "${BUNDLE}.sig")
+          echo "Nahrávám $BUNDLE (verze $VERSION)"
+
+          curl -f -X POST "${UPDATEHUB_URL}/api/ci/apps/weave/releases" \
+            -H "X-UpdateHub-Token: ${UPDATEHUB_CI_TOKEN}" \
+            -F "file=@${BUNDLE}" \
+            -F "signature=${SIGNATURE}" \
+            -F "version=${VERSION}" \
+            -F "platform=darwin" \
+            -F "arch=aarch64" \
+            -F "channel=stable" \
+            -F "release_notes=Release ${VERSION}"
+
+      - name: Upload dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weave-macos-dmg
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+          retention-days: 14
