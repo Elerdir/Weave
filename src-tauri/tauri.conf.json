@@ -50,6 +50,9 @@
         "installMode": "currentUser",
         "languages": ["Czech", "English"],
         "displayLanguageSelector": true
+      },
+      "wix": {
+        "language": ["cs-CZ", "en-US"]
       }
     }
   },
