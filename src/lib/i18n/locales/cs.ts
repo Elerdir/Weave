@@ -74,6 +74,9 @@ const cs = {
     speak: "Přečíst nahlas",
     model: "Model",
     tokensPerSecond: "{tps} tok/s",
+    tokenUsage: "dotaz {prompt} · odpověď {completion} · celkem {total} tokenů",
+    tokenUsageHint:
+      "Dotaz zahrnuje celý vstup poslaný modelu — systémový prompt, kontext souborů i předchozí zprávy konverzace, ne jen poslední otázku.",
     errors: {
       retry: "Zkusit znovu",
       switchBackend: "Prepnout backend",

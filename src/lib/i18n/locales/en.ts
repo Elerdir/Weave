@@ -76,6 +76,9 @@ const en: Messages = {
     speak: "Read aloud",
     model: "Model",
     tokensPerSecond: "{tps} tok/s",
+    tokenUsage: "prompt {prompt} · reply {completion} · {total} tokens total",
+    tokenUsageHint:
+      "The prompt count covers the whole input sent to the model — system prompt, file context and previous messages, not just the last question.",
     errors: {
       retry: "Try again",
       switchBackend: "Switch backend",
