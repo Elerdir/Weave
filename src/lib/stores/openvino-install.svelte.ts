@@ -2,6 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { notify } from "$lib/services/notify";
 
+export interface OpenvinoDeviceCheck {
+  devices: string[];
+  hasNpu: boolean;
+  openvino: string;
+}
+
 export interface OpenvinoRuntimeStatus {
   installed: boolean;
   serverRunning: boolean;
@@ -10,6 +16,10 @@ export interface OpenvinoRuntimeStatus {
   requirementsPath: string;
   serverLogPath: string;
   defaultModelDir: string;
+  /** Naposledy použitá složka modelu — přežije restart aplikace. */
+  savedModelDir: string;
+  /** Co OpenVINO při instalaci našlo za zařízení; null = zatím neověřeno. */
+  deviceCheck: OpenvinoDeviceCheck | null;
 }
 
 export interface OpenvinoModelProfile {
@@ -86,6 +96,18 @@ function createOpenvinoInstallStore() {
       return downloadingModel;
     },
 
+    /**
+     * Runtime je nainstalovaný, ale OpenVINO na tomhle stroji žádné NPU nevidí
+     * — server by se nespustil, takže to má UI říct dopředu.
+     */
+    get npuMissing() {
+      return status?.installed === true && status.deviceCheck?.hasNpu === false;
+    },
+
+    get availableDevices() {
+      return status?.deviceCheck?.devices ?? [];
+    },
+
     async load() {
       const [nextStatus, nextProfiles] = await Promise.all([
         invoke<OpenvinoRuntimeStatus>("get_openvino_runtime_status"),
@@ -98,7 +120,9 @@ function createOpenvinoInstallStore() {
       }
       const selected = profiles.find((profile) => profile.id === selectedProfileId);
       if (!modelDir) {
-        modelDir = selected?.targetDir || status.defaultModelDir;
+        // Uložená volba má přednost před defaultem profilu — jinak by se po
+        // restartu appky ztratila ručně vybraná složka.
+        modelDir = status.savedModelDir || selected?.targetDir || status.defaultModelDir;
       }
     },
 

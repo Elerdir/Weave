@@ -1,14 +1,21 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
-use tauri::{AppHandle, Emitter, Manager, Window};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 use tokio::process::Child;
 use tokio::sync::Mutex;
+
+use crate::state::AppState;
 
 const OPENVINO_SERVER_PORT: u16 = 8091;
 const OPENVINO_SERVER_HOST: &str = "127.0.0.1";
 const OPENVINO_DEVICE: &str = "NPU";
+
+/// Poslední ručně zvolená složka s OpenVINO IR modelem. Bez uložení se po
+/// restartu appky ztratila a server nešlo spustit bez opětovného vyhledání.
+pub const OPENVINO_MODEL_DIR_KEY: &str = "llm.openvino_model_dir";
 
 static OPENVINO_SERVER: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
 
@@ -26,6 +33,28 @@ pub struct OpenvinoRuntimeStatus {
     pub requirements_path: String,
     pub server_log_path: String,
     pub default_model_dir: String,
+    /// Naposledy zvolená složka modelu (přežije restart appky); prázdné,
+    /// dokud uživatel nespustil server.
+    pub saved_model_dir: String,
+    /// Výsledek posledního ověření OpenVINO zařízení při instalaci.
+    /// `None` = runtime ještě nebyl ověřen.
+    pub device_check: Option<OpenvinoDeviceCheck>,
+}
+
+/// Co OpenVINO na tomhle stroji vidí za zařízení. Bez NPU v seznamu nemá
+/// smysl NPU server vůbec spouštět — dřív to skončilo až Python tracebackem
+/// v logu po několikaminutovém načítání modelu.
+/// Serializuje se do camelCase pro frontend, ale `alias` musí zůstat —
+/// smoke skript je Python a píše `has_npu` ve snake_case.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenvinoDeviceCheck {
+    #[serde(default)]
+    pub devices: Vec<String>,
+    #[serde(default, alias = "has_npu")]
+    pub has_npu: bool,
+    #[serde(default)]
+    pub openvino: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -104,34 +133,36 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
             quality_tier: "Doporuceno pro NPU".into(),
         },
         OpenvinoModelProfile {
-            id: "gemma-4-e4b-openvino-manual".into(),
-            name: "Gemma 4 E4B Instruct".into(),
-            description: "Kvalitnejsi Gemma profil pro cestinu a lokalni chat. Pro NPU vyzaduje OpenVINO IR adresar; GGUF verze patri do GPU/RAM backendu.".into(),
+            id: "gemma-3-4b-int4-cw-ov".into(),
+            name: "Gemma 3 4B Instruct INT4".into(),
+            description: "Mensi model s dobrou cestinou. Vhodny kompromis, kdyz je Qwen3 8B na NPU pomaly.".into(),
             target_dir: root
                 .join("models")
-                .join("gemma-4-e4b-it-ov")
+                .join("gemma-3-4b-it-int4-cw-ov")
                 .display()
                 .to_string(),
-            repo_id: None,
-            source_url: Some("https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF".into()),
-            auto_downloadable: false,
-            size_hint: "manual OpenVINO IR".into(),
-            quality_tier: "Gemma 4 / experimental".into(),
+            repo_id: Some("OpenVINO/gemma-3-4b-it-int4-cw-ov".into()),
+            source_url: Some("https://huggingface.co/OpenVINO/gemma-3-4b-it-int4-cw-ov".into()),
+            auto_downloadable: true,
+            size_hint: "4B INT4 / NPU friendly".into(),
+            quality_tier: "Vyvazeny pomer kvalita/rychlost".into(),
         },
         OpenvinoModelProfile {
-            id: "gemma-4-26b-a4b-openvino-manual".into(),
-            name: "Gemma 4 26B-A4B Instruct".into(),
-            description: "Prioritni kvalitativni cil pro vynikajici cestinu. Na RTX 3090 pouzij GGUF doporuceny model; pro NPU je nutny predem pripraveny OpenVINO IR adresar a je to experimentalni cesta.".into(),
+            id: "phi-3.5-mini-int4-cw-ov".into(),
+            name: "Phi-3.5 mini Instruct INT4".into(),
+            description: "Nejmensi a nejrychlejsi profil -- dobry na prvni overeni, ze NPU inference vubec bezi. Cestina je slabsi nez u Qwen3.".into(),
             target_dir: root
                 .join("models")
-                .join("gemma-4-26b-a4b-it-ov")
+                .join("phi-3.5-mini-instruct-int4-cw-ov")
                 .display()
                 .to_string(),
-            repo_id: None,
-            source_url: Some("https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF".into()),
-            auto_downloadable: false,
-            size_hint: "26B MoE / manual OpenVINO IR".into(),
-            quality_tier: "Nejlepsi cestina / experimental".into(),
+            repo_id: Some("OpenVINO/Phi-3.5-mini-instruct-int4-cw-ov".into()),
+            source_url: Some(
+                "https://huggingface.co/OpenVINO/Phi-3.5-mini-instruct-int4-cw-ov".into(),
+            ),
+            auto_downloadable: true,
+            size_hint: "3,8B INT4 / nejrychlejsi start".into(),
+            quality_tier: "Rychly test NPU".into(),
         },
     ]
 }
@@ -143,11 +174,43 @@ fn openvino_model_profile(root: &Path, profile_id: &str) -> Result<OpenvinoModel
         .ok_or_else(|| format!("Neznamy OpenVINO model profil: {profile_id}"))
 }
 
+fn device_check_path(root: &Path) -> PathBuf {
+    root.join("device-check.json")
+}
+
 pub async fn is_server_running() -> bool {
     server_state().lock().await.is_some()
 }
 
-async fn status_for(root: &Path) -> OpenvinoRuntimeStatus {
+/// Vytáhne JSON řádek ze smoke skriptu. Pip a Python můžou před něj vypsat
+/// varování, proto se hledá od konce první řádek, který se povede rozparsovat.
+fn parse_device_check(output: &str) -> Option<OpenvinoDeviceCheck> {
+    output
+        .lines()
+        .rev()
+        .map(str::trim)
+        .filter(|line| line.starts_with('{'))
+        .find_map(|line| serde_json::from_str::<OpenvinoDeviceCheck>(line).ok())
+}
+
+fn read_device_check(root: &Path) -> Option<OpenvinoDeviceCheck> {
+    let text = std::fs::read_to_string(device_check_path(root)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Vypadá složka jako OpenVINO IR model? Textové modely mají
+/// `openvino_model.xml`, multimodální (např. Gemma 3) `openvino_language_model.xml`.
+fn looks_like_openvino_ir(dir: &Path) -> bool {
+    dir.join("openvino_model.xml").exists() || dir.join("openvino_language_model.xml").exists()
+}
+
+async fn status_for(root: &Path, pool: &SqlitePool) -> OpenvinoRuntimeStatus {
+    let saved_model_dir = weave_infrastructure::db::app_config::get(pool, OPENVINO_MODEL_DIR_KEY)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
     OpenvinoRuntimeStatus {
         installed: marker_path(root).exists() && venv_python(root).exists(),
         server_running: is_server_running().await,
@@ -156,6 +219,8 @@ async fn status_for(root: &Path) -> OpenvinoRuntimeStatus {
         requirements_path: requirements_path(root).display().to_string(),
         server_log_path: server_log_path(root).display().to_string(),
         default_model_dir: default_model_dir(root).display().to_string(),
+        saved_model_dir,
+        device_check: read_device_check(root),
     }
 }
 
@@ -237,10 +302,14 @@ async fn run_command_async(
 }
 
 fn write_runtime_files(root: &Path) -> Result<(), String> {
+    // huggingface-hub je omezený zdola i shora: 1.x odstranil `resume_download`
+    // a `local_dir_use_symlinks`, na kterých dřív stahování padalo. Skript je
+    // dnes volá bez nich (funguje na 0.30+ i 1.x), horní mez chrání před
+    // dalším breaking change ve 2.x.
     let requirements = r#"openvino>=2026.2,<2027
 openvino-genai>=2026.2,<2027
 openvino-tokenizers>=2026.2,<2027
-huggingface-hub>=0.27
+huggingface-hub>=0.30,<2
 fastapi>=0.115
 uvicorn[standard]>=0.32
 "#;
@@ -263,15 +332,23 @@ print(json.dumps({
 
     let server = r#"import argparse
 import json
+import queue
+import threading
 import time
 import uuid
 from typing import Any, Optional
 
+import openvino as ov
 import openvino_genai as ov_genai
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+# LLMPipeline neni thread-safe a uvicorn obsluhuje sync endpointy ve
+# vlaknovem poolu -- soubezne requesty musi cekat, jinak se generovani
+# navzajem poskodi.
+PIPE_LOCK = threading.Lock()
 
 
 class Message(BaseModel):
@@ -284,20 +361,55 @@ class ChatRequest(BaseModel):
     messages: list[Message]
     max_tokens: Optional[int] = None
     temperature: Optional[float] = 0.7
+    top_p: Optional[float] = None
     stream: Optional[bool] = True
 
 
-def render_prompt(messages: list[Message]) -> str:
-    lines: list[str] = []
-    for message in messages:
-        role = message.role.strip().lower() or "user"
-        lines.append(f"{role}: {message.content}")
-    lines.append("assistant:")
-    return "\n".join(lines)
+def build_inputs(messages: list[Message]):
+    """Preferuje ov_genai.ChatHistory -- pipeline na ni sama aplikuje chat
+    sablonu modelu (<|im_start|> u Qwen, <|user|> u Phi ...). Rucne skladany
+    text 'user: ...' sablonu obchazi, model pak nepozna konec odpovedi.
+    Fallback je jen pro starsi runtime bez ChatHistory."""
+    try:
+        history = ov_genai.ChatHistory()
+        for message in messages:
+            role = (message.role or "user").strip().lower()
+            history.append({"role": role, "content": message.content})
+        return history
+    except Exception:
+        lines = [f"{(m.role or 'user').strip().lower()}: {m.content}" for m in messages]
+        lines.append("assistant:")
+        return "\n".join(lines)
 
 
-def make_chunk(request_id: str, model: str, content: str, finish_reason: Any = None) -> str:
-    return "data: " + json.dumps({
+def build_config(req: ChatRequest) -> "ov_genai.GenerationConfig":
+    config = ov_genai.GenerationConfig()
+    config.max_new_tokens = int(req.max_tokens or 512)
+    temperature = float(req.temperature if req.temperature is not None else 0.7)
+    # Bez do_sample je dekodovani greedy a teplota se tise ignoruje.
+    if temperature > 0.0:
+        config.do_sample = True
+        config.temperature = temperature
+        if req.top_p is not None:
+            config.top_p = float(req.top_p)
+    else:
+        config.do_sample = False
+    return config
+
+
+def keep_streaming():
+    status = getattr(ov_genai, "StreamingStatus", None)
+    return status.RUNNING if status is not None else False
+
+
+def make_chunk(
+    request_id: str,
+    model: str,
+    content: str,
+    finish_reason: Any = None,
+    usage: Optional[dict] = None,
+) -> str:
+    payload: dict[str, Any] = {
         "id": request_id,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
@@ -307,7 +419,20 @@ def make_chunk(request_id: str, model: str, content: str, finish_reason: Any = N
             "delta": {"content": content} if content else {},
             "finish_reason": finish_reason,
         }],
-    }) + "\n\n"
+    }
+    if usage is not None:
+        payload["usage"] = usage
+    return "data: " + json.dumps(payload) + "\n\n"
+
+
+def ensure_device(device: str) -> None:
+    available = ov.Core().available_devices
+    if not any(name == device or name.startswith(f"{device}.") for name in available):
+        raise SystemExit(
+            f"Zarizeni {device} neni v tomto systemu dostupne. "
+            f"OpenVINO vidi: {', '.join(available) or 'nic'}. "
+            "Zkontroluj, ze pocitac ma NPU a nainstalovany ovladac."
+        )
 
 
 def main() -> None:
@@ -318,7 +443,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8091)
     args = parser.parse_args()
 
+    ensure_device(args.device)
+    print(f"Nacitam model {args.model_dir} na {args.device} ...", flush=True)
     pipe = ov_genai.LLMPipeline(args.model_dir, args.device)
+    print("Model nacten, spoustim server.", flush=True)
+
     app = FastAPI(title="Weave OpenVINO NPU Server")
     model_id = args.model_dir.replace("\\", "/").rstrip("/").split("/")[-1] or "openvino-npu"
 
@@ -332,30 +461,75 @@ def main() -> None:
     @app.post("/v1/chat/completions")
     def chat(req: ChatRequest):
         request_id = f"chatcmpl-{uuid.uuid4().hex}"
-        prompt = render_prompt(req.messages)
-        max_new_tokens = int(req.max_tokens or 512)
-        temperature = float(req.temperature or 0.7)
-        text = str(pipe.generate(prompt, max_new_tokens=max_new_tokens, temperature=temperature))
+        inputs = build_inputs(req.messages)
+        config = build_config(req)
 
-        if req.stream:
-            def event_stream():
-                yield make_chunk(request_id, model_id, text)
-                yield make_chunk(request_id, model_id, "", "stop")
-                yield "data: [DONE]\n\n"
+        if not req.stream:
+            with PIPE_LOCK:
+                text = str(pipe.generate(inputs, config))
+            return {
+                "id": request_id,
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model_id,
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": text},
+                    "finish_reason": "stop",
+                }],
+            }
 
-            return StreamingResponse(event_stream(), media_type="text/event-stream")
+        # Skutecny token-by-token streaming: generovani bezi ve vlastnim
+        # vlakne a streamer callback plni frontu, ze ktere SSE generator
+        # rovnou posila kousky klientovi.
+        def event_stream():
+            tokens: "queue.Queue[Optional[str]]" = queue.Queue()
+            failure: list[BaseException] = []
 
-        return {
-            "id": request_id,
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": model_id,
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": text},
-                "finish_reason": "stop",
-            }],
-        }
+            def on_token(subword: str):
+                tokens.put(subword)
+                return keep_streaming()
+
+            def run_generation():
+                try:
+                    with PIPE_LOCK:
+                        pipe.generate(inputs, config, on_token)
+                except BaseException as exc:  # noqa: BLE001 - hlasime klientovi
+                    failure.append(exc)
+                finally:
+                    tokens.put(None)
+
+            worker = threading.Thread(target=run_generation, daemon=True)
+            started = time.time()
+            worker.start()
+
+            emitted = 0
+            while True:
+                item = tokens.get()
+                if item is None:
+                    break
+                emitted += 1
+                yield make_chunk(request_id, model_id, item)
+            worker.join()
+
+            if failure:
+                yield make_chunk(
+                    request_id, model_id, f"\n[chyba generovani: {failure[0]}]", "stop"
+                )
+            else:
+                usage = {
+                    "prompt_tokens": 0,
+                    "completion_tokens": emitted,
+                    "total_tokens": emitted,
+                }
+                yield make_chunk(request_id, model_id, "", "stop", usage)
+            print(
+                f"generovani hotovo: {emitted} tokenu za {time.time() - started:.1f}s",
+                flush=True,
+            )
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     uvicorn.run(app, host=args.host, port=args.port)
 
@@ -365,18 +539,16 @@ if __name__ == "__main__":
 "#;
     std::fs::write(server_script_path(root), server).map_err(|e| e.to_string())?;
 
+    // POZOR: `local_dir_use_symlinks` ani `resume_download` se sem nesmí vrátit —
+    // huggingface_hub 1.x je odstranil a volání padalo na TypeError. Stahování
+    // do `local_dir` dnes navazuje na rozdělané soubory samo.
     let downloader = r#"import sys
 from huggingface_hub import snapshot_download
 
 if len(sys.argv) != 3:
     raise SystemExit("usage: download_recommended_openvino_model.py <target-dir> <repo-id>")
 
-snapshot_download(
-    repo_id=sys.argv[2],
-    local_dir=sys.argv[1],
-    local_dir_use_symlinks=False,
-    resume_download=True,
-)
+snapshot_download(repo_id=sys.argv[2], local_dir=sys.argv[1])
 "#;
     std::fs::write(model_download_script_path(root), downloader).map_err(|e| e.to_string())?;
 
@@ -398,9 +570,12 @@ venv\Scripts\python.exe smoke_openvino.py
 }
 
 #[tauri::command]
-pub async fn get_openvino_runtime_status(app: AppHandle) -> Result<OpenvinoRuntimeStatus, String> {
+pub async fn get_openvino_runtime_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<OpenvinoRuntimeStatus, String> {
     let root = openvino_dir(&app)?;
-    Ok(status_for(&root).await)
+    Ok(status_for(&root, &state.pool).await)
 }
 
 #[tauri::command]
@@ -415,6 +590,7 @@ pub async fn list_openvino_model_profiles(
 pub async fn install_openvino_runtime(
     window: Window,
     app: AppHandle,
+    state: State<'_, AppState>,
 ) -> Result<OpenvinoRuntimeStatus, String> {
     let root = openvino_dir(&app)?;
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
@@ -480,7 +656,43 @@ pub async fn install_openvino_runtime(
         Some(root.clone()),
     )
     .await?;
-    emit_output(&window, out).await;
+    emit_output(&window, out.clone()).await;
+
+    // Výsledek uložíme, aby UI mohlo hned říct, jestli NPU vůbec existuje.
+    // Dřív se jen vypsal do logu a nikdo ho nečetl — uživatel bez NPU pak
+    // stahoval gigabajty modelu, který nešlo spustit.
+    match parse_device_check(&out) {
+        Some(check) => {
+            if let Ok(json) = serde_json::to_string(&check) {
+                let _ = std::fs::write(device_check_path(&root), json);
+            }
+            if check.has_npu {
+                emit_step(
+                    &window,
+                    format!("NPU nalezeno (zarizeni: {})", check.devices.join(", ")),
+                )
+                .await;
+            } else {
+                emit_step(
+                    &window,
+                    format!(
+                        "VAROVANI: NPU nenalezeno. OpenVINO vidi jen: {}. \
+                         Bez NPU se server nespusti — zkontroluj ovladac NPU.",
+                        check.devices.join(", ")
+                    ),
+                )
+                .await;
+            }
+        }
+        None => {
+            let _ = std::fs::remove_file(device_check_path(&root));
+            emit_step(
+                &window,
+                "VAROVANI: overeni zarizeni nevratilo ocekavany vystup",
+            )
+            .await;
+        }
+    }
 
     std::fs::write(marker_path(&root), "installed").map_err(|e| e.to_string())?;
     let _ = window.emit(
@@ -488,7 +700,7 @@ pub async fn install_openvino_runtime(
         serde_json::json!({ "type": "done" }),
     );
 
-    Ok(status_for(&root).await)
+    Ok(status_for(&root, &state.pool).await)
 }
 
 #[tauri::command]
@@ -530,12 +742,34 @@ pub async fn stop_managed_server() -> Result<(), String> {
 pub async fn start_openvino_runtime_server(
     app: AppHandle,
     model_dir: String,
+    state: State<'_, AppState>,
 ) -> Result<OpenvinoRuntimeStatus, String> {
-    let root = openvino_dir(&app)?;
+    start_server_inner(&app, &state.pool, model_dir).await
+}
+
+pub(crate) async fn start_server_inner(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    model_dir: String,
+) -> Result<OpenvinoRuntimeStatus, String> {
+    let root = openvino_dir(app)?;
     if !marker_path(&root).exists() || !venv_python(&root).exists() {
         return Err("OpenVINO runtime neni nainstalovany.".into());
     }
     write_runtime_files(&root)?;
+
+    // Načtení modelu na NPU trvá minuty — chybějící NPU má smysl ohlásit hned,
+    // ne až Python tracebackem v logu.
+    if let Some(check) = read_device_check(&root) {
+        if !check.has_npu {
+            return Err(format!(
+                "Tento pocitac nema dostupne NPU (OpenVINO vidi: {}). \
+                 Zkontroluj ovladac NPU a spust instalaci runtime znovu, \
+                 nebo pouzij GPU/RAM backend.",
+                check.devices.join(", ")
+            ));
+        }
+    }
 
     let model_dir = PathBuf::from(model_dir.trim());
     if !model_dir.exists() {
@@ -544,9 +778,7 @@ pub async fn start_openvino_runtime_server(
             model_dir.display()
         ));
     }
-    if !model_dir.join("openvino_model.xml").exists()
-        && !model_dir.join("openvino_language_model.xml").exists()
-    {
+    if !looks_like_openvino_ir(&model_dir) {
         return Err(format!(
             "Slozka nevypada jako OpenVINO IR model: {}",
             model_dir.display()
@@ -556,7 +788,22 @@ pub async fn start_openvino_runtime_server(
     let mut guard = server_state().lock().await;
     if guard.is_some() {
         drop(guard);
-        return Ok(status_for(&root).await);
+        return Ok(status_for(&root, pool).await);
+    }
+
+    // Port obsazený cizím procesem (typicky osiřelý server po pádu appky):
+    // bez téhle kontroly se čekací smyčka níž připojí na *starý* server,
+    // vrátí „běží" a uživatel by mluvil s jiným modelem, než si vybral.
+    if tokio::net::TcpStream::connect((OPENVINO_SERVER_HOST, OPENVINO_SERVER_PORT))
+        .await
+        .is_ok()
+    {
+        drop(guard);
+        return Err(format!(
+            "Port {OPENVINO_SERVER_PORT} uz pouziva jiny proces — nejspis OpenVINO server, \
+             ktery zustal bezet po predchozim spusteni Weave. Ukonci ho ve Sprave uloh \
+             (python.exe) a zkus to znovu."
+        ));
     }
 
     let log_path = server_log_path(&root);
@@ -606,7 +853,15 @@ pub async fn start_openvino_runtime_server(
             .await
             .is_ok()
         {
-            return Ok(status_for(&root).await);
+            // Server běží → cestu k modelu si zapamatujeme, aby ji uživatel
+            // po restartu appky nemusel hledat znovu.
+            let _ = weave_infrastructure::db::app_config::set(
+                pool,
+                OPENVINO_MODEL_DIR_KEY,
+                &model_dir.display().to_string(),
+            )
+            .await;
+            return Ok(status_for(&root, pool).await);
         }
     }
 
@@ -619,23 +874,28 @@ pub async fn start_openvino_runtime_server(
 }
 
 #[tauri::command]
-pub async fn stop_openvino_runtime_server(app: AppHandle) -> Result<OpenvinoRuntimeStatus, String> {
+pub async fn stop_openvino_runtime_server(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<OpenvinoRuntimeStatus, String> {
     stop_managed_server().await?;
     let root = openvino_dir(&app)?;
-    Ok(status_for(&root).await)
+    Ok(status_for(&root, &state.pool).await)
 }
 
 #[tauri::command]
 pub async fn download_openvino_recommended_model(
     app: AppHandle,
+    state: State<'_, AppState>,
 ) -> Result<OpenvinoRuntimeStatus, String> {
-    download_openvino_model_profile(app, "qwen3-8b-int4-cw-ov".into()).await
+    download_openvino_model_profile(app, "qwen3-8b-int4-cw-ov".into(), state).await
 }
 
 #[tauri::command]
 pub async fn download_openvino_model_profile(
     app: AppHandle,
     profile_id: String,
+    state: State<'_, AppState>,
 ) -> Result<OpenvinoRuntimeStatus, String> {
     let root = openvino_dir(&app)?;
     if !marker_path(&root).exists() || !venv_python(&root).exists() {
@@ -646,7 +906,7 @@ pub async fn download_openvino_model_profile(
     let profile = openvino_model_profile(&root, profile_id.trim())?;
     let Some(repo_id) = profile.repo_id.clone() else {
         return Err(format!(
-            "{} zatim nema automaticky stazitelny OpenVINO IR repozitar. Vyber uz pripravenou slozku OpenVINO modelu nebo pouzij Gemma 4 GGUF pres GPU/RAM backend.",
+            "{} nema automaticky stazitelny OpenVINO IR repozitar. Vyber rucne pripravenou slozku OpenVINO modelu.",
             profile.name
         ));
     };
@@ -670,5 +930,108 @@ pub async fn download_openvino_model_profile(
     )
     .await?;
 
-    Ok(status_for(&root).await)
+    if !looks_like_openvino_ir(&target) {
+        return Err(format!(
+            "Stazena slozka {} neobsahuje OpenVINO IR model (openvino_model.xml). \
+             Stahovani nejspis skoncilo predcasne — zkus to znovu.",
+            target.display()
+        ));
+    }
+
+    Ok(status_for(&root, &state.pool).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "weave_openvino_test_{name}_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    #[test]
+    fn device_check_is_read_from_last_json_line() {
+        // Pip a Python si před JSON často přisypou varování — parser musí
+        // vzít poslední rozparsovatelný řádek, ne první.
+        let output = "UserWarning: something deprecated\n\
+                      {\"openvino\": \"2026.2.1\", \"devices\": [\"CPU\", \"GPU\", \"NPU\"], \"has_npu\": true}\n";
+        let check = parse_device_check(output).expect("JSON se má najít");
+        assert!(check.has_npu);
+        assert_eq!(check.devices, vec!["CPU", "GPU", "NPU"]);
+        assert_eq!(check.openvino, "2026.2.1");
+    }
+
+    #[test]
+    fn device_check_reports_missing_npu() {
+        let output =
+            "{\"openvino\": \"2026.2.1\", \"devices\": [\"CPU\", \"GPU\"], \"has_npu\": false}";
+        let check = parse_device_check(output).expect("JSON se má najít");
+        assert!(!check.has_npu);
+        assert_eq!(check.devices, vec!["CPU", "GPU"]);
+    }
+
+    #[test]
+    fn device_check_is_none_without_parsable_json() {
+        assert!(parse_device_check("").is_none());
+        assert!(parse_device_check("Traceback (most recent call last):").is_none());
+        assert!(parse_device_check("{nevalidni json").is_none());
+    }
+
+    #[test]
+    fn openvino_ir_detected_for_text_and_multimodal_layouts() {
+        let text_model = temp_dir("ir_text");
+        std::fs::write(text_model.join("openvino_model.xml"), "<net/>").unwrap();
+        assert!(looks_like_openvino_ir(&text_model));
+
+        // Gemma 3 a další multimodální modely mají jazykovou část zvlášť.
+        let multimodal = temp_dir("ir_multimodal");
+        std::fs::write(multimodal.join("openvino_language_model.xml"), "<net/>").unwrap();
+        assert!(looks_like_openvino_ir(&multimodal));
+
+        // Nedostažená složka (jen tokenizer) se nesmí tvářit jako hotový model.
+        let incomplete = temp_dir("ir_incomplete");
+        std::fs::write(incomplete.join("tokenizer.json"), "{}").unwrap();
+        assert!(!looks_like_openvino_ir(&incomplete));
+
+        for dir in [text_model, multimodal, incomplete] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn every_profile_target_dir_is_unique_and_downloadable_profiles_have_repo() {
+        let root = Path::new("C:/weave/openvino");
+        let profiles = openvino_model_profiles(root);
+
+        let mut dirs: Vec<&str> = profiles.iter().map(|p| p.target_dir.as_str()).collect();
+        dirs.sort_unstable();
+        let count = dirs.len();
+        dirs.dedup();
+        assert_eq!(dirs.len(), count, "profily nesmí sdílet cílovou složku");
+
+        for profile in &profiles {
+            // Profil označený jako automaticky stažitelný musí mít repo_id,
+            // jinak tlačítko „Stáhnout" spadne až za běhu.
+            assert_eq!(
+                profile.auto_downloadable,
+                profile.repo_id.is_some(),
+                "profil {} má nekonzistentní auto_downloadable/repo_id",
+                profile.id
+            );
+        }
+    }
+
+    #[test]
+    fn default_profile_id_resolves() {
+        let root = Path::new("C:/weave/openvino");
+        // Na tohle ID padá `download_openvino_recommended_model` i fallback ve storu.
+        let profile = openvino_model_profile(root, "qwen3-8b-int4-cw-ov").expect("výchozí profil");
+        assert!(profile.auto_downloadable);
+        assert!(openvino_model_profile(root, "neexistuje").is_err());
+    }
 }

@@ -300,6 +300,8 @@ const cs = {
       openvinoNpu: "OpenVINO NPU",
       openvinoNpuUrl: "URL OpenVINO NPU serveru",
       openvinoNpuHint: "Pro Intel AI Boost / NPU použij OpenVINO nebo OpenVINO Model Server s OpenAI-kompatibilním API a target_device=NPU. GGUF/llama.cpp backend na NPU neběží.",
+      openvinoNoNpuWarning:
+        "OpenVINO na tomto počítači nenašlo žádné NPU — server se nespustí. Zkontroluj, že procesor NPU má (Intel Core Ultra, Ryzen AI, Snapdragon X) a že je nainstalovaný ovladač NPU. Nalezená zařízení:",
       openvinoRuntimeTitle: "Spravovaný OpenVINO runtime",
       openvinoRuntimeInstall: "Nainstalovat OpenVINO runtime",
       openvinoRuntimeUninstall: "Odinstalovat OpenVINO runtime",

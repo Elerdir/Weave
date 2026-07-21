@@ -358,7 +358,8 @@ pub async fn restart_runtime(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
     {
-        crate::commands::openvino_installer::start_openvino_runtime_server(app, model_dir).await?;
+        crate::commands::openvino_installer::start_server_inner(&app, &state.pool, model_dir)
+            .await?;
         openvino_started = true;
     }
 

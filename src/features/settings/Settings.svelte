@@ -736,6 +736,14 @@
             {#if openvinoInstallStore.error}
               <span class="conn-status disconnected">{openvinoInstallStore.error}</span>
             {/if}
+            {#if openvinoInstallStore.npuMissing}
+              <p class="npu-warning">
+                {i18n.m.settings.llm.openvinoNoNpuWarning}
+                {#if openvinoInstallStore.availableDevices.length > 0}
+                  <span>{openvinoInstallStore.availableDevices.join(", ")}</span>
+                {/if}
+              </p>
+            {/if}
             {#if openvinoInstallStore.status?.installed}
               <label class="field-label" for="openvino-model-profile" style="margin-top:1rem">
                 {i18n.m.settings.llm.openvinoModelProfile}
@@ -2417,6 +2425,22 @@
   }
   .conn-status.testing {
     color: var(--color-text-muted);
+  }
+
+  .npu-warning {
+    background: color-mix(in srgb, var(--color-warning, #d97706) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-warning, #d97706) 35%, var(--color-border));
+    border-radius: 8px;
+    font-size: 0.82rem;
+    line-height: 1.6;
+    margin-top: 0.75rem;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .npu-warning span {
+    color: var(--color-text-muted);
+    display: block;
+    margin-top: 0.25rem;
   }
 
   .gpu-info {
