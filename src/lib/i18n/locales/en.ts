@@ -302,6 +302,8 @@ const en: Messages = {
       openvinoNpu: "OpenVINO NPU",
       openvinoNpuUrl: "OpenVINO NPU server URL",
       openvinoNpuHint: "For Intel AI Boost / NPU, use OpenVINO or OpenVINO Model Server with an OpenAI-compatible API and target_device=NPU. The GGUF/llama.cpp backend does not run on NPU.",
+      openvinoNoNpuWarning:
+        "OpenVINO found no NPU on this machine — the server will not start. Check that the CPU has an NPU (Intel Core Ultra, Ryzen AI, Snapdragon X) and that the NPU driver is installed. Devices found:",
       openvinoRuntimeTitle: "Managed OpenVINO runtime",
       openvinoRuntimeInstall: "Install OpenVINO runtime",
       openvinoRuntimeUninstall: "Uninstall OpenVINO runtime",
