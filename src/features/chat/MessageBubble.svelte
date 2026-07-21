@@ -32,6 +32,20 @@
   /** Vygenerované obrázky v odpovědi asistenta (lokální cesty z markdownu). */
   const generatedImages = $derived(isUser ? [] : extractLocalImagePaths(msg.content));
 
+  /**
+   * Spotřeba tokenů pro zobrazení. Vygenerované obrázky mají statistiky
+   * nulové (nejde o textovou inferenci), tam se počty neukazují.
+   */
+  const tokenCounts = $derived.by(() => {
+    const stats = msg.stats;
+    if (!stats || (stats.prompt_tokens === 0 && stats.completion_tokens === 0)) return null;
+    return {
+      prompt: stats.prompt_tokens.toLocaleString(i18n.locale),
+      completion: stats.completion_tokens.toLocaleString(i18n.locale),
+      total: (stats.prompt_tokens + stats.completion_tokens).toLocaleString(i18n.locale),
+    };
+  });
+
   function regenerate() {
     if (conversationStore.activeId) void regenerateResponse(conversationStore.activeId);
   }
@@ -163,6 +177,11 @@
     {#if msg.stats}
       <div class="stats">
         {i18n.t("chat.tokensPerSecond", { tps: msg.stats.tokens_per_second.toFixed(1) })}
+        {#if tokenCounts}
+          · <span title={i18n.m.chat.tokenUsageHint}>
+            {i18n.t("chat.tokenUsage", tokenCounts)}
+          </span>
+        {/if}
         · {msg.stats.model_id}
       </div>
     {/if}

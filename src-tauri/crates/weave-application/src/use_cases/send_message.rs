@@ -653,23 +653,50 @@ impl SendMessageUseCase {
 
         // Mezikanál: skládá text odpovědi průběžně a po dokončení (nebo po
         // zastavení uživatelem — tehdy se uloží aspoň částečná odpověď) ji
-        // zapíše do DB. Chunky přeposílá dál beze změny.
+        // zapíše do DB. Text přitom prochází čističkou řídicích tokenů, aby
+        // se do UI ani do DB nedostaly šablonové zbytky modelu.
         let (tee_tx, mut tee_rx) = mpsc::channel::<StreamChunk>(128);
         let persist_repo = self.msg_repo.clone();
         let persist_conv = conversation_id.clone();
         let persist = tokio::spawn(async move {
+            let mut cleaner = crate::reply_cleaner::ReplyCleaner::new();
             let mut text = String::new();
             let mut stats = None;
+
             while let Some(chunk) = tee_rx.recv().await {
-                match &chunk {
-                    StreamChunk::Token(t) => text.push_str(t),
-                    StreamChunk::Done(s) => stats = Some(s.clone()),
-                    StreamChunk::Error(_) | StreamChunk::ImageStage(_) => {}
-                }
-                if stream_tx.send(chunk).await.is_err() {
+                let forwarded = match chunk {
+                    StreamChunk::Token(raw) => {
+                        let cleaned = cleaner.push(&raw);
+                        if cleaned.is_empty() {
+                            continue; // čeká se na zbytek rozdělaného tokenu
+                        }
+                        text.push_str(&cleaned);
+                        StreamChunk::Token(cleaned)
+                    }
+                    StreamChunk::Done(s) => {
+                        // Zbytek bufferu musí odejít před Done, jinak by v UI
+                        // chyběl konec odpovědi.
+                        let tail = cleaner.finish();
+                        if !tail.is_empty() {
+                            text.push_str(&tail);
+                            if stream_tx.send(StreamChunk::Token(tail)).await.is_err() {
+                                break;
+                            }
+                        }
+                        stats = Some(s.clone());
+                        StreamChunk::Done(s)
+                    }
+                    other => other,
+                };
+                if stream_tx.send(forwarded).await.is_err() {
                     break; // příjemce zmizel (Zastavit) — částečný text přesto uložíme
                 }
             }
+
+            // Stream skončil bez Done (chyba nebo Zastavit) — dorovnáme buffer,
+            // ať se do DB uloží i poslední kousek textu.
+            text.push_str(&cleaner.finish());
+
             if !text.is_empty() {
                 let msg = Message::assistant(persist_conv, text, stats);
                 if let Err(e) = persist_repo.save(&msg).await {
