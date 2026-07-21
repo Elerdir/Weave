@@ -7,7 +7,10 @@ REM aniz by se sahalo na tauri.conf.json - "createUpdaterArtifacts": true tam
 REM vyzaduje TAURI_SIGNING_PRIVATE_KEY (podpisovy klic updateru), ktery pro
 REM lokalni testovaci build nepotrebujes.
 REM
-REM Vysledny .msi najdes v: src-tauri\target\release\bundle\msi\
+REM Vznikne jeden .msi pro kazdy jazyk nastaveny v tauri.conf.json
+REM (bundle.windows.wix.language = cs-CZ a en-US), takze soubory jsou dva.
+REM
+REM Vysledny .msi najdes v: target\release\bundle\msi\
 
 setlocal
 set "SQLX_OFFLINE=true"
@@ -40,7 +43,7 @@ if errorlevel 1 (
 
 echo.
 echo === Hotovo. MSI instalator najdes zde: ===
-for %%f in (src-tauri\target\release\bundle\msi\*.msi) do echo   %%f
+for %%f in (target\release\bundle\msi\*.msi) do echo   %%f
 
 echo.
 pause

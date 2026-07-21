@@ -61,7 +61,7 @@ jobs:
           VERSION="${{ github.event.inputs.version }}"
           if [ -z "$VERSION" ]; then VERSION="${GITHUB_REF_NAME#v}"; fi
 
-          INSTALLER=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe | head -n1)
+          INSTALLER=$(ls target/release/bundle/nsis/*-setup.exe | head -n1)
           SIGNATURE=$(cat "${INSTALLER}.sig")
           echo "Nahrávám $INSTALLER (verze $VERSION)"
 
@@ -80,8 +80,8 @@ jobs:
         with:
           name: weave-windows-installer
           path: |
-            src-tauri/target/release/bundle/nsis/*-setup.exe
-            src-tauri/target/release/bundle/nsis/*-setup.exe.sig
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/nsis/*-setup.exe.sig
           retention-days: 14
 
   # macOS (Apple Silicon) build s vestavěnou Metal GPU inferencí. Runner
@@ -131,7 +131,7 @@ jobs:
           VERSION="${{ github.event.inputs.version }}"
           if [ -z "$VERSION" ]; then VERSION="${GITHUB_REF_NAME#v}"; fi
 
-          BUNDLE=$(ls src-tauri/target/release/bundle/macos/*.app.tar.gz | head -n1)
+          BUNDLE=$(ls target/release/bundle/macos/*.app.tar.gz | head -n1)
           SIGNATURE=$(cat "${BUNDLE}.sig")
           echo "Nahrávám $BUNDLE (verze $VERSION)"
 
@@ -150,7 +150,7 @@ jobs:
         with:
           name: weave-macos-dmg
           path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/*.app.tar.gz
-            src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app.tar.gz
+            target/release/bundle/macos/*.app.tar.gz.sig
           retention-days: 14

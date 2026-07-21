@@ -79,6 +79,24 @@ pnpm test
 pnpm playwright test
 ```
 
+## Instalátor pro Windows
+
+```bat
+instalator.bat
+```
+
+Sestaví release build a z něj MSI balíčky do `target/release/bundle/msi/`
+— jeden pro češtinu, jeden pro angličtinu (`bundle.windows.wix.language`). Skript
+vypíná updater artefakty přes `--config` override, protože ty vyžadují podpisový
+klíč z GitHub Secrets; oficiální podepsané instalátory (NSIS + MSI) staví release
+workflow při tagu `v*`.
+
+MSI se instaluje pro celý počítač (vyžaduje práva správce). Instalátor obsahuje
+jen aplikaci — modely, ComfyUI ani OpenVINO runtime se stahují až z aplikace
+podle toho, co uživatel zapne. Build je bez GPU featur (`llm-cuda`/`llm-metal`/
+`llm-vulkan`), aby aplikace běžela i na stroji bez CUDA runtime; vestavěnou
+inferenci si sestav lokálně přes `run-dev.bat`.
+
 ## Architektura
 
 ```
