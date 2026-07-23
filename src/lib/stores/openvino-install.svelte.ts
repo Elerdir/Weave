@@ -18,6 +18,8 @@ export interface OpenvinoRuntimeStatus {
   defaultModelDir: string;
   /** Naposledy použitá složka modelu — přežije restart aplikace. */
   savedModelDir: string;
+  /** Naposledy zvolené zařízení (NPU/GPU/CPU); prázdné = zatím nezvoleno. */
+  savedDevice: string;
   /** Co OpenVINO při instalaci našlo za zařízení; null = zatím neověřeno. */
   deviceCheck: OpenvinoDeviceCheck | null;
 }
@@ -49,6 +51,7 @@ function createOpenvinoInstallStore() {
   let log = $state<string[]>([]);
   let error = $state<string | null>(null);
   let modelDir = $state("");
+  let device = $state("NPU");
   let profiles = $state<OpenvinoModelProfile[]>([]);
   let selectedProfileId = $state("qwen3-8b-int4-cw-ov");
   let startingServer = $state(false);
@@ -76,6 +79,18 @@ function createOpenvinoInstallStore() {
     },
     get modelDir() {
       return modelDir;
+    },
+    get device() {
+      return device;
+    },
+    /**
+     * Zařízení, ze kterých jde vybírat. Přednostně to, co OpenVINO na stroji
+     * reálně vidí (CPU, GPU.0, NPU …); dokud runtime není ověřený, nabídneme
+     * aspoň rozumný výchozí výběr.
+     */
+    get deviceOptions(): string[] {
+      const detected = status?.deviceCheck?.devices ?? [];
+      return detected.length > 0 ? detected : ["NPU", "GPU", "CPU"];
     },
     get profiles() {
       return profiles;
@@ -124,10 +139,22 @@ function createOpenvinoInstallStore() {
         // restartu appky ztratila ručně vybraná složka.
         modelDir = status.savedModelDir || selected?.targetDir || status.defaultModelDir;
       }
+      // Zařízení: uložená volba > první dostupné, když NPU chybí (typicky starý
+      // ovladač) > výchozí NPU. Ať uživatel nemusí přepínat ručně, když appka
+      // sama vidí, že NPU není použitelné.
+      if (status.savedDevice) {
+        device = status.savedDevice;
+      } else if (status.deviceCheck && !status.deviceCheck.hasNpu && status.deviceCheck.devices.length > 0) {
+        device = status.deviceCheck.devices[0];
+      }
     },
 
     setModelDir(value: string) {
       modelDir = value;
+    },
+
+    setDevice(value: string) {
+      device = value;
     },
 
     setSelectedProfile(value: string) {
@@ -197,6 +224,7 @@ function createOpenvinoInstallStore() {
       try {
         status = await invoke<OpenvinoRuntimeStatus>("start_openvino_runtime_server", {
           modelDir: modelDir.trim(),
+          device: device.trim() || "NPU",
         });
         void notify("OpenVINO NPU server bezi", "Weave se muze pripojit na http://localhost:8091.");
       } catch (err) {

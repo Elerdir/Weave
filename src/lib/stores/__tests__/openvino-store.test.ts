@@ -18,6 +18,7 @@ function status(overrides: Partial<OpenvinoRuntimeStatus> = {}): OpenvinoRuntime
     serverLogPath: "C:/weave/openvino/weave_openvino_server.log",
     defaultModelDir: "C:/weave/openvino/models/qwen3-8b-int4-cw-ov",
     savedModelDir: "",
+    savedDevice: "",
     deviceCheck: { devices: ["CPU", "GPU", "NPU"], hasNpu: true, openvino: "2026.2.1" },
     ...overrides,
   };
@@ -48,8 +49,9 @@ function mockLoad(next: OpenvinoRuntimeStatus) {
 describe("openvinoInstallStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Store je singleton — modelDir z předchozího testu by zamaskoval obnovu.
+    // Store je singleton — modelDir/device z předchozího testu by zamaskoval obnovu.
     openvinoInstallStore.setModelDir("");
+    openvinoInstallStore.setDevice("NPU");
   });
 
   it("obnoví uloženou složku modelu místo výchozí cesty profilu", async () => {
@@ -89,5 +91,28 @@ describe("openvinoInstallStore", () => {
     mockLoad(status({ installed: true, deviceCheck: null }));
     await openvinoInstallStore.load();
     expect(openvinoInstallStore.npuMissing).toBe(false);
+  });
+
+  it("obnoví uložené zařízení", async () => {
+    mockLoad(status({ savedDevice: "GPU.0" }));
+    await openvinoInstallStore.load();
+    expect(openvinoInstallStore.device).toBe("GPU.0");
+  });
+
+  it("bez uloženého zařízení a bez NPU vybere první dostupné", async () => {
+    mockLoad(
+      status({
+        savedDevice: "",
+        deviceCheck: { devices: ["CPU", "GPU.0"], hasNpu: false, openvino: "2026.2.1" },
+      }),
+    );
+    await openvinoInstallStore.load();
+    expect(openvinoInstallStore.device).toBe("CPU");
+  });
+
+  it("deviceOptions preferuje reálně zjištěná zařízení", async () => {
+    mockLoad(status({ deviceCheck: { devices: ["CPU", "GPU.0", "NPU"], hasNpu: true, openvino: "2026.2.1" } }));
+    await openvinoInstallStore.load();
+    expect(openvinoInstallStore.deviceOptions).toEqual(["CPU", "GPU.0", "NPU"]);
   });
 });

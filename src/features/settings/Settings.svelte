@@ -745,6 +745,22 @@
               </p>
             {/if}
             {#if openvinoInstallStore.status?.installed}
+              <label class="field-label" for="openvino-device" style="margin-top:1rem">
+                {i18n.m.settings.llm.openvinoDevice}
+              </label>
+              <div class="comfyui-row">
+                <select
+                  id="openvino-device"
+                  value={openvinoInstallStore.device}
+                  disabled={openvinoInstallStore.status.serverRunning}
+                  onchange={(e) => openvinoInstallStore.setDevice((e.target as HTMLSelectElement).value)}
+                >
+                  {#each openvinoInstallStore.deviceOptions as dev (dev)}
+                    <option value={dev}>{dev}</option>
+                  {/each}
+                </select>
+              </div>
+              <p class="hint" style="margin-top:0.35rem">{i18n.m.settings.llm.openvinoDeviceHint}</p>
               <label class="field-label" for="openvino-model-profile" style="margin-top:1rem">
                 {i18n.m.settings.llm.openvinoModelProfile}
               </label>

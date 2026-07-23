@@ -11,11 +11,17 @@ use crate::state::AppState;
 
 const OPENVINO_SERVER_PORT: u16 = 8091;
 const OPENVINO_SERVER_HOST: &str = "127.0.0.1";
-const OPENVINO_DEVICE: &str = "NPU";
+/// Výchozí zařízení, když si uživatel žádné nezvolil. NPU je preferované
+/// (nízkopříkonové), ale na strojích se starým ovladačem selže — pak jde
+/// v UI přepnout na GPU (Intel Arc) nebo CPU.
+const OPENVINO_DEFAULT_DEVICE: &str = "NPU";
 
 /// Poslední ručně zvolená složka s OpenVINO IR modelem. Bez uložení se po
 /// restartu appky ztratila a server nešlo spustit bez opětovného vyhledání.
 pub const OPENVINO_MODEL_DIR_KEY: &str = "llm.openvino_model_dir";
+
+/// Naposledy zvolené OpenVINO zařízení (NPU/GPU/CPU); přežije restart appky.
+pub const OPENVINO_DEVICE_KEY: &str = "llm.openvino_device";
 
 static OPENVINO_SERVER: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
 
@@ -36,6 +42,9 @@ pub struct OpenvinoRuntimeStatus {
     /// Naposledy zvolená složka modelu (přežije restart appky); prázdné,
     /// dokud uživatel nespustil server.
     pub saved_model_dir: String,
+    /// Naposledy zvolené zařízení (NPU/GPU/CPU); přežije restart appky.
+    /// Prázdné = ještě nezvoleno, UI použije výchozí NPU.
+    pub saved_device: String,
     /// Výsledek posledního ověření OpenVINO zařízení při instalaci.
     /// `None` = runtime ještě nebyl ověřen.
     pub device_check: Option<OpenvinoDeviceCheck>,
@@ -211,6 +220,12 @@ async fn status_for(root: &Path, pool: &SqlitePool) -> OpenvinoRuntimeStatus {
         .flatten()
         .unwrap_or_default();
 
+    let saved_device = weave_infrastructure::db::app_config::get(pool, OPENVINO_DEVICE_KEY)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
     OpenvinoRuntimeStatus {
         installed: marker_path(root).exists() && venv_python(root).exists(),
         server_running: is_server_running().await,
@@ -220,8 +235,18 @@ async fn status_for(root: &Path, pool: &SqlitePool) -> OpenvinoRuntimeStatus {
         server_log_path: server_log_path(root).display().to_string(),
         default_model_dir: default_model_dir(root).display().to_string(),
         saved_model_dir,
+        saved_device,
         device_check: read_device_check(root),
     }
+}
+
+/// Vidí OpenVINO na tomhle stroji zvolené zařízení? `GPU` matchne i `GPU.0`
+/// (stejná logika jako `ensure_device` v Python serveru).
+fn device_available(check: &OpenvinoDeviceCheck, device: &str) -> bool {
+    check
+        .devices
+        .iter()
+        .any(|name| name == device || name.starts_with(&format!("{device}.")))
 }
 
 // set_readonly(false) je tu záměr: pip/venv soubory mívají na Windows readonly
@@ -742,15 +767,17 @@ pub async fn stop_managed_server() -> Result<(), String> {
 pub async fn start_openvino_runtime_server(
     app: AppHandle,
     model_dir: String,
+    device: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<OpenvinoRuntimeStatus, String> {
-    start_server_inner(&app, &state.pool, model_dir).await
+    start_server_inner(&app, &state.pool, model_dir, device).await
 }
 
 pub(crate) async fn start_server_inner(
     app: &AppHandle,
     pool: &SqlitePool,
     model_dir: String,
+    device: Option<String>,
 ) -> Result<OpenvinoRuntimeStatus, String> {
     let root = openvino_dir(app)?;
     if !marker_path(&root).exists() || !venv_python(&root).exists() {
@@ -758,14 +785,25 @@ pub(crate) async fn start_server_inner(
     }
     write_runtime_files(&root)?;
 
-    // Načtení modelu na NPU trvá minuty — chybějící NPU má smysl ohlásit hned,
-    // ne až Python tracebackem v logu.
+    // Zařízení: explicitní volba > uložená > výchozí NPU.
+    let device = match device.map(|d| d.trim().to_string()).filter(|d| !d.is_empty()) {
+        Some(d) => d,
+        None => weave_infrastructure::db::app_config::get(pool, OPENVINO_DEVICE_KEY)
+            .await
+            .ok()
+            .flatten()
+            .filter(|d| !d.trim().is_empty())
+            .unwrap_or_else(|| OPENVINO_DEFAULT_DEVICE.to_string()),
+    };
+
+    // Načtení modelu trvá minuty — nedostupné zařízení má smysl ohlásit hned,
+    // ne až Python tracebackem v logu po dlouhé kompilaci. U NPU je to typicky
+    // starý ovladač; pak jde v UI přepnout na GPU (Intel Arc) nebo CPU.
     if let Some(check) = read_device_check(&root) {
-        if !check.has_npu {
+        if !device_available(&check, &device) {
             return Err(format!(
-                "Tento pocitac nema dostupne NPU (OpenVINO vidi: {}). \
-                 Zkontroluj ovladac NPU a spust instalaci runtime znovu, \
-                 nebo pouzij GPU/RAM backend.",
+                "Zarizeni {device} neni v tomto systemu dostupne (OpenVINO vidi: {}). \
+                 Vyber jine zarizeni; u NPU zkontroluj ovladac Intel AI Boost.",
                 check.devices.join(", ")
             ));
         }
@@ -818,7 +856,7 @@ pub(crate) async fn start_server_inner(
         .arg("--model-dir")
         .arg(&model_dir)
         .arg("--device")
-        .arg(OPENVINO_DEVICE)
+        .arg(&device)
         .arg("--host")
         .arg(OPENVINO_SERVER_HOST)
         .arg("--port")
@@ -853,14 +891,16 @@ pub(crate) async fn start_server_inner(
             .await
             .is_ok()
         {
-            // Server běží → cestu k modelu si zapamatujeme, aby ji uživatel
-            // po restartu appky nemusel hledat znovu.
+            // Server běží → cestu k modelu i zvolené zařízení si zapamatujeme,
+            // aby je uživatel po restartu appky nemusel nastavovat znovu.
             let _ = weave_infrastructure::db::app_config::set(
                 pool,
                 OPENVINO_MODEL_DIR_KEY,
                 &model_dir.display().to_string(),
             )
             .await;
+            let _ =
+                weave_infrastructure::db::app_config::set(pool, OPENVINO_DEVICE_KEY, &device).await;
             return Ok(status_for(&root, pool).await);
         }
     }
