@@ -142,19 +142,38 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
             quality_tier: "Doporuceno pro NPU".into(),
         },
         OpenvinoModelProfile {
-            id: "gemma-3-4b-int4-cw-ov".into(),
-            name: "Gemma 3 4B Instruct INT4".into(),
-            description: "Mensi model s dobrou cestinou. Vhodny kompromis, kdyz je Qwen3 8B na NPU pomaly.".into(),
+            id: "mistral-7b-instruct-v0.3-int4-cw-ov".into(),
+            name: "Mistral 7B Instruct v0.3 INT4".into(),
+            description: "Silny 7B model s dobrou cestinou. Vhodna alternativa, kdyz je Qwen3 8B na NPU pomaly.".into(),
             target_dir: root
                 .join("models")
-                .join("gemma-3-4b-it-int4-cw-ov")
+                .join("Mistral-7B-Instruct-v0.3-int4-cw-ov")
                 .display()
                 .to_string(),
-            repo_id: Some("OpenVINO/gemma-3-4b-it-int4-cw-ov".into()),
-            source_url: Some("https://huggingface.co/OpenVINO/gemma-3-4b-it-int4-cw-ov".into()),
+            repo_id: Some("OpenVINO/Mistral-7B-Instruct-v0.3-int4-cw-ov".into()),
+            source_url: Some(
+                "https://huggingface.co/OpenVINO/Mistral-7B-Instruct-v0.3-int4-cw-ov".into(),
+            ),
             auto_downloadable: true,
-            size_hint: "4B INT4 / NPU friendly".into(),
+            size_hint: "7B INT4 / ~3,8 GB".into(),
             quality_tier: "Vyvazeny pomer kvalita/rychlost".into(),
+        },
+        OpenvinoModelProfile {
+            id: "deepseek-r1-distill-qwen-7b-nf4-ov".into(),
+            name: "DeepSeek-R1-Distill-Qwen 7B NF4".into(),
+            description: "Model s durazem na uvazovani (reasoning). POZOR: kvantizace nf4 nejde na NPU (\"Unsupported data type 'nf4'\") — vyber v Zarizeni GPU nebo CPU. Odpovedi jsou pomalejsi, protoze model nejdriv premysli.".into(),
+            target_dir: root
+                .join("models")
+                .join("DeepSeek-R1-Distill-Qwen-7B-nf4-ov")
+                .display()
+                .to_string(),
+            repo_id: Some("OpenVINO/DeepSeek-R1-Distill-Qwen-7B-nf4-ov".into()),
+            source_url: Some(
+                "https://huggingface.co/OpenVINO/DeepSeek-R1-Distill-Qwen-7B-nf4-ov".into(),
+            ),
+            auto_downloadable: true,
+            size_hint: "7B NF4 / ~4,4 GB".into(),
+            quality_tier: "Uvazovani — jen GPU/CPU".into(),
         },
         OpenvinoModelProfile {
             id: "phi-3.5-mini-int4-cw-ov".into(),
@@ -208,9 +227,17 @@ fn read_device_check(root: &Path) -> Option<OpenvinoDeviceCheck> {
 }
 
 /// Vypadá složka jako OpenVINO IR model? Textové modely mají
-/// `openvino_model.xml`, multimodální (např. Gemma 3) `openvino_language_model.xml`.
+/// `openvino_model.xml`, multimodální (např. Gemma 3/4) `openvino_language_model.xml`.
 fn looks_like_openvino_ir(dir: &Path) -> bool {
     dir.join("openvino_model.xml").exists() || dir.join("openvino_language_model.xml").exists()
+}
+
+/// Umí server tenhle model spustit? Server staví na `ov_genai.LLMPipeline`, která
+/// zvládá jen textové modely. Multimodální IR (Gemma 3/4 — `openvino_language_model.xml`
+/// + vision embeddings) by potřeboval `VLMPipeline`; s LLMPipeline se načte, ale
+/// generování spadne na „Port for tensor name input_ids was not found".
+fn is_text_only_ir(dir: &Path) -> bool {
+    dir.join("openvino_model.xml").exists()
 }
 
 async fn status_for(root: &Path, pool: &SqlitePool) -> OpenvinoRuntimeStatus {
@@ -822,6 +849,13 @@ pub(crate) async fn start_server_inner(
             model_dir.display()
         ));
     }
+    if !is_text_only_ir(&model_dir) {
+        return Err(format!(
+            "Model {} je multimodalni (openvino_language_model.xml). Server umi zatim jen \
+             textove modely — vyber model s openvino_model.xml, napriklad Qwen3 8B.",
+            model_dir.display()
+        ));
+    }
 
     let mut guard = server_state().lock().await;
     if guard.is_some() {
@@ -959,6 +993,7 @@ pub async fn download_openvino_model_profile(
 
     let target = PathBuf::from(profile.target_dir);
     std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    let source_url = profile.source_url.clone().unwrap_or_default();
     run_command_async(
         venv_python(&root).display().to_string(),
         vec![
@@ -968,7 +1003,21 @@ pub async fn download_openvino_model_profile(
         ],
         Some(root.clone()),
     )
-    .await?;
+    .await
+    // Gated repo (napr. Google licence u Gemma) vraci syrovy Python traceback,
+    // ze ktereho uzivatel nepozna, ze staci odsouhlasit licenci na HuggingFace.
+    .map_err(|e| {
+        if e.contains("gated repo") || e.contains("is restricted") {
+            format!(
+                "Model {} je na HuggingFace uzamceny (gated) — je potreba se prihlasit \
+                 a odsouhlasit licenci na {source_url}, pak slozku vybrat rucne pres \
+                 „Procházet\". Puvodni chyba:\n{e}",
+                profile.name
+            )
+        } else {
+            e
+        }
+    })?;
 
     if !looks_like_openvino_ir(&target) {
         return Err(format!(
@@ -1064,6 +1113,40 @@ mod tests {
                 profile.id
             );
         }
+    }
+
+    #[test]
+    fn multimodal_ir_is_not_text_only() {
+        // Server staví na LLMPipeline — multimodální model (Gemma 3/4) se sice
+        // tváří jako platné IR, ale generování na něm padá. Musí jít odlišit,
+        // aby uživatel dostal srozumitelnou hlášku, ne „input_ids not found".
+        let text_model = temp_dir("text_only");
+        std::fs::write(text_model.join("openvino_model.xml"), "<net/>").unwrap();
+        assert!(looks_like_openvino_ir(&text_model));
+        assert!(is_text_only_ir(&text_model));
+
+        let multimodal = temp_dir("multimodal");
+        std::fs::write(multimodal.join("openvino_language_model.xml"), "<net/>").unwrap();
+        std::fs::write(multimodal.join("openvino_vision_embeddings_model.xml"), "<net/>").unwrap();
+        assert!(looks_like_openvino_ir(&multimodal));
+        assert!(!is_text_only_ir(&multimodal), "multimodální IR není text-only");
+
+        for dir in [text_model, multimodal] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn shipped_profiles_are_text_only_and_ungated() {
+        // Gemma 3 4B se z nabídky odstranila: na HuggingFace je gated (auto-download
+        // spadne) a je multimodální, takže by ji LLMPipeline stejně nespustila.
+        let root = Path::new("C:/weave/openvino");
+        let profiles = openvino_model_profiles(root);
+        assert!(
+            !profiles.iter().any(|p| p.id.contains("gemma")),
+            "gated/multimodální Gemma profil se nesmí vrátit do nabídky"
+        );
+        assert!(profiles.len() >= 3, "nabídka má mít aspoň tři modely");
     }
 
     #[test]
