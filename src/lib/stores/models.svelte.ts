@@ -142,6 +142,11 @@ function createModelsStore() {
       return models.some((m) => m.id === id);
     },
 
+    /** Nahlasi chybu z UI (napr. kdyz spadne nativni dialog vyberu slozky). */
+    setError(message: string | null) {
+      error = message;
+    },
+
     async load() {
       models = await invoke<LocalModel[]>("list_local_models");
       recommended = await invoke<RecommendedModel[]>("list_recommended_models");
@@ -194,8 +199,14 @@ function createModelsStore() {
     download = { modelId, downloaded: 0, total: 0, phase: "downloading", speedBytesPerSec: 0 };
     const meter = createSpeedMeter();
     meter.reset();
+    let finished = false;
 
-    const unlisten = await listen<DownloadEvent>("model-download-progress", (e) => {
+    // POZOR: `listen()` musi byt uvnitr try. Kdyz okno nema capability na core
+    // eventy, vyhodi vyjimku jeste pred invoke — a bez zachyceni by `download`
+    // zustal viset a vsechna tlacitka Stahnout by uz navzdy byla disabled.
+    let unlisten: (() => void) | null = null;
+    try {
+    unlisten = await listen<DownloadEvent>("model-download-progress", (e) => {
       const ev = e.payload;
       if (ev.type === "started") {
         meter.reset();
@@ -218,23 +229,27 @@ function createModelsStore() {
       } else if (ev.type === "verifying") {
         if (download) download = { ...download, phase: "verifying", speedBytesPerSec: 0 };
       } else if (ev.type === "done") {
-        download = null;
-        unlisten();
+        finished = true;
         void modelsStore.load();
         void notify("Model stažen", `${modelId} je připraven k použití.`);
       } else if (ev.type === "error") {
+        finished = true;
         error = ev.message ?? "Stahování selhalo";
-        download = null;
-        unlisten();
       }
     });
 
-    try {
       await invokeDownload();
+      // Backend dobehl bez terminalniho eventu (done/error) — bez tohohle by
+      // `download` zustal viset a VSECHNA tlacitka Stahnout by zustala navzdy
+      // disabled (`disabled={!!modelsStore.download}`), takze by appka vypadala,
+      // ze na kliknuti nereaguje.
+      if (!finished) void modelsStore.load();
     } catch (err) {
       error = String(err);
+    } finally {
+      // Uvolnit stav vzdy — i kdyz listen/invoke skonci vyjimkou nebo bez eventu.
+      unlisten?.();
       download = null;
-      unlisten();
     }
   }
 }

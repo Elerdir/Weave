@@ -6,7 +6,9 @@
     "main",
     "logs",
     "gallery",
-    "subjects"
+    "subjects",
+    "settings",
+    "gallery-detail-*"
   ],
   "permissions": [
     "core:default",
