@@ -18,6 +18,8 @@ export interface OpenvinoRuntimeStatus {
   defaultModelDir: string;
   /** Naposledy použitá složka modelu — přežije restart aplikace. */
   savedModelDir: string;
+  /** Naposledy zvolené zařízení (NPU/GPU/CPU); prázdné = zatím nezvoleno. */
+  savedDevice: string;
   /** Co OpenVINO při instalaci našlo za zařízení; null = zatím neověřeno. */
   deviceCheck: OpenvinoDeviceCheck | null;
 }
@@ -32,6 +34,13 @@ export interface OpenvinoModelProfile {
   autoDownloadable: boolean;
   sizeHint: string;
   qualityTier: string;
+  /** Na kterých zařízeních model reálně běží ("NPU", "GPU", "CPU"). */
+  supportedDevices: string[];
+}
+
+/** "GPU.0" → "GPU". Profily evidují podporu po rodinách zařízení. */
+function deviceFamily(device: string): string {
+  return device.split(".")[0];
 }
 
 interface InstallEvent {
@@ -49,6 +58,7 @@ function createOpenvinoInstallStore() {
   let log = $state<string[]>([]);
   let error = $state<string | null>(null);
   let modelDir = $state("");
+  let device = $state("NPU");
   let profiles = $state<OpenvinoModelProfile[]>([]);
   let selectedProfileId = $state("qwen3-8b-int4-cw-ov");
   let startingServer = $state(false);
@@ -77,14 +87,35 @@ function createOpenvinoInstallStore() {
     get modelDir() {
       return modelDir;
     },
+    get device() {
+      return device;
+    },
+    /**
+     * Zařízení, ze kterých jde vybírat. Přednostně to, co OpenVINO na stroji
+     * reálně vidí (CPU, GPU.0, NPU …); dokud runtime není ověřený, nabídneme
+     * aspoň rozumný výchozí výběr.
+     */
+    get deviceOptions(): string[] {
+      const detected = status?.deviceCheck?.devices ?? [];
+      return detected.length > 0 ? detected : ["NPU", "GPU", "CPU"];
+    },
     get profiles() {
       return profiles;
+    },
+    /**
+     * Modely použitelné na právě zvoleném zařízení. Bez filtru by šlo stáhnout
+     * 16 GB model, který na NPU/GPU spadne až při startu serveru.
+     */
+    get profilesForDevice() {
+      const family = deviceFamily(device);
+      return profiles.filter((p) => p.supportedDevices.includes(family));
     },
     get selectedProfileId() {
       return selectedProfileId;
     },
     get selectedProfile() {
-      return profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0] ?? null;
+      const usable = this.profilesForDevice;
+      return usable.find((profile) => profile.id === selectedProfileId) ?? usable[0] ?? null;
     },
     get startingServer() {
       return startingServer;
@@ -124,10 +155,29 @@ function createOpenvinoInstallStore() {
         // restartu appky ztratila ručně vybraná složka.
         modelDir = status.savedModelDir || selected?.targetDir || status.defaultModelDir;
       }
+      // Zařízení: uložená volba > první dostupné, když NPU chybí (typicky starý
+      // ovladač) > výchozí NPU. Ať uživatel nemusí přepínat ručně, když appka
+      // sama vidí, že NPU není použitelné.
+      if (status.savedDevice) {
+        device = status.savedDevice;
+      } else if (status.deviceCheck && !status.deviceCheck.hasNpu && status.deviceCheck.devices.length > 0) {
+        device = status.deviceCheck.devices[0];
+      }
     },
 
     setModelDir(value: string) {
       modelDir = value;
+    },
+
+    setDevice(value: string) {
+      device = value;
+      // Zvolený model nemusí na novém zařízení běžet — přepneme na první, který
+      // ano, ať uživateli nezůstane vybraný nespustitelný model.
+      const usable = this.profilesForDevice;
+      if (usable.length > 0 && !usable.some((p) => p.id === selectedProfileId)) {
+        selectedProfileId = usable[0].id;
+        modelDir = usable[0].targetDir;
+      }
     },
 
     setSelectedProfile(value: string) {
@@ -197,6 +247,7 @@ function createOpenvinoInstallStore() {
       try {
         status = await invoke<OpenvinoRuntimeStatus>("start_openvino_runtime_server", {
           modelDir: modelDir.trim(),
+          device: device.trim() || "NPU",
         });
         void notify("OpenVINO NPU server bezi", "Weave se muze pripojit na http://localhost:8091.");
       } catch (err) {

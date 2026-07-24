@@ -11,11 +11,17 @@ use crate::state::AppState;
 
 const OPENVINO_SERVER_PORT: u16 = 8091;
 const OPENVINO_SERVER_HOST: &str = "127.0.0.1";
-const OPENVINO_DEVICE: &str = "NPU";
+/// Výchozí zařízení, když si uživatel žádné nezvolil. NPU je preferované
+/// (nízkopříkonové), ale na strojích se starým ovladačem selže — pak jde
+/// v UI přepnout na GPU (Intel Arc) nebo CPU.
+const OPENVINO_DEFAULT_DEVICE: &str = "NPU";
 
 /// Poslední ručně zvolená složka s OpenVINO IR modelem. Bez uložení se po
 /// restartu appky ztratila a server nešlo spustit bez opětovného vyhledání.
 pub const OPENVINO_MODEL_DIR_KEY: &str = "llm.openvino_model_dir";
+
+/// Naposledy zvolené OpenVINO zařízení (NPU/GPU/CPU); přežije restart appky.
+pub const OPENVINO_DEVICE_KEY: &str = "llm.openvino_device";
 
 static OPENVINO_SERVER: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
 
@@ -36,6 +42,9 @@ pub struct OpenvinoRuntimeStatus {
     /// Naposledy zvolená složka modelu (přežije restart appky); prázdné,
     /// dokud uživatel nespustil server.
     pub saved_model_dir: String,
+    /// Naposledy zvolené zařízení (NPU/GPU/CPU); přežije restart appky.
+    /// Prázdné = ještě nezvoleno, UI použije výchozí NPU.
+    pub saved_device: String,
     /// Výsledek posledního ověření OpenVINO zařízení při instalaci.
     /// `None` = runtime ještě nebyl ověřen.
     pub device_check: Option<OpenvinoDeviceCheck>,
@@ -69,6 +78,12 @@ pub struct OpenvinoModelProfile {
     pub auto_downloadable: bool,
     pub size_hint: String,
     pub quality_tier: String,
+    /// Na kterych zarizenich model realne bezi ("NPU", "GPU", "CPU").
+    /// Overeno empiricky — NPU zvlada jen `-int4-cw-ov` (channel-wise) kvantizaci
+    /// do ~8B, Arc iGPU ma strop alokace, takze velke modely zvladne jen CPU.
+    /// UI podle toho nabidku filtruje, aby uzivatel nestahl model, ktery mu
+    /// na zvolenem zarizeni spadne az pri startu serveru.
+    pub supported_devices: Vec<String>,
 }
 
 fn openvino_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -129,23 +144,67 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
             repo_id: Some("OpenVINO/Qwen3-8B-int4-cw-ov".into()),
             source_url: Some("https://huggingface.co/OpenVINO/Qwen3-8B-int4-cw-ov".into()),
             auto_downloadable: true,
-            size_hint: "INT4 / NPU friendly".into(),
+            size_hint: "8B INT4 / ~4,8 GB".into(),
             quality_tier: "Doporuceno pro NPU".into(),
+            supported_devices: vec!["NPU".into(), "GPU".into(), "CPU".into()],
         },
         OpenvinoModelProfile {
-            id: "gemma-3-4b-int4-cw-ov".into(),
-            name: "Gemma 3 4B Instruct INT4".into(),
-            description: "Mensi model s dobrou cestinou. Vhodny kompromis, kdyz je Qwen3 8B na NPU pomaly.".into(),
+            id: "mistral-7b-instruct-v0.3-int4-cw-ov".into(),
+            name: "Mistral 7B Instruct v0.3 INT4".into(),
+            description: "Silny 7B model s dobrou cestinou. Vhodna alternativa, kdyz je Qwen3 8B na NPU pomaly.".into(),
             target_dir: root
                 .join("models")
-                .join("gemma-3-4b-it-int4-cw-ov")
+                .join("Mistral-7B-Instruct-v0.3-int4-cw-ov")
                 .display()
                 .to_string(),
-            repo_id: Some("OpenVINO/gemma-3-4b-it-int4-cw-ov".into()),
-            source_url: Some("https://huggingface.co/OpenVINO/gemma-3-4b-it-int4-cw-ov".into()),
+            repo_id: Some("OpenVINO/Mistral-7B-Instruct-v0.3-int4-cw-ov".into()),
+            source_url: Some(
+                "https://huggingface.co/OpenVINO/Mistral-7B-Instruct-v0.3-int4-cw-ov".into(),
+            ),
             auto_downloadable: true,
-            size_hint: "4B INT4 / NPU friendly".into(),
+            size_hint: "7B INT4 / ~3,8 GB".into(),
             quality_tier: "Vyvazeny pomer kvalita/rychlost".into(),
+            supported_devices: vec!["NPU".into(), "GPU".into(), "CPU".into()],
+        },
+        OpenvinoModelProfile {
+            id: "deepseek-r1-distill-qwen-7b-nf4-ov".into(),
+            name: "DeepSeek-R1-Distill-Qwen 7B NF4".into(),
+            description: "Model s durazem na uvazovani (reasoning). Kvantizace nf4 nejde na NPU, jen GPU/CPU. Odpovedi jsou pomalejsi, protoze model nejdriv premysli.".into(),
+            target_dir: root
+                .join("models")
+                .join("DeepSeek-R1-Distill-Qwen-7B-nf4-ov")
+                .display()
+                .to_string(),
+            repo_id: Some("OpenVINO/DeepSeek-R1-Distill-Qwen-7B-nf4-ov".into()),
+            source_url: Some(
+                "https://huggingface.co/OpenVINO/DeepSeek-R1-Distill-Qwen-7B-nf4-ov".into(),
+            ),
+            auto_downloadable: true,
+            size_hint: "7B NF4 / ~4,4 GB".into(),
+            quality_tier: "Uvazovani (reasoning)".into(),
+            // nf4 NPU odmita: „[NPU_VCL] Unsupported data type 'nf4'".
+            supported_devices: vec!["GPU".into(), "CPU".into()],
+        },
+        OpenvinoModelProfile {
+            id: "qwen3-30b-a3b-int4-ov".into(),
+            name: "Qwen3 30B-A3B INT4 (MoE)".into(),
+            description: "Nejchytrejsi model z nabidky. MoE aktivuje na token jen ~3B parametru, \
+                takze na CPU bezi rychleji nez mensi 8B model (7,2 vs 4,6 tok/s) pri vyrazne \
+                vyssi kvalite. Vyuzije systemovou RAM — potrebuje cca 20 GB volne."
+                .into(),
+            target_dir: root
+                .join("models")
+                .join("Qwen3-30B-A3B-int4-ov")
+                .display()
+                .to_string(),
+            repo_id: Some("OpenVINO/Qwen3-30B-A3B-int4-ov".into()),
+            source_url: Some("https://huggingface.co/OpenVINO/Qwen3-30B-A3B-int4-ov".into()),
+            auto_downloadable: true,
+            size_hint: "30B MoE INT4 / ~16,3 GB".into(),
+            quality_tier: "Nejvyssi kvalita".into(),
+            // NPU: „[NPU_VCL] Compilation failed". Arc iGPU: „[CL ext] Can not
+            // allocate ... for USM Host" — na 16 GB model uz alokacni strop nestaci.
+            supported_devices: vec!["CPU".into()],
         },
         OpenvinoModelProfile {
             id: "phi-3.5-mini-int4-cw-ov".into(),
@@ -161,8 +220,9 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
                 "https://huggingface.co/OpenVINO/Phi-3.5-mini-instruct-int4-cw-ov".into(),
             ),
             auto_downloadable: true,
-            size_hint: "3,8B INT4 / nejrychlejsi start".into(),
+            size_hint: "3,8B INT4 / ~2,0 GB".into(),
             quality_tier: "Rychly test NPU".into(),
+            supported_devices: vec!["NPU".into(), "GPU".into(), "CPU".into()],
         },
     ]
 }
@@ -198,14 +258,43 @@ fn read_device_check(root: &Path) -> Option<OpenvinoDeviceCheck> {
     serde_json::from_str(&text).ok()
 }
 
+/// Rodina zarizeni bez instance — „GPU.0" -> „GPU". Profily podporu evidují
+/// po rodinach, uzivatel ale vybira konkretni zarizeni ze seznamu OpenVINO.
+fn device_family(device: &str) -> &str {
+    device.split('.').next().unwrap_or(device)
+}
+
+/// Zna se profil pro slozku modelu? Hleda se podle nazvu cilove slozky, protoze
+/// tu si uzivatel muze vybrat i rucne pres „Prochazet".
+fn profile_for_model_dir(root: &Path, model_dir: &Path) -> Option<OpenvinoModelProfile> {
+    let name = model_dir.file_name()?.to_string_lossy().to_lowercase();
+    openvino_model_profiles(root)
+        .into_iter()
+        .find(|p| Path::new(&p.target_dir).file_name().map(|n| n.to_string_lossy().to_lowercase()) == Some(name.clone()))
+}
+
 /// Vypadá složka jako OpenVINO IR model? Textové modely mají
-/// `openvino_model.xml`, multimodální (např. Gemma 3) `openvino_language_model.xml`.
+/// `openvino_model.xml`, multimodální (např. Gemma 3/4) `openvino_language_model.xml`.
 fn looks_like_openvino_ir(dir: &Path) -> bool {
     dir.join("openvino_model.xml").exists() || dir.join("openvino_language_model.xml").exists()
 }
 
+/// Umí server tenhle model spustit? Server staví na `ov_genai.LLMPipeline`, která
+/// zvládá jen textové modely. Multimodální IR (Gemma 3/4 — `openvino_language_model.xml`
+/// + vision embeddings) by potřeboval `VLMPipeline`; s LLMPipeline se načte, ale
+/// generování spadne na „Port for tensor name input_ids was not found".
+fn is_text_only_ir(dir: &Path) -> bool {
+    dir.join("openvino_model.xml").exists()
+}
+
 async fn status_for(root: &Path, pool: &SqlitePool) -> OpenvinoRuntimeStatus {
     let saved_model_dir = weave_infrastructure::db::app_config::get(pool, OPENVINO_MODEL_DIR_KEY)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    let saved_device = weave_infrastructure::db::app_config::get(pool, OPENVINO_DEVICE_KEY)
         .await
         .ok()
         .flatten()
@@ -220,8 +309,18 @@ async fn status_for(root: &Path, pool: &SqlitePool) -> OpenvinoRuntimeStatus {
         server_log_path: server_log_path(root).display().to_string(),
         default_model_dir: default_model_dir(root).display().to_string(),
         saved_model_dir,
+        saved_device,
         device_check: read_device_check(root),
     }
+}
+
+/// Vidí OpenVINO na tomhle stroji zvolené zařízení? `GPU` matchne i `GPU.0`
+/// (stejná logika jako `ensure_device` v Python serveru).
+fn device_available(check: &OpenvinoDeviceCheck, device: &str) -> bool {
+    check
+        .devices
+        .iter()
+        .any(|name| name == device || name.starts_with(&format!("{device}.")))
 }
 
 // set_readonly(false) je tu záměr: pip/venv soubory mívají na Windows readonly
@@ -742,15 +841,17 @@ pub async fn stop_managed_server() -> Result<(), String> {
 pub async fn start_openvino_runtime_server(
     app: AppHandle,
     model_dir: String,
+    device: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<OpenvinoRuntimeStatus, String> {
-    start_server_inner(&app, &state.pool, model_dir).await
+    start_server_inner(&app, &state.pool, model_dir, device).await
 }
 
 pub(crate) async fn start_server_inner(
     app: &AppHandle,
     pool: &SqlitePool,
     model_dir: String,
+    device: Option<String>,
 ) -> Result<OpenvinoRuntimeStatus, String> {
     let root = openvino_dir(app)?;
     if !marker_path(&root).exists() || !venv_python(&root).exists() {
@@ -758,14 +859,25 @@ pub(crate) async fn start_server_inner(
     }
     write_runtime_files(&root)?;
 
-    // Načtení modelu na NPU trvá minuty — chybějící NPU má smysl ohlásit hned,
-    // ne až Python tracebackem v logu.
+    // Zařízení: explicitní volba > uložená > výchozí NPU.
+    let device = match device.map(|d| d.trim().to_string()).filter(|d| !d.is_empty()) {
+        Some(d) => d,
+        None => weave_infrastructure::db::app_config::get(pool, OPENVINO_DEVICE_KEY)
+            .await
+            .ok()
+            .flatten()
+            .filter(|d| !d.trim().is_empty())
+            .unwrap_or_else(|| OPENVINO_DEFAULT_DEVICE.to_string()),
+    };
+
+    // Načtení modelu trvá minuty — nedostupné zařízení má smysl ohlásit hned,
+    // ne až Python tracebackem v logu po dlouhé kompilaci. U NPU je to typicky
+    // starý ovladač; pak jde v UI přepnout na GPU (Intel Arc) nebo CPU.
     if let Some(check) = read_device_check(&root) {
-        if !check.has_npu {
+        if !device_available(&check, &device) {
             return Err(format!(
-                "Tento pocitac nema dostupne NPU (OpenVINO vidi: {}). \
-                 Zkontroluj ovladac NPU a spust instalaci runtime znovu, \
-                 nebo pouzij GPU/RAM backend.",
+                "Zarizeni {device} neni v tomto systemu dostupne (OpenVINO vidi: {}). \
+                 Vyber jine zarizeni; u NPU zkontroluj ovladac Intel AI Boost.",
                 check.devices.join(", ")
             ));
         }
@@ -783,6 +895,25 @@ pub(crate) async fn start_server_inner(
             "Slozka nevypada jako OpenVINO IR model: {}",
             model_dir.display()
         ));
+    }
+    if !is_text_only_ir(&model_dir) {
+        return Err(format!(
+            "Model {} je multimodalni (openvino_language_model.xml). Server umi zatim jen \
+             textove modely — vyber model s openvino_model.xml, napriklad Qwen3 8B.",
+            model_dir.display()
+        ));
+    }
+    // Znamy profil na nepodporovanem zarizeni: rict to hned, ne az po nekolikaminutove
+    // kompilaci kryptickou hlaskou z NPU/GPU pluginu.
+    if let Some(profile) = profile_for_model_dir(&root, &model_dir) {
+        let family = device_family(&device);
+        if !profile.supported_devices.iter().any(|d| d == family) {
+            return Err(format!(
+                "{} na zarizeni {device} nebezi. Podporovana zarizeni: {}.",
+                profile.name,
+                profile.supported_devices.join(", ")
+            ));
+        }
     }
 
     let mut guard = server_state().lock().await;
@@ -818,7 +949,7 @@ pub(crate) async fn start_server_inner(
         .arg("--model-dir")
         .arg(&model_dir)
         .arg("--device")
-        .arg(OPENVINO_DEVICE)
+        .arg(&device)
         .arg("--host")
         .arg(OPENVINO_SERVER_HOST)
         .arg("--port")
@@ -853,14 +984,16 @@ pub(crate) async fn start_server_inner(
             .await
             .is_ok()
         {
-            // Server běží → cestu k modelu si zapamatujeme, aby ji uživatel
-            // po restartu appky nemusel hledat znovu.
+            // Server běží → cestu k modelu i zvolené zařízení si zapamatujeme,
+            // aby je uživatel po restartu appky nemusel nastavovat znovu.
             let _ = weave_infrastructure::db::app_config::set(
                 pool,
                 OPENVINO_MODEL_DIR_KEY,
                 &model_dir.display().to_string(),
             )
             .await;
+            let _ =
+                weave_infrastructure::db::app_config::set(pool, OPENVINO_DEVICE_KEY, &device).await;
             return Ok(status_for(&root, pool).await);
         }
     }
@@ -919,6 +1052,7 @@ pub async fn download_openvino_model_profile(
 
     let target = PathBuf::from(profile.target_dir);
     std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    let source_url = profile.source_url.clone().unwrap_or_default();
     run_command_async(
         venv_python(&root).display().to_string(),
         vec![
@@ -928,7 +1062,21 @@ pub async fn download_openvino_model_profile(
         ],
         Some(root.clone()),
     )
-    .await?;
+    .await
+    // Gated repo (napr. Google licence u Gemma) vraci syrovy Python traceback,
+    // ze ktereho uzivatel nepozna, ze staci odsouhlasit licenci na HuggingFace.
+    .map_err(|e| {
+        if e.contains("gated repo") || e.contains("is restricted") {
+            format!(
+                "Model {} je na HuggingFace uzamceny (gated) — je potreba se prihlasit \
+                 a odsouhlasit licenci na {source_url}, pak slozku vybrat rucne pres \
+                 „Procházet\". Puvodni chyba:\n{e}",
+                profile.name
+            )
+        } else {
+            e
+        }
+    })?;
 
     if !looks_like_openvino_ir(&target) {
         return Err(format!(
@@ -1024,6 +1172,82 @@ mod tests {
                 profile.id
             );
         }
+    }
+
+    #[test]
+    fn multimodal_ir_is_not_text_only() {
+        // Server staví na LLMPipeline — multimodální model (Gemma 3/4) se sice
+        // tváří jako platné IR, ale generování na něm padá. Musí jít odlišit,
+        // aby uživatel dostal srozumitelnou hlášku, ne „input_ids not found".
+        let text_model = temp_dir("text_only");
+        std::fs::write(text_model.join("openvino_model.xml"), "<net/>").unwrap();
+        assert!(looks_like_openvino_ir(&text_model));
+        assert!(is_text_only_ir(&text_model));
+
+        let multimodal = temp_dir("multimodal");
+        std::fs::write(multimodal.join("openvino_language_model.xml"), "<net/>").unwrap();
+        std::fs::write(multimodal.join("openvino_vision_embeddings_model.xml"), "<net/>").unwrap();
+        assert!(looks_like_openvino_ir(&multimodal));
+        assert!(!is_text_only_ir(&multimodal), "multimodální IR není text-only");
+
+        for dir in [text_model, multimodal] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn shipped_profiles_are_text_only_and_ungated() {
+        // Gemma 3 4B se z nabídky odstranila: na HuggingFace je gated (auto-download
+        // spadne) a je multimodální, takže by ji LLMPipeline stejně nespustila.
+        let root = Path::new("C:/weave/openvino");
+        let profiles = openvino_model_profiles(root);
+        assert!(
+            !profiles.iter().any(|p| p.id.contains("gemma")),
+            "gated/multimodální Gemma profil se nesmí vrátit do nabídky"
+        );
+        assert!(profiles.len() >= 3, "nabídka má mít aspoň tři modely");
+    }
+
+    #[test]
+    fn device_family_strips_instance_suffix() {
+        assert_eq!(device_family("GPU.0"), "GPU");
+        assert_eq!(device_family("GPU.1"), "GPU");
+        assert_eq!(device_family("NPU"), "NPU");
+        assert_eq!(device_family("CPU"), "CPU");
+    }
+
+    #[test]
+    fn profiles_declare_devices_matching_measured_reality() {
+        let root = Path::new("C:/weave/openvino");
+        let profiles = openvino_model_profiles(root);
+        let by_id = |id: &str| profiles.iter().find(|p| p.id == id).cloned().unwrap();
+
+        // Kazdy profil musi nekde bezet, jinak nema v nabidce co delat.
+        for p in &profiles {
+            assert!(!p.supported_devices.is_empty(), "profil {} nema zarizeni", p.id);
+        }
+
+        // Overeno na Core Ultra 7 155H: cw-int4 do 8B jede vsude.
+        assert!(by_id("qwen3-8b-int4-cw-ov").supported_devices.contains(&"NPU".to_string()));
+        // nf4 NPU odmita.
+        assert!(!by_id("deepseek-r1-distill-qwen-7b-nf4-ov")
+            .supported_devices
+            .contains(&"NPU".to_string()));
+        // 30B MoE: NPU kompilaci nedokonci, Arc iGPU nema dost alokovatelne pameti.
+        assert_eq!(
+            by_id("qwen3-30b-a3b-int4-ov").supported_devices,
+            vec!["CPU".to_string()]
+        );
+    }
+
+    #[test]
+    fn profile_is_matched_by_model_dir_name() {
+        let root = Path::new("C:/weave/openvino");
+        let dir = Path::new("D:/jinde/Qwen3-30B-A3B-int4-ov");
+        // Rucne vybrana slozka jinde na disku se ma poznat podle nazvu.
+        let found = profile_for_model_dir(root, dir).expect("profil se ma najit");
+        assert_eq!(found.id, "qwen3-30b-a3b-int4-ov");
+        assert!(profile_for_model_dir(root, Path::new("D:/neco/cizi-model")).is_none());
     }
 
     #[test]

@@ -127,4 +127,59 @@ describe("modelsStore", () => {
       modelId: "qwen2.5-1.5b-instruct",
     });
   });
+
+  // Tlacitka Stahnout jsou disabled pres `!!modelsStore.download`. Kdyz stav
+  // zustane viset, appka uz na zadne kliknuti nereaguje — proto se musi
+  // uvolnit i kdyz backend nevrati zadny terminalni event nebo spadne.
+  it("po dokonceni bez 'done' eventu neuvazne stav stahovani", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "download_recommended_model") return undefined;
+      if (cmd === "list_local_models") return [];
+      if (cmd === "list_recommended_models") return [];
+      if (cmd === "detect_gpu") return null;
+      return undefined;
+    });
+
+    await modelsStore.downloadRecommended("qwen2.5-1.5b-instruct");
+
+    expect(modelsStore.download).toBeNull();
+  });
+
+  it("po chybe backendu neuvazne stav stahovani a ohlasi chybu", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "download_model") throw new Error("stahovani selhalo");
+      if (cmd === "list_local_models") return [];
+      if (cmd === "list_recommended_models") return [];
+      if (cmd === "detect_gpu") return null;
+      return undefined;
+    });
+
+    await modelsStore.downloadModel("nejaky-model", "https://example.invalid/m.gguf");
+
+    expect(modelsStore.download).toBeNull();
+    expect(modelsStore.error).toContain("stahovani selhalo");
+  });
+
+  // Realny pad: okno "settings" chybelo v capabilities, takze listen() na core
+  // eventy vyhodil vyjimku jeste pred invoke. Stav zustal viset a vsechna
+  // tlacitka Stahnout byla navzdy disabled — appka "nereagovala na kliknuti".
+  it("kdyz listen() selze (chybi capability), stav se uvolni a chyba se ohlasi", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    vi.mocked(listen).mockRejectedValueOnce(
+      new Error('event.listen not allowed on window "settings"'),
+    );
+    mockInvoke.mockImplementation(async () => undefined);
+
+    await modelsStore.downloadRecommended("qwen2.5-1.5b-instruct");
+
+    expect(modelsStore.download).toBeNull();
+    expect(modelsStore.error).toContain("not allowed on window");
+  });
+
+  it("setError() zverejni chybu z UI (napr. pad dialogu vyberu slozky)", () => {
+    modelsStore.setError("Nepodařilo se otevřít výběr složky");
+    expect(modelsStore.error).toContain("výběr složky");
+    modelsStore.setError(null);
+    expect(modelsStore.error).toBeNull();
+  });
 });
