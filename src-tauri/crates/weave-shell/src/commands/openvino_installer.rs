@@ -78,6 +78,12 @@ pub struct OpenvinoModelProfile {
     pub auto_downloadable: bool,
     pub size_hint: String,
     pub quality_tier: String,
+    /// Na kterych zarizenich model realne bezi ("NPU", "GPU", "CPU").
+    /// Overeno empiricky — NPU zvlada jen `-int4-cw-ov` (channel-wise) kvantizaci
+    /// do ~8B, Arc iGPU ma strop alokace, takze velke modely zvladne jen CPU.
+    /// UI podle toho nabidku filtruje, aby uzivatel nestahl model, ktery mu
+    /// na zvolenem zarizeni spadne az pri startu serveru.
+    pub supported_devices: Vec<String>,
 }
 
 fn openvino_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -138,8 +144,9 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
             repo_id: Some("OpenVINO/Qwen3-8B-int4-cw-ov".into()),
             source_url: Some("https://huggingface.co/OpenVINO/Qwen3-8B-int4-cw-ov".into()),
             auto_downloadable: true,
-            size_hint: "INT4 / NPU friendly".into(),
+            size_hint: "8B INT4 / ~4,8 GB".into(),
             quality_tier: "Doporuceno pro NPU".into(),
+            supported_devices: vec!["NPU".into(), "GPU".into(), "CPU".into()],
         },
         OpenvinoModelProfile {
             id: "mistral-7b-instruct-v0.3-int4-cw-ov".into(),
@@ -157,11 +164,12 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
             auto_downloadable: true,
             size_hint: "7B INT4 / ~3,8 GB".into(),
             quality_tier: "Vyvazeny pomer kvalita/rychlost".into(),
+            supported_devices: vec!["NPU".into(), "GPU".into(), "CPU".into()],
         },
         OpenvinoModelProfile {
             id: "deepseek-r1-distill-qwen-7b-nf4-ov".into(),
             name: "DeepSeek-R1-Distill-Qwen 7B NF4".into(),
-            description: "Model s durazem na uvazovani (reasoning). POZOR: kvantizace nf4 nejde na NPU (\"Unsupported data type 'nf4'\") — vyber v Zarizeni GPU nebo CPU. Odpovedi jsou pomalejsi, protoze model nejdriv premysli.".into(),
+            description: "Model s durazem na uvazovani (reasoning). Kvantizace nf4 nejde na NPU, jen GPU/CPU. Odpovedi jsou pomalejsi, protoze model nejdriv premysli.".into(),
             target_dir: root
                 .join("models")
                 .join("DeepSeek-R1-Distill-Qwen-7B-nf4-ov")
@@ -173,7 +181,30 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
             ),
             auto_downloadable: true,
             size_hint: "7B NF4 / ~4,4 GB".into(),
-            quality_tier: "Uvazovani — jen GPU/CPU".into(),
+            quality_tier: "Uvazovani (reasoning)".into(),
+            // nf4 NPU odmita: „[NPU_VCL] Unsupported data type 'nf4'".
+            supported_devices: vec!["GPU".into(), "CPU".into()],
+        },
+        OpenvinoModelProfile {
+            id: "qwen3-30b-a3b-int4-ov".into(),
+            name: "Qwen3 30B-A3B INT4 (MoE)".into(),
+            description: "Nejchytrejsi model z nabidky. MoE aktivuje na token jen ~3B parametru, \
+                takze na CPU bezi rychleji nez mensi 8B model (7,2 vs 4,6 tok/s) pri vyrazne \
+                vyssi kvalite. Vyuzije systemovou RAM — potrebuje cca 20 GB volne."
+                .into(),
+            target_dir: root
+                .join("models")
+                .join("Qwen3-30B-A3B-int4-ov")
+                .display()
+                .to_string(),
+            repo_id: Some("OpenVINO/Qwen3-30B-A3B-int4-ov".into()),
+            source_url: Some("https://huggingface.co/OpenVINO/Qwen3-30B-A3B-int4-ov".into()),
+            auto_downloadable: true,
+            size_hint: "30B MoE INT4 / ~16,3 GB".into(),
+            quality_tier: "Nejvyssi kvalita".into(),
+            // NPU: „[NPU_VCL] Compilation failed". Arc iGPU: „[CL ext] Can not
+            // allocate ... for USM Host" — na 16 GB model uz alokacni strop nestaci.
+            supported_devices: vec!["CPU".into()],
         },
         OpenvinoModelProfile {
             id: "phi-3.5-mini-int4-cw-ov".into(),
@@ -189,8 +220,9 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
                 "https://huggingface.co/OpenVINO/Phi-3.5-mini-instruct-int4-cw-ov".into(),
             ),
             auto_downloadable: true,
-            size_hint: "3,8B INT4 / nejrychlejsi start".into(),
+            size_hint: "3,8B INT4 / ~2,0 GB".into(),
             quality_tier: "Rychly test NPU".into(),
+            supported_devices: vec!["NPU".into(), "GPU".into(), "CPU".into()],
         },
     ]
 }
@@ -224,6 +256,21 @@ fn parse_device_check(output: &str) -> Option<OpenvinoDeviceCheck> {
 fn read_device_check(root: &Path) -> Option<OpenvinoDeviceCheck> {
     let text = std::fs::read_to_string(device_check_path(root)).ok()?;
     serde_json::from_str(&text).ok()
+}
+
+/// Rodina zarizeni bez instance — „GPU.0" -> „GPU". Profily podporu evidují
+/// po rodinach, uzivatel ale vybira konkretni zarizeni ze seznamu OpenVINO.
+fn device_family(device: &str) -> &str {
+    device.split('.').next().unwrap_or(device)
+}
+
+/// Zna se profil pro slozku modelu? Hleda se podle nazvu cilove slozky, protoze
+/// tu si uzivatel muze vybrat i rucne pres „Prochazet".
+fn profile_for_model_dir(root: &Path, model_dir: &Path) -> Option<OpenvinoModelProfile> {
+    let name = model_dir.file_name()?.to_string_lossy().to_lowercase();
+    openvino_model_profiles(root)
+        .into_iter()
+        .find(|p| Path::new(&p.target_dir).file_name().map(|n| n.to_string_lossy().to_lowercase()) == Some(name.clone()))
 }
 
 /// Vypadá složka jako OpenVINO IR model? Textové modely mají
@@ -856,6 +903,18 @@ pub(crate) async fn start_server_inner(
             model_dir.display()
         ));
     }
+    // Znamy profil na nepodporovanem zarizeni: rict to hned, ne az po nekolikaminutove
+    // kompilaci kryptickou hlaskou z NPU/GPU pluginu.
+    if let Some(profile) = profile_for_model_dir(&root, &model_dir) {
+        let family = device_family(&device);
+        if !profile.supported_devices.iter().any(|d| d == family) {
+            return Err(format!(
+                "{} na zarizeni {device} nebezi. Podporovana zarizeni: {}.",
+                profile.name,
+                profile.supported_devices.join(", ")
+            ));
+        }
+    }
 
     let mut guard = server_state().lock().await;
     if guard.is_some() {
@@ -1147,6 +1206,48 @@ mod tests {
             "gated/multimodální Gemma profil se nesmí vrátit do nabídky"
         );
         assert!(profiles.len() >= 3, "nabídka má mít aspoň tři modely");
+    }
+
+    #[test]
+    fn device_family_strips_instance_suffix() {
+        assert_eq!(device_family("GPU.0"), "GPU");
+        assert_eq!(device_family("GPU.1"), "GPU");
+        assert_eq!(device_family("NPU"), "NPU");
+        assert_eq!(device_family("CPU"), "CPU");
+    }
+
+    #[test]
+    fn profiles_declare_devices_matching_measured_reality() {
+        let root = Path::new("C:/weave/openvino");
+        let profiles = openvino_model_profiles(root);
+        let by_id = |id: &str| profiles.iter().find(|p| p.id == id).cloned().unwrap();
+
+        // Kazdy profil musi nekde bezet, jinak nema v nabidce co delat.
+        for p in &profiles {
+            assert!(!p.supported_devices.is_empty(), "profil {} nema zarizeni", p.id);
+        }
+
+        // Overeno na Core Ultra 7 155H: cw-int4 do 8B jede vsude.
+        assert!(by_id("qwen3-8b-int4-cw-ov").supported_devices.contains(&"NPU".to_string()));
+        // nf4 NPU odmita.
+        assert!(!by_id("deepseek-r1-distill-qwen-7b-nf4-ov")
+            .supported_devices
+            .contains(&"NPU".to_string()));
+        // 30B MoE: NPU kompilaci nedokonci, Arc iGPU nema dost alokovatelne pameti.
+        assert_eq!(
+            by_id("qwen3-30b-a3b-int4-ov").supported_devices,
+            vec!["CPU".to_string()]
+        );
+    }
+
+    #[test]
+    fn profile_is_matched_by_model_dir_name() {
+        let root = Path::new("C:/weave/openvino");
+        let dir = Path::new("D:/jinde/Qwen3-30B-A3B-int4-ov");
+        // Rucne vybrana slozka jinde na disku se ma poznat podle nazvu.
+        let found = profile_for_model_dir(root, dir).expect("profil se ma najit");
+        assert_eq!(found.id, "qwen3-30b-a3b-int4-ov");
+        assert!(profile_for_model_dir(root, Path::new("D:/neco/cizi-model")).is_none());
     }
 
     #[test]

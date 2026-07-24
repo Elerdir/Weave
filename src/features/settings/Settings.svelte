@@ -65,17 +65,27 @@
     }
   }
 
+  // Bez try/catch skoncila chyba dialogu jako neodchycene odmitnuti promise
+  // a tlacitko navenek "nic nedelalo" — uzivatel nemel jak zjistit proc.
   async function pickModelsDir() {
-    const dir = await openFilePicker({ directory: true, multiple: false });
-    if (typeof dir === "string") {
-      await modelsStore.setModelsDir(dir);
+    try {
+      const dir = await openFilePicker({ directory: true, multiple: false });
+      if (typeof dir === "string") {
+        await modelsStore.setModelsDir(dir);
+      }
+    } catch (e) {
+      modelsStore.setError(`Nepodařilo se otevřít výběr složky: ${e}`);
     }
   }
 
   async function pickOpenvinoModelDir() {
-    const dir = await openFilePicker({ directory: true, multiple: false });
-    if (typeof dir === "string") {
-      openvinoInstallStore.setModelDir(dir);
+    try {
+      const dir = await openFilePicker({ directory: true, multiple: false });
+      if (typeof dir === "string") {
+        openvinoInstallStore.setModelDir(dir);
+      }
+    } catch (e) {
+      modelsStore.setError(`Nepodařilo se otevřít výběr složky: ${e}`);
     }
   }
 
@@ -770,7 +780,7 @@
                   value={openvinoInstallStore.selectedProfileId}
                   onchange={(e) => openvinoInstallStore.setSelectedProfile((e.target as HTMLSelectElement).value)}
                 >
-                  {#each openvinoInstallStore.profiles as profile (profile.id)}
+                  {#each openvinoInstallStore.profilesForDevice as profile (profile.id)}
                     <option value={profile.id}>
                       {profile.name} - {profile.qualityTier}
                     </option>
@@ -791,6 +801,7 @@
                       ? i18n.m.settings.llm.openvinoProfileAuto
                       : i18n.m.settings.llm.openvinoProfileManual}
                     - {openvinoInstallStore.selectedProfile.sizeHint}
+                    - {i18n.m.settings.llm.openvinoProfileDevices}: {openvinoInstallStore.selectedProfile.supportedDevices.join(", ")}
                   </small>
                 </div>
               {/if}
@@ -1311,6 +1322,13 @@
         {:else if section === "models"}
           <h3>{i18n.m.settings.models.title}</h3>
 
+          <!-- Chyba patri nahoru k akcim. Driv byla az pod obema seznamy modelu,
+               takze pri kliknuti nahore zustala mimo obrazovku a stahovani
+               vypadalo, ze "nic nedela". -->
+          {#if modelsStore.error}
+            <p class="conn-status disconnected" style="margin-bottom:0.75rem">{modelsStore.error}</p>
+          {/if}
+
           <label class="field-label" for="models-dir">{i18n.m.settings.models.dirLabel}</label>
           <div class="comfyui-row">
             <input id="models-dir" type="text" readonly value={modelsStore.modelsDir} />
@@ -1370,7 +1388,7 @@
                       title={i18n.m.settings.models.delete}
                       aria-label={i18n.m.settings.models.delete}
                       onclick={() => modelsStore.deleteModel(rec.id)}
-                    >đź—‘</button>
+                    >🗑</button>
                   </div>
                 {:else if modelsStore.download?.modelId === rec.id}
                   <span class="dl-inline">{modelDownloadPercent(rec.id)}%</span>
@@ -1420,7 +1438,7 @@
                       title={i18n.m.settings.models.delete}
                       aria-label={i18n.m.settings.models.delete}
                       onclick={() => modelsStore.deleteModel(rec.id)}
-                    >đź—‘</button>
+                    >🗑</button>
                   </div>
                 {:else if modelsStore.download?.modelId === rec.id}
                   <span class="dl-inline">{modelDownloadPercent(rec.id)}%</span>
@@ -1492,10 +1510,6 @@
                 ↓
               </button>
             </div>
-          {/if}
-
-          {#if modelsStore.error}
-            <span class="conn-status disconnected">{modelsStore.error}</span>
           {/if}
         {:else if section === "notifications"}
           <h3>{i18n.m.settings.notifications.label}</h3>

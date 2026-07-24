@@ -312,6 +312,7 @@ const en: Messages = {
       openvinoRuntimeUninstall: "Uninstall OpenVINO runtime",
       openvinoRuntimeInstalled: "OpenVINO runtime is installed",
       openvinoRuntimeMissing: "OpenVINO runtime is not installed",
+      openvinoProfileDevices: "Devices",
       openvinoDevice: "Inference device",
       openvinoDeviceHint: "NPU is low-power but needs an up-to-date Intel AI Boost driver. GPU (Intel Arc) is usually faster and doesn't use discrete-GPU VRAM; CPU uses system RAM. The list shows what OpenVINO detects on this machine.",
       openvinoModelProfile: "NPU model profile",

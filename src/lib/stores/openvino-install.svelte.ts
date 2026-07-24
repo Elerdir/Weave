@@ -34,6 +34,13 @@ export interface OpenvinoModelProfile {
   autoDownloadable: boolean;
   sizeHint: string;
   qualityTier: string;
+  /** Na kterých zařízeních model reálně běží ("NPU", "GPU", "CPU"). */
+  supportedDevices: string[];
+}
+
+/** "GPU.0" → "GPU". Profily evidují podporu po rodinách zařízení. */
+function deviceFamily(device: string): string {
+  return device.split(".")[0];
 }
 
 interface InstallEvent {
@@ -95,11 +102,20 @@ function createOpenvinoInstallStore() {
     get profiles() {
       return profiles;
     },
+    /**
+     * Modely použitelné na právě zvoleném zařízení. Bez filtru by šlo stáhnout
+     * 16 GB model, který na NPU/GPU spadne až při startu serveru.
+     */
+    get profilesForDevice() {
+      const family = deviceFamily(device);
+      return profiles.filter((p) => p.supportedDevices.includes(family));
+    },
     get selectedProfileId() {
       return selectedProfileId;
     },
     get selectedProfile() {
-      return profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0] ?? null;
+      const usable = this.profilesForDevice;
+      return usable.find((profile) => profile.id === selectedProfileId) ?? usable[0] ?? null;
     },
     get startingServer() {
       return startingServer;
@@ -155,6 +171,13 @@ function createOpenvinoInstallStore() {
 
     setDevice(value: string) {
       device = value;
+      // Zvolený model nemusí na novém zařízení běžet — přepneme na první, který
+      // ano, ať uživateli nezůstane vybraný nespustitelný model.
+      const usable = this.profilesForDevice;
+      if (usable.length > 0 && !usable.some((p) => p.id === selectedProfileId)) {
+        selectedProfileId = usable[0].id;
+        modelDir = usable[0].targetDir;
+      }
     },
 
     setSelectedProfile(value: string) {

@@ -310,6 +310,7 @@ const cs = {
       openvinoRuntimeUninstall: "Odinstalovat OpenVINO runtime",
       openvinoRuntimeInstalled: "OpenVINO runtime je nainstalovaný",
       openvinoRuntimeMissing: "OpenVINO runtime není nainstalovaný",
+      openvinoProfileDevices: "Zařízení",
       openvinoDevice: "Zařízení pro inferenci",
       openvinoDeviceHint: "NPU je nízkopříkonové, ale vyžaduje aktuální ovladač Intel AI Boost. GPU (Intel Arc) bývá rychlejší a nezabírá VRAM diskrétní grafiky; CPU využije systémovou RAM. Zařízení nabízí to, co OpenVINO na stroji vidí.",
       openvinoModelProfile: "Profil NPU modelu",
