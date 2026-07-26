@@ -154,24 +154,6 @@ impl IntentClassifier {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelInfo {
-    pub id: String,
-    pub name: String,
-    pub provider: ModelProvider,
-    pub context_length: u32,
-    pub supports_vision: bool,
-    pub supports_tools: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelProvider {
-    MistralApi,
-    Local,
-    ComfyUi,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

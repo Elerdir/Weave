@@ -129,6 +129,8 @@ const en: Messages = {
     genSettings: {
       title: "Generation parameters",
       context: "Context window (tokens)",
+      contextVramWarning:
+        "A large context window inflates the KV cache in VRAM considerably and the model may no longer fit. Also check that your model actually supports a context this long.",
       temperature: "Temperature (creativity)",
       maxTokens: "Max response tokens",
       unlimited: "Unlimited",
@@ -337,6 +339,8 @@ const en: Messages = {
       gpuLayers: "GPU layers (999 = all)",
       contextLength: "Context window (tokens) — more = longer conversations and replies, but more VRAM",
       recommendedTitle: "Recommended models",
+      modelsCtaHint: "Downloading and managing models has its own section.",
+      modelsCtaButton: "Manage models",
       searchTitle: "Search HuggingFace",
       searchHint: "Full-text search of GGUF models — with an HF token (Settings → API keys) gated models (Llama…) are visible too.",
       searchPlaceholder: "e.g. llama 8b instruct, qwen coder…",
@@ -430,6 +434,8 @@ const en: Messages = {
       recommendedRtx3090: "Recommended for RTX 3090 / 24 GB VRAM and excellent Czech",
       downloadedTitle: "Downloaded models",
       npuRedirect: "The OpenVINO NPU backend is active — GGUF models for GPU inference aren't used. Manage NPU models in the \"AI model\" section.",
+      manualIdPlaceholder: "Model ID (e.g. qwen2.5-7b)",
+      manualUrlPlaceholder: "Download URL (HuggingFace / CivitAI)",
     },
   },
   common: {

@@ -67,6 +67,21 @@
     { value: "openvino_npu", label: () => i18n.m.chat.runtime.npu },
   ];
 
+  const CONTEXT_MIN = 2048;
+  /** 256k — strop dnešních dlouhokontextových modelů (Qwen, Llama 4…). */
+  const CONTEXT_MAX = 262144;
+  const CONTEXT_STEP = 1024;
+  /** Nad tímhle už KV cache spolehlivě nafoukne VRAM — varujeme. */
+  const CONTEXT_VRAM_WARN = 32768;
+
+  /** Ošetří prázdné/mimo rozsah zadání z číselného pole i posuvníku. */
+  function setContextLength(raw: string) {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return;
+    const clamped = Math.min(CONTEXT_MAX, Math.max(CONTEXT_MIN, Math.round(parsed)));
+    generationSettingsStore.setContextLength(clamped);
+  }
+
   const runtimeInfo = $derived.by(() => {
     const backend = conversationStore.currentStats?.backend ?? "unknown";
     if (backend === "local_cuda" || backend === "local_metal" || backend === "local_vulkan") {
@@ -541,19 +556,33 @@
       <div class="gen-field">
         <div class="gen-label-row">
           <label for="gen-context">{i18n.m.chat.genSettings.context}</label>
-          <span class="gen-value">{generationSettingsStore.contextLength.toLocaleString()}</span>
+          <!-- Posuvník sahá po 256k, takže běžné hodnoty (8k–32k) padnou do
+               prvních procent dráhy — číselné pole umožní zadat přesnou hodnotu. -->
+          <input
+            class="gen-value-input"
+            type="number"
+            aria-label={i18n.m.chat.genSettings.context}
+            min={CONTEXT_MIN}
+            max={CONTEXT_MAX}
+            step={CONTEXT_STEP}
+            value={generationSettingsStore.contextLength}
+            oninput={(e) => setContextLength((e.target as HTMLInputElement).value)}
+            onchange={() => generationSettingsStore.save()}
+          />
         </div>
         <input
           id="gen-context"
           type="range"
-          min="2048"
-          max="32768"
-          step="1024"
+          min={CONTEXT_MIN}
+          max={CONTEXT_MAX}
+          step={CONTEXT_STEP}
           value={generationSettingsStore.contextLength}
-          oninput={(e) =>
-            generationSettingsStore.setContextLength(Number((e.target as HTMLInputElement).value))}
+          oninput={(e) => setContextLength((e.target as HTMLInputElement).value)}
           onchange={() => generationSettingsStore.save()}
         />
+        {#if generationSettingsStore.contextLength > CONTEXT_VRAM_WARN}
+          <p class="gen-hint warn">{i18n.m.chat.genSettings.contextVramWarning}</p>
+        {/if}
       </div>
 
       <div class="gen-field">
@@ -1091,6 +1120,23 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .gen-value-input {
+    width: 7ch;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 0.1rem 0.3rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-accent);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .gen-value-input:focus {
+    border-color: var(--color-accent);
+    outline: none;
+  }
+
   .gen-field input[type="range"] {
     width: 100%;
     accent-color: var(--color-accent);
@@ -1127,6 +1173,9 @@
     font-size: 0.7rem;
     line-height: 1.3;
     color: var(--color-text-muted);
+  }
+  .gen-hint.warn {
+    color: var(--color-warning);
   }
 
   .gen-toggle {
