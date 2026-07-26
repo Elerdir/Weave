@@ -4,7 +4,6 @@ use crate::error::AppResult;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ApiService {
-    Mistral,
     CivitAi,
     HuggingFace,
 }
@@ -12,7 +11,6 @@ pub enum ApiService {
 impl ApiService {
     pub fn key_name(&self) -> &'static str {
         match self {
-            ApiService::Mistral => "weave.mistral.api_key",
             ApiService::CivitAi => "weave.civitai.api_key",
             ApiService::HuggingFace => "weave.huggingface.api_key",
         }

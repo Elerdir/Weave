@@ -64,9 +64,7 @@
   const runtimeOptions: { value: RuntimeBackend; label: () => string }[] = [
     { value: "default", label: () => i18n.m.chat.runtime.default },
     { value: "embedded", label: () => i18n.m.chat.runtime.gpu },
-    { value: "local", label: () => i18n.m.chat.runtime.ram },
     { value: "openvino_npu", label: () => i18n.m.chat.runtime.npu },
-    { value: "mistral", label: () => i18n.m.chat.runtime.api },
   ];
 
   const runtimeInfo = $derived.by(() => {

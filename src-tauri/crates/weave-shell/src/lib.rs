@@ -3,11 +3,10 @@ pub mod state;
 
 use std::sync::Arc;
 use tauri::Manager;
-use weave_application::ports::keychain_port::{ApiService, KeychainPort};
 use weave_infrastructure::{
     attachment_store::LocalAttachmentStore, comfy_installer::LocalComfyInstaller,
     comfyui::ComfyUiClient, db, hf_catalog::HuggingFaceCatalog, keychain::OsKeychain,
-    llm::mistral_client::MistralClient, model_manager::LocalModelManager,
+    model_manager::LocalModelManager,
 };
 
 use state::AppState;
@@ -33,11 +32,6 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
     let pool = db::create_pool(&db_url).await?;
 
     let keychain = Arc::new(OsKeychain::new(data_dir.join("secure")));
-    let mistral_key = keychain
-        .retrieve(&ApiService::Mistral)
-        .await
-        .unwrap_or(None)
-        .unwrap_or_default();
 
     // Uživatel může v nastavení/wizardu přesměrovat stahování modelů jinam
     // než na výchozí app-data disk (typicky C:) — pokud je uloženo, použije se.
@@ -63,7 +57,6 @@ pub async fn setup_state(app: &tauri::AppHandle) -> anyhow::Result<()> {
     let state = AppState {
         pool,
         keychain,
-        llm: Arc::new(MistralClient::new(mistral_key)),
         // Galerie musí být uvnitř assetProtocol scope ($APPDATA/weave/**),
         // jinak se náhledy vygenerovaných obrázků v chatu nezobrazí.
         image_gen: Arc::new(

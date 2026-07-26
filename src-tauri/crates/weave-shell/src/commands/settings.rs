@@ -49,7 +49,6 @@ struct WindowsNpuDevice {
 
 fn parse_service(service: &str) -> Result<ApiService, String> {
     match service {
-        "mistral" => Ok(ApiService::Mistral),
         "civitai" => Ok(ApiService::CivitAi),
         "huggingface" => Ok(ApiService::HuggingFace),
         _ => Err(format!("Neznámá služba: {service}")),
@@ -155,15 +154,6 @@ pub async fn test_comfyui_connection(url: String) -> Result<bool, String> {
     use weave_infrastructure::comfyui::ComfyUiClient;
 
     let client = ComfyUiClient::new(url);
-    Ok(client.is_available().await)
-}
-
-/// Ověří dostupnost lokálního OpenAI-kompatibilního LLM serveru (llama.cpp).
-#[tauri::command]
-pub async fn test_local_llm_connection(url: String) -> Result<bool, String> {
-    use weave_infrastructure::llm::local_client::LocalLlmClient;
-
-    let client = LocalLlmClient::new(url);
     Ok(client.is_available().await)
 }
 
@@ -372,8 +362,6 @@ pub async fn restart_runtime(
 }
 
 pub const LLM_BACKEND_KEY: &str = "llm.backend";
-pub const LLM_LOCAL_URL_KEY: &str = "llm.local_url";
-pub const DEFAULT_LOCAL_URL: &str = "http://localhost:8080";
 pub const LLM_OPENVINO_NPU_URL_KEY: &str = "llm.openvino_npu_url";
 pub const DEFAULT_OPENVINO_NPU_URL: &str = "http://localhost:8091";
 pub const LLM_MODEL_PATH_KEY: &str = "llm.model_path";
@@ -384,7 +372,7 @@ pub const LLM_CTX_KEY: &str = "llm.context_length";
 pub const DEFAULT_LLM_CTX: u32 = 8192;
 
 /// Sestaví aktivní LLM klienta podle uloženého nastavení
-/// (Mistral API / lokální llama.cpp server / vestavěná GPU inference).
+/// (vestavěná GPU inference / OpenVINO NPU).
 pub async fn resolve_llm(
     state: &AppState,
 ) -> std::sync::Arc<dyn weave_application::ports::llm_port::LlmPort> {
@@ -398,9 +386,9 @@ pub async fn resolve_llm_with_backend(
     backend_override: Option<&str>,
 ) -> std::sync::Arc<dyn weave_application::ports::llm_port::LlmPort> {
     use std::sync::Arc;
-    use weave_application::ports::keychain_port::ApiService;
     use weave_infrastructure::{
-        db::app_config, llm::local_client::LocalLlmClient, llm::mistral_client::MistralClient,
+        db::app_config, llm::local_client::LocalLlmClient,
+        llm::unconfigured_client::UnconfiguredLlmClient,
     };
 
     let backend = match backend_override.filter(|b| !b.is_empty() && *b != "default") {
@@ -409,7 +397,7 @@ pub async fn resolve_llm_with_backend(
             .await
             .ok()
             .flatten()
-            .unwrap_or_else(|| "mistral".to_string()),
+            .unwrap_or_else(|| "embedded".to_string()),
     };
 
     // Vestavěná GPU inference (jen když je zkompilovaná feature llm-embedded).
@@ -453,7 +441,7 @@ pub async fn resolve_llm_with_backend(
             *cache = Some((key, client.clone()));
             return client;
         }
-        tracing::warn!("backend=embedded, ale není nastavena cesta k modelu → fallback Mistral");
+        tracing::warn!("backend=embedded, ale není nastavena cesta k modelu → žádný backend");
     }
 
     // Jiný backend → případný kešovaný vestavěný model uvolníme (VRAM).
@@ -467,15 +455,6 @@ pub async fn resolve_llm_with_backend(
         tracing::info!("Uvolňuji kešovaný vestavěný model (přepnuto na jiný backend)");
     }
 
-    if backend == "local" {
-        let url = app_config::get(&state.pool, LLM_LOCAL_URL_KEY)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| DEFAULT_LOCAL_URL.to_string());
-        return Arc::new(LocalLlmClient::new(url));
-    }
-
     if backend == "openvino_npu" {
         let url = app_config::get(&state.pool, LLM_OPENVINO_NPU_URL_KEY)
             .await
@@ -485,13 +464,7 @@ pub async fn resolve_llm_with_backend(
         return Arc::new(LocalLlmClient::with_backend(url, ModelBackend::OpenvinoNpu));
     }
 
-    // Výchozí: Mistral API (klíč z keychain)
-    let key = state
-        .keychain
-        .retrieve(&ApiService::Mistral)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    Arc::new(MistralClient::new(key))
+    // Žádný backend nešel sestavit (embedded bez modelu, neznámá hodnota…) —
+    // jasná chyba místo tichého pádu na cloud API bez klíče.
+    Arc::new(UnconfiguredLlmClient)
 }

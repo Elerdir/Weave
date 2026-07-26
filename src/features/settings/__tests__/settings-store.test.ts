@@ -11,7 +11,7 @@ describe("settingsStore", () => {
 
   it("load() načte stav klíčů a ComfyUI URL", async () => {
     mockInvoke.mockImplementation(async (cmd: string, args?: any) => {
-      if (cmd === "get_api_key_status") return args.service === "mistral";
+      if (cmd === "get_api_key_status") return args.service === "civitai";
       if (cmd === "get_masked_api_key") return "sk-a••••••••";
       if (cmd === "get_app_setting") return "http://localhost:9999";
       return null;
@@ -19,9 +19,9 @@ describe("settingsStore", () => {
 
     await settingsStore.load();
 
-    expect(settingsStore.apiKeys.mistral.hasKey).toBe(true);
-    expect(settingsStore.apiKeys.mistral.masked).toBe("sk-a••••••••");
-    expect(settingsStore.apiKeys.civitai.hasKey).toBe(false);
+    expect(settingsStore.apiKeys.civitai.hasKey).toBe(true);
+    expect(settingsStore.apiKeys.civitai.masked).toBe("sk-a••••••••");
+    expect(settingsStore.apiKeys.huggingface.hasKey).toBe(false);
     expect(settingsStore.comfyuiUrl).toBe("http://localhost:9999");
   });
 
@@ -32,14 +32,14 @@ describe("settingsStore", () => {
       return undefined;
     });
 
-    await settingsStore.saveKey("mistral", "  sk-xyz  ");
+    await settingsStore.saveKey("civitai", "  sk-xyz  ");
 
     // token se ukládá oříznutý
     expect(mockInvoke).toHaveBeenCalledWith("store_api_key", {
-      service: "mistral",
+      service: "civitai",
       token: "sk-xyz",
     });
-    expect(settingsStore.apiKeys.mistral.hasKey).toBe(true);
+    expect(settingsStore.apiKeys.civitai.hasKey).toBe(true);
   });
 
   it("testComfyui() nastaví connected při úspěchu", async () => {
@@ -54,36 +54,28 @@ describe("settingsStore", () => {
     expect(settingsStore.comfyuiStatus).toBe("disconnected");
   });
 
-  it("load() načte LLM backend a lokální URL", async () => {
+  it("load() načte LLM backend", async () => {
     mockInvoke.mockImplementation(async (cmd: string, args?: any) => {
       if (cmd === "get_api_key_status") return false;
       if (cmd === "get_app_setting") {
-        if (args.key === "llm.backend") return "local";
-        if (args.key === "llm.local_url") return "http://localhost:1234";
+        if (args.key === "llm.backend") return "openvino_npu";
         return null;
       }
       return null;
     });
 
     await settingsStore.load();
-    expect(settingsStore.llmBackend).toBe("local");
-    expect(settingsStore.localUrl).toBe("http://localhost:1234");
+    expect(settingsStore.llmBackend).toBe("openvino_npu");
   });
 
   it("setBackend() uloží volbu backendu", async () => {
     mockInvoke.mockResolvedValueOnce(undefined);
-    await settingsStore.setBackend("local");
-    expect(settingsStore.llmBackend).toBe("local");
+    await settingsStore.setBackend("openvino_npu");
+    expect(settingsStore.llmBackend).toBe("openvino_npu");
     expect(mockInvoke).toHaveBeenCalledWith("set_app_setting", {
       key: "llm.backend",
-      value: "local",
+      value: "openvino_npu",
     });
-  });
-
-  it("testLocal() nastaví connected při úspěchu", async () => {
-    mockInvoke.mockResolvedValueOnce(true);
-    await settingsStore.testLocal();
-    expect(settingsStore.localStatus).toBe("connected");
   });
 
   it("activateModel() uloží cestu a dopočítané gpu_layers z backendu", async () => {

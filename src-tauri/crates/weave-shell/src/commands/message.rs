@@ -151,7 +151,7 @@ pub async fn auto_title_conversation(
         Arc::new(SqliteMessageRepository::new(state.pool.clone())),
         llm,
     )
-    .execute(conv_id, "mistral-small-latest".into())
+    .execute(conv_id, "local-model".into())
     .await
     .map_err(|e| e.to_string())
 }
@@ -171,7 +171,7 @@ pub async fn compact_conversation(
     let llm = super::settings::resolve_llm(&state).await;
 
     CompactConversationUseCase::new(msg_repo, llm)
-        .execute(conv_id, "mistral-small-latest".into())
+        .execute(conv_id, "local-model".into())
         .await
         .map_err(|e| e.to_string())
 }
@@ -206,7 +206,7 @@ pub async fn set_conversation_settings(
     if let Some(backend) = settings.runtime_backend.as_deref().map(str::trim) {
         match backend {
             "" => settings.runtime_backend = None,
-            "default" | "mistral" | "local" | "embedded" | "openvino_npu" => {
+            "default" | "embedded" | "openvino_npu" => {
                 settings.runtime_backend = Some(backend.to_string());
             }
             other => return Err(format!("Neznamy runtime backend: {other}")),

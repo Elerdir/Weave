@@ -1228,8 +1228,8 @@ impl SendMessageUseCase {
         has_reference_images: bool,
     ) -> (String, Option<String>) {
         // Hotový anglický SD prompt vezmeme rovnou — nemá cenu ho posílat LLM
-        // (zbytečné přepisování a hlavně: cenzurované modely jako Mistral by
-        // explicitní/odhalený prompt odmítly přeložit a generování by spadlo).
+        // (zbytečné přepisování a hlavně: cenzurované modely by explicitní/
+        // odhalený prompt odmítly přeložit a generování by spadlo).
         if is_ready_english_prompt(user_prompt) {
             return (user_prompt.to_string(), None);
         }
@@ -1241,7 +1241,7 @@ impl SendMessageUseCase {
         ];
         let request = ChatRequest {
             messages,
-            model_id: "mistral-small-latest".into(),
+            model_id: "local-model".into(),
             max_tokens: Some(200),
             context_length: None,
             temperature: 0.4,
@@ -1275,17 +1275,15 @@ impl SendMessageUseCase {
         )
     }
 
+    /// `model_id` je jen popisek do `GenerationStats` — s Mistralem pryč ho
+    /// žádný zbývající backend (embedded/OpenVINO) k výběru modelu nepoužívá
+    /// (embedded má model daný cestou k .gguf, OpenVINO tím, co server nahrál).
     fn model_for_intent(intent: &weave_domain::model::Intent) -> String {
         use weave_domain::model::Intent::*;
         match intent {
-            TextChat => "mistral-small-latest",
-            StoryWriting => "mistral-large-latest",
-            CodeAssistance => "codestral-latest",
-            Reasoning => "magistral-medium-latest",
-            FileAnalysis => "pixtral-large-latest",
             ImageGeneration => unreachable!("Image handled separately"),
+            _ => "local-model".to_string(),
         }
-        .to_string()
     }
 }
 

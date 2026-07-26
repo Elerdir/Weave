@@ -173,7 +173,6 @@
 
   // Dočasné hodnoty pro zadání nových klíčů
   let keyInputs = $state<Record<ApiServiceId, string>>({
-    mistral: "",
     civitai: "",
     huggingface: "",
   });
@@ -184,7 +183,6 @@
     { value: "en", label: "English" },
   ];
   const services: { id: ApiServiceId; label: string }[] = [
-    { id: "mistral", label: "Mistral" },
     { id: "civitai", label: "CivitAI" },
     { id: "huggingface", label: "HuggingFace" },
   ];
@@ -380,20 +378,6 @@
           <h3>{i18n.m.settings.llm.backend}</h3>
           <p class="hint">{i18n.m.settings.llm.hint}</p>
           <div class="option-row">
-            <button
-              class="chip"
-              class:selected={settingsStore.llmBackend === "mistral"}
-              onclick={() => settingsStore.setBackend("mistral")}
-            >
-              {i18n.m.settings.llm.mistral}
-            </button>
-            <button
-              class="chip"
-              class:selected={settingsStore.llmBackend === "local"}
-              onclick={() => settingsStore.setBackend("local")}
-            >
-              {i18n.m.settings.llm.local}
-            </button>
             <button
               class="chip"
               class:selected={settingsStore.llmBackend === "openvino_npu"}
@@ -649,31 +633,6 @@
                 onblur={() => settingsStore.saveContextLength()}
               />
             </details>
-          {/if}
-
-          {#if settingsStore.llmBackend === "local"}
-            <label class="field-label" for="local-url" style="margin-top:1rem">
-              {i18n.m.settings.llm.localUrl}
-            </label>
-            <div class="comfyui-row">
-              <input
-                id="local-url"
-                type="text"
-                value={settingsStore.localUrl}
-                oninput={(e) => settingsStore.setLocalUrl((e.target as HTMLInputElement).value)}
-                onblur={() => settingsStore.saveLocalUrl()}
-              />
-              <button class="btn-sm primary" onclick={() => settingsStore.testLocal()}>
-                {i18n.m.settings.llm.test}
-              </button>
-            </div>
-            {#if settingsStore.localStatus === "connected"}
-              <span class="conn-status connected">● {i18n.m.settings.llm.connected}</span>
-            {:else if settingsStore.localStatus === "disconnected"}
-              <span class="conn-status disconnected">● {i18n.m.settings.llm.disconnected}</span>
-            {:else if settingsStore.localStatus === "testing"}
-              <span class="conn-status testing">{i18n.m.common.loading}</span>
-            {/if}
           {/if}
 
           {#if settingsStore.llmBackend === "openvino_npu"}
@@ -1295,6 +1254,9 @@
         {:else if section === "models"}
           <h3>{i18n.m.settings.models.title}</h3>
 
+          {#if settingsStore.llmBackend !== "embedded"}
+            <p class="hint">{i18n.m.settings.models.npuRedirect}</p>
+          {:else}
           <label class="field-label" for="models-dir">{i18n.m.settings.models.dirLabel}</label>
           <div class="comfyui-row">
             <input id="models-dir" type="text" readonly value={modelsStore.modelsDir} />
@@ -1480,6 +1442,7 @@
 
           {#if modelsStore.error}
             <span class="conn-status disconnected">{modelsStore.error}</span>
+          {/if}
           {/if}
         {:else if section === "notifications"}
           <h3>{i18n.m.settings.notifications.label}</h3>

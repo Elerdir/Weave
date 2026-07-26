@@ -195,7 +195,6 @@ pub fn run() {
             commands::comfy_installer::list_lora_models,
             commands::comfy_installer::delete_image_model,
             commands::comfy_installer::save_file_copy,
-            commands::settings::test_local_llm_connection,
             commands::logs::get_app_logs,
             commands::logs::open_log_window,
             commands::gallery::list_gallery_images,

@@ -68,11 +68,11 @@ mod tests {
             .returning(|_| Box::pin(async { Ok(Some("sk-abc123xyz".into())) }));
 
         let uc = ManageApiKeysUseCase::new(Arc::new(mock));
-        uc.store_token(ApiService::Mistral, "sk-abc123xyz")
+        uc.store_token(ApiService::CivitAi, "sk-abc123xyz")
             .await
             .unwrap();
 
-        let masked = uc.masked_token(&ApiService::Mistral).await.unwrap();
+        let masked = uc.masked_token(&ApiService::CivitAi).await.unwrap();
         assert!(masked.is_some());
         let m = masked.unwrap();
         assert!(m.starts_with("sk-a"));

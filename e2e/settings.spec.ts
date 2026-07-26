@@ -20,7 +20,7 @@ test.describe("Settings", () => {
 
   test("přepne sekci na API klíče", async ({ page }) => {
     await page.locator(".settings-nav").getByRole("button", { name: /API klíče|API Keys/ }).click();
-    await expect(page.getByText("Mistral")).toBeVisible();
+    await expect(page.getByText("CivitAI")).toBeVisible();
   });
 
   test("sekce Modely zobrazí formulář pro stažení", async ({ page }) => {
