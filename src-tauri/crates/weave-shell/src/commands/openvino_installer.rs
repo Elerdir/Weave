@@ -301,6 +301,123 @@ async fn run_command_async(
         .map_err(|e| e.to_string())?
 }
 
+/// Kolik posledních řádků výstupu přiložit k chybě, když příkaz spadne.
+const ERROR_TAIL_LINES: usize = 20;
+/// Průběhové rámce (pip/tqdm překreslují řádek přes `\r`) chodí i stokrát za
+/// sekundu — bez škrcení by zahltily IPC kanál do UI.
+const PROGRESS_THROTTLE: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Čte stream po bajtech a posílá hotové úseky do okna. Dělí na `\n` i `\r`:
+/// pip i huggingface_hub kreslí průběh přepisováním řádku přes `\r`, takže na
+/// samotné `\n` by se čekalo až do konce celého stahování.
+async fn pump_output<R>(
+    window: Window,
+    reader: R,
+    tail: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+) where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+
+    let mut reader = reader;
+    let mut buf = [0u8; 4096];
+    let mut line = String::new();
+    let mut last_progress = std::time::Instant::now() - PROGRESS_THROTTLE;
+
+    loop {
+        let n = match reader.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        for ch in String::from_utf8_lossy(&buf[..n]).chars() {
+            match ch {
+                '\n' | '\r' => {
+                    let text = line.trim_end().to_string();
+                    line.clear();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    // Skutečné řádky logu posíláme vždy, průběhové rámce škrtíme.
+                    let is_progress = ch == '\r';
+                    if is_progress && last_progress.elapsed() < PROGRESS_THROTTLE {
+                        continue;
+                    }
+                    if is_progress {
+                        last_progress = std::time::Instant::now();
+                    } else {
+                        let mut guard = tail.lock().expect("tail mutex poisoned");
+                        if guard.len() >= ERROR_TAIL_LINES {
+                            guard.pop_front();
+                        }
+                        guard.push_back(text.clone());
+                    }
+                    emit_output(&window, text).await;
+                }
+                _ => line.push(ch),
+            }
+        }
+    }
+
+    let text = line.trim_end().to_string();
+    if !text.is_empty() {
+        emit_output(&window, text).await;
+    }
+}
+
+/// Spustí příkaz a streamuje výstup živě do okna. `run_command` s `.output()`
+/// bufferuje všechno až do konce procesu — během několikaminutového
+/// `pip install` nebo stahování modelu tak UI nedostalo ani řádek a vypadalo
+/// zaseknutě. Chyba nese posledních pár řádků výstupu, ne jen exit kód.
+async fn run_command_streamed(
+    window: &Window,
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+) -> Result<(), String> {
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    weave_infrastructure::spawn::hide_console(&mut cmd);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Nepodarilo se spustit {program}: {e}"))?;
+    let stdout = child.stdout.take().expect("stdout je piped");
+    let stderr = child.stderr.take().expect("stderr je piped");
+
+    let tail = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+    let out_task = tokio::spawn(pump_output(window.clone(), stdout, tail.clone()));
+    let err_task = tokio::spawn(pump_output(window.clone(), stderr, tail.clone()));
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| format!("{program} selhal: {e}"))?;
+    let _ = out_task.await;
+    let _ = err_task.await;
+
+    if !status.success() {
+        let context: Vec<String> = tail
+            .lock()
+            .expect("tail mutex poisoned")
+            .iter()
+            .cloned()
+            .collect();
+        let suffix = if context.is_empty() {
+            String::new()
+        } else {
+            format!("\n---\n{}", context.join("\n"))
+        };
+        return Err(format!(
+            "{program} skoncil s kodem {:?}{suffix}",
+            status.code()
+        ));
+    }
+    Ok(())
+}
+
 fn write_runtime_files(root: &Path) -> Result<(), String> {
     // huggingface-hub je omezený zdola i shora: 1.x odstranil `resume_download`
     // a `local_dir_use_symlinks`, na kterých dřív stahování padalo. Skript je
@@ -613,41 +730,42 @@ pub async fn install_openvino_runtime(
             ]
         };
         let launcher = if cfg!(windows) { "py" } else { "python3" };
-        let out = run_command_async(launcher.to_string(), args, Some(root.clone())).await?;
-        if !out.trim().is_empty() {
-            emit_output(&window, out).await;
-        }
+        run_command_streamed(&window, launcher, &args, Some(&root)).await?;
     }
 
     emit_step(&window, "Aktualizuji pip").await;
-    let out = run_command_async(
-        venv_python(&root).display().to_string(),
-        vec![
+    run_command_streamed(
+        &window,
+        &venv_python(&root).display().to_string(),
+        &[
             "-m".to_string(),
             "pip".to_string(),
             "install".to_string(),
             "--upgrade".to_string(),
             "pip".to_string(),
         ],
-        Some(root.clone()),
+        Some(&root),
     )
     .await?;
-    emit_output(&window, out).await;
 
-    emit_step(&window, "Instaluji OpenVINO GenAI runtime").await;
-    let out = run_command_async(
-        venv_python(&root).display().to_string(),
-        vec![
+    emit_step(
+        &window,
+        "Instaluji OpenVINO GenAI runtime (stahuje stovky MB, muze trvat minuty)",
+    )
+    .await;
+    run_command_streamed(
+        &window,
+        &venv_python(&root).display().to_string(),
+        &[
             "-m".to_string(),
             "pip".to_string(),
             "install".to_string(),
             "-r".to_string(),
             requirements_path(&root).display().to_string(),
         ],
-        Some(root.clone()),
+        Some(&root),
     )
     .await?;
-    emit_output(&window, out).await;
 
     emit_step(&window, "Overuji OpenVINO a NPU plugin").await;
     let out = run_command_async(
@@ -707,12 +825,35 @@ pub async fn install_openvino_runtime(
 pub async fn uninstall_openvino_runtime(app: AppHandle) -> Result<(), String> {
     stop_managed_server().await?;
     let root = openvino_dir(&app)?;
-    if root.exists() {
-        clear_readonly_flags(&root)?;
-        std::fs::remove_dir_all(&root)
-            .map_err(|e| format!("Odinstalace OpenVINO runtime selhala: {e}"))?;
+    if !root.exists() {
+        return Ok(());
     }
-    Ok(())
+    clear_readonly_flags(&root)?;
+
+    // Windows drží zámky na .exe/.dll ještě chvíli po zabití procesu (a python
+    // si spouští vlastní potomky), takže remove_dir_all hned po kill() umí
+    // spadnout na "access denied". Pár pokusů s pauzou to spolehlivě vyřeší;
+    // bez toho zůstala odinstalace viset s nicneříkající chybou.
+    let mut last_err = None;
+    for attempt in 0..5 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            // Potomci mohli mezitím vytvořit další soubory (např. __pycache__).
+            clear_readonly_flags(&root)?;
+        }
+        match std::fs::remove_dir_all(&root) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = Some(e),
+        }
+    }
+
+    Err(format!(
+        "Odinstalace OpenVINO runtime selhala: {}. Slozka {} je nejspis \
+         drzena jinym procesem — zavri pripadny bezici python/OpenVINO server \
+         a zkus to znovu.",
+        last_err.map(|e| e.to_string()).unwrap_or_default(),
+        root.display()
+    ))
 }
 
 fn read_log_tail(path: &Path) -> String {
@@ -885,14 +1026,16 @@ pub async fn stop_openvino_runtime_server(
 
 #[tauri::command]
 pub async fn download_openvino_recommended_model(
+    window: Window,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<OpenvinoRuntimeStatus, String> {
-    download_openvino_model_profile(app, "qwen3-8b-int4-cw-ov".into(), state).await
+    download_openvino_model_profile(window, app, "qwen3-8b-int4-cw-ov".into(), state).await
 }
 
 #[tauri::command]
 pub async fn download_openvino_model_profile(
+    window: Window,
     app: AppHandle,
     profile_id: String,
     state: State<'_, AppState>,
@@ -919,16 +1062,29 @@ pub async fn download_openvino_model_profile(
 
     let target = PathBuf::from(profile.target_dir);
     std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-    run_command_async(
-        venv_python(&root).display().to_string(),
-        vec![
+    // Stahování má jednotky GB — bez streamovaného průběhu (dřív se volalo
+    // bufferovaně a bez jediného eventu) vypadalo UI celé minuty zaseknuté.
+    emit_step(
+        &window,
+        format!("Stahuji {} ({repo_id})", profile.name),
+    )
+    .await;
+    let download_result = run_command_streamed(
+        &window,
+        &venv_python(&root).display().to_string(),
+        &[
             model_download_script_path(&root).display().to_string(),
             target.display().to_string(),
             repo_id,
         ],
-        Some(root.clone()),
+        Some(&root),
     )
-    .await?;
+    .await;
+    let _ = window.emit(
+        "openvino-install-progress",
+        serde_json::json!({ "type": "done" }),
+    );
+    download_result?;
 
     if !looks_like_openvino_ir(&target) {
         return Err(format!(

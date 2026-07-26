@@ -55,6 +55,30 @@ function createOpenvinoInstallStore() {
   let stoppingServer = $state(false);
   let downloadingModel = $state(false);
 
+  /**
+   * Napojí se na průběh z backendu (instalace i stahování modelu sdílí jeden
+   * kanál). Vrací odhlášení — volající ho musí zavolat ve `finally`, jinak by
+   * se posluchače hromadily napříč opakovanými pokusy.
+   */
+  async function listenToProgress() {
+    error = null;
+    currentStep = "";
+    log = [];
+    return listen<InstallEvent>("openvino-install-progress", (e) => {
+      const ev = e.payload;
+      if (ev.type === "step") {
+        currentStep = ev.name ?? "";
+        log = [...log.slice(-400), `> ${ev.name}`];
+      } else if (ev.type === "output") {
+        log = [...log.slice(-400), ev.line ?? ""];
+      } else if (ev.type === "done") {
+        currentStep = "";
+      } else if (ev.type === "error") {
+        error = ev.message ?? "Operace OpenVINO selhala";
+      }
+    });
+  }
+
   return {
     get status() {
       return status;
@@ -139,27 +163,7 @@ function createOpenvinoInstallStore() {
     async install() {
       if (installing) return;
       installing = true;
-      error = null;
-      currentStep = "";
-      log = [];
-
-      const unlisten = await listen<InstallEvent>("openvino-install-progress", (e) => {
-        const ev = e.payload;
-        if (ev.type === "step") {
-          currentStep = ev.name ?? "";
-          log = [...log, `> ${ev.name}`];
-        } else if (ev.type === "output") {
-          log = [...log.slice(-200), ev.line ?? ""];
-        } else if (ev.type === "done") {
-          installing = false;
-          currentStep = "";
-          unlisten();
-        } else if (ev.type === "error") {
-          error = ev.message ?? "Instalace OpenVINO selhala";
-          installing = false;
-          unlisten();
-        }
-      });
+      const unlisten = await listenToProgress();
 
       try {
         status = await invoke<OpenvinoRuntimeStatus>("install_openvino_runtime");
@@ -224,7 +228,7 @@ function createOpenvinoInstallStore() {
     async downloadRecommendedModel() {
       if (downloadingModel) return;
       downloadingModel = true;
-      error = null;
+      const unlisten = await listenToProgress();
       try {
         const selected = profiles.find((profile) => profile.id === selectedProfileId);
         const profileId = selected?.id ?? "qwen3-8b-int4-cw-ov";
@@ -237,6 +241,8 @@ function createOpenvinoInstallStore() {
         error = String(err);
       } finally {
         downloadingModel = false;
+        currentStep = "";
+        unlisten();
         await this.load().catch(() => undefined);
       }
     },
