@@ -107,27 +107,30 @@ function createComfyInstallStore() {
       log = [];
       currentStep = "";
 
-      const unlisten = await listen<InstallEvent>("comfyui-install-progress", (e) => {
-        const ev = e.payload;
-        if (ev.type === "step") {
-          currentStep = ev.name ?? "";
-          log = [...log, `▶ ${ev.name}`];
-        } else if (ev.type === "output") {
-          log = [...log.slice(-200), ev.line ?? ""];
-        } else if (ev.type === "done") {
-          installing = false;
-          currentStep = "";
-          unlisten();
-          void this.load();
-          void notify("ComfyUI nainstalováno", "Server je připraven ke spuštění.");
-        } else if (ev.type === "error") {
-          error = ev.message ?? "Instalace selhala";
-          installing = false;
-          unlisten();
-        }
-      });
-
+      // `listen()` musí být uvnitř try — když selže (okno bez Tauri
+      // capability), dřív výjimka utekla ven a `installing` zůstalo napořád
+      // true: UI viselo na spinneru, aniž by se instalace vůbec spustila.
+      let unlisten = () => {};
       try {
+        unlisten = await listen<InstallEvent>("comfyui-install-progress", (e) => {
+          const ev = e.payload;
+          if (ev.type === "step") {
+            currentStep = ev.name ?? "";
+            log = [...log, `▶ ${ev.name}`];
+          } else if (ev.type === "output") {
+            log = [...log.slice(-200), ev.line ?? ""];
+          } else if (ev.type === "done") {
+            installing = false;
+            currentStep = "";
+            unlisten();
+            void this.load();
+            void notify("ComfyUI nainstalováno", "Server je připraven ke spuštění.");
+          } else if (ev.type === "error") {
+            error = ev.message ?? "Instalace selhala";
+            installing = false;
+            unlisten();
+          }
+        });
         await invoke("install_comfyui");
       } catch (err) {
         error = String(err);

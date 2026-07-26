@@ -163,9 +163,13 @@ function createOpenvinoInstallStore() {
     async install() {
       if (installing) return;
       installing = true;
-      const unlisten = await listenToProgress();
-
+      let unlisten = () => {};
       try {
+        // Musí být uvnitř try: `listen()` umí selhat (okno bez Tauri
+        // capability) a dřív ta výjimka utekla ven ještě před `invoke`, takže
+        // `installing` zůstalo napořád true — UI viselo na spinneru bez chyby
+        // a instalace se přitom vůbec nespustila.
+        unlisten = await listenToProgress();
         status = await invoke<OpenvinoRuntimeStatus>("install_openvino_runtime");
         void notify("OpenVINO runtime nainstalovan", "NPU runtime je pripraven k dalsimu nastaveni.");
       } catch (err) {
@@ -228,8 +232,9 @@ function createOpenvinoInstallStore() {
     async downloadRecommendedModel() {
       if (downloadingModel) return;
       downloadingModel = true;
-      const unlisten = await listenToProgress();
+      let unlisten = () => {};
       try {
+        unlisten = await listenToProgress();
         const selected = profiles.find((profile) => profile.id === selectedProfileId);
         const profileId = selected?.id ?? "qwen3-8b-int4-cw-ov";
         status = await invoke<OpenvinoRuntimeStatus>("download_openvino_model_profile", {

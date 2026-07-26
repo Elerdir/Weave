@@ -18,7 +18,17 @@ impl OsKeychain {
         }
     }
 
+    /// Serializuje `Entry::new`. keyring 4.x inicializuje credential store líně
+    /// při prvním `Entry::new`, ale příznak "už inicializováno" si nastaví JEŠTĚ
+    /// PŘED samotnou inicializací (viz `keyring::v1::Entry::new`). Druhé vlákno,
+    /// které se do toho okna trefí, tak init přeskočí a spadne na
+    /// "No default store has been set" — a protože se příznak nikdy nevrátí zpět,
+    /// zůstane keychain rozbitý až do restartu a všechno spadne na DPAPI fallback.
+    /// Nastavení načítá klíče paralelně (`Promise.all`), takže se to trefovalo
+    /// spolehlivě. Zámek je levný — entry se vytváří jen při práci s klíči.
     fn entry(service: &ApiService) -> AppResult<Entry> {
+        static INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         Entry::new("weave", service.key_name()).map_err(|e| AppError::Keychain(e.to_string()))
     }
 

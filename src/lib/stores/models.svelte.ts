@@ -195,41 +195,44 @@ function createModelsStore() {
     const meter = createSpeedMeter();
     meter.reset();
 
-    const unlisten = await listen<DownloadEvent>("model-download-progress", (e) => {
-      const ev = e.payload;
-      if (ev.type === "started") {
-        meter.reset();
-        download = {
-          modelId,
-          downloaded: 0,
-          total: ev.total ?? 0,
-          phase: "downloading",
-          speedBytesPerSec: 0,
-        };
-      } else if (ev.type === "progress") {
-        const downloaded = ev.downloaded ?? 0;
-        download = {
-          modelId,
-          downloaded,
-          total: ev.total ?? 0,
-          phase: "downloading",
-          speedBytesPerSec: meter.update(downloaded),
-        };
-      } else if (ev.type === "verifying") {
-        if (download) download = { ...download, phase: "verifying", speedBytesPerSec: 0 };
-      } else if (ev.type === "done") {
-        download = null;
-        unlisten();
-        void modelsStore.load();
-        void notify("Model stažen", `${modelId} je připraven k použití.`);
-      } else if (ev.type === "error") {
-        error = ev.message ?? "Stahování selhalo";
-        download = null;
-        unlisten();
-      }
-    });
-
+    // Pozor: `listen()` i `invokeDownload()` musí být ve stejném try — když
+    // listen selže (okno bez Tauri capability), výjimka by jinak utekla ven a
+    // `download` zůstal viset na 0 % bez jakékoli chyby.
+    let unlisten = () => {};
     try {
+      unlisten = await listen<DownloadEvent>("model-download-progress", (e) => {
+        const ev = e.payload;
+        if (ev.type === "started") {
+          meter.reset();
+          download = {
+            modelId,
+            downloaded: 0,
+            total: ev.total ?? 0,
+            phase: "downloading",
+            speedBytesPerSec: 0,
+          };
+        } else if (ev.type === "progress") {
+          const downloaded = ev.downloaded ?? 0;
+          download = {
+            modelId,
+            downloaded,
+            total: ev.total ?? 0,
+            phase: "downloading",
+            speedBytesPerSec: meter.update(downloaded),
+          };
+        } else if (ev.type === "verifying") {
+          if (download) download = { ...download, phase: "verifying", speedBytesPerSec: 0 };
+        } else if (ev.type === "done") {
+          download = null;
+          unlisten();
+          void modelsStore.load();
+          void notify("Model stažen", `${modelId} je připraven k použití.`);
+        } else if (ev.type === "error") {
+          error = ev.message ?? "Stahování selhalo";
+          download = null;
+          unlisten();
+        }
+      });
       await invokeDownload();
     } catch (err) {
       error = String(err);
