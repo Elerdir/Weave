@@ -25,8 +25,6 @@ const COMFYUI_URL_KEY = "comfyui.url";
 const DEFAULT_COMFYUI_URL = "http://localhost:8199";
 const LEGACY_COMFYUI_URL = "http://localhost:8188";
 const LLM_BACKEND_KEY = "llm.backend";
-const LLM_LOCAL_URL_KEY = "llm.local_url";
-const DEFAULT_LOCAL_URL = "http://localhost:8080";
 const LLM_OPENVINO_NPU_URL_KEY = "llm.openvino_npu_url";
 const DEFAULT_OPENVINO_NPU_URL = "http://localhost:8091";
 const LLM_MODEL_PATH_KEY = "llm.model_path";
@@ -36,14 +34,13 @@ const LLM_CTX_KEY = "llm.context_length";
 const DEFAULT_LLM_CTX = "8192"; // musí odpovídat DEFAULT_LLM_CTX v settings.rs
 const NOTIFICATIONS_KEY = "notifications.enabled";
 
-export type LlmBackend = "mistral" | "local" | "embedded" | "openvino_npu";
+export type LlmBackend = "embedded" | "openvino_npu";
 type ConnStatus = "unknown" | "testing" | "connected" | "disconnected";
 
-const SERVICES: ApiServiceId[] = ["mistral", "civitai", "huggingface"];
+const SERVICES: ApiServiceId[] = ["civitai", "huggingface"];
 
 function createSettingsStore() {
   let apiKeys = $state<Record<ApiServiceId, ApiKeyState>>({
-    mistral: { service: "mistral", hasKey: false, masked: null },
     civitai: { service: "civitai", hasKey: false, masked: null },
     huggingface: { service: "huggingface", hasKey: false, masked: null },
   });
@@ -51,9 +48,7 @@ function createSettingsStore() {
   let comfyuiUrl = $state(DEFAULT_COMFYUI_URL);
   let comfyuiStatus = $state<ConnStatus>("unknown");
 
-  let llmBackend = $state<LlmBackend>("mistral");
-  let localUrl = $state(DEFAULT_LOCAL_URL);
-  let localStatus = $state<ConnStatus>("unknown");
+  let llmBackend = $state<LlmBackend>("embedded");
   let openvinoNpuUrl = $state(DEFAULT_OPENVINO_NPU_URL);
   let openvinoNpuStatus = $state<ConnStatus>("unknown");
   let npuInfo = $state<NpuInfo | null>(null);
@@ -83,12 +78,6 @@ function createSettingsStore() {
     },
     get llmBackend() {
       return llmBackend;
-    },
-    get localUrl() {
-      return localUrl;
-    },
-    get localStatus() {
-      return localStatus;
     },
     get openvinoNpuUrl() {
       return openvinoNpuUrl;
@@ -124,16 +113,7 @@ function createSettingsStore() {
         comfyuiUrl = comfy;
       }
       const backend = await invoke<string | null>("get_app_setting", { key: LLM_BACKEND_KEY });
-      llmBackend =
-        backend === "local"
-          ? "local"
-          : backend === "embedded"
-            ? "embedded"
-            : backend === "openvino_npu"
-              ? "openvino_npu"
-              : "mistral";
-      const lurl = await invoke<string | null>("get_app_setting", { key: LLM_LOCAL_URL_KEY });
-      localUrl = lurl ?? DEFAULT_LOCAL_URL;
+      llmBackend = backend === "openvino_npu" ? "openvino_npu" : "embedded";
       const npuUrl = await invoke<string | null>("get_app_setting", {
         key: LLM_OPENVINO_NPU_URL_KEY,
       });
@@ -161,25 +141,6 @@ function createSettingsStore() {
     async setBackend(backend: LlmBackend) {
       llmBackend = backend;
       await invoke("set_app_setting", { key: LLM_BACKEND_KEY, value: backend });
-    },
-
-    setLocalUrl(url: string) {
-      localUrl = url;
-      localStatus = "unknown";
-    },
-
-    async saveLocalUrl() {
-      await invoke("set_app_setting", { key: LLM_LOCAL_URL_KEY, value: localUrl });
-    },
-
-    async testLocal() {
-      localStatus = "testing";
-      try {
-        const ok = await invoke<boolean>("test_local_llm_connection", { url: localUrl });
-        localStatus = ok ? "connected" : "disconnected";
-      } catch {
-        localStatus = "disconnected";
-      }
     },
 
     setOpenvinoNpuUrl(url: string) {

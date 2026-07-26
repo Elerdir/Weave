@@ -22,7 +22,6 @@
   }
 
   let fields = $state<KeyField[]>([
-    { service: "mistral", label: "", value: "", saving: false, saved: false, masked: null, error: null },
     { service: "civitai", label: "", value: "", saving: false, saved: false, masked: null, error: null },
     { service: "huggingface", label: "", value: "", saving: false, saved: false, masked: null, error: null },
   ]);
@@ -53,9 +52,8 @@
   }
 
   $effect(() => {
-    fields[0].label = i18n.m.wizard.steps.apiKeys.mistral;
-    fields[1].label = i18n.m.wizard.steps.apiKeys.civitai;
-    fields[2].label = i18n.m.wizard.steps.apiKeys.huggingface;
+    fields[0].label = i18n.m.wizard.steps.apiKeys.civitai;
+    fields[1].label = i18n.m.wizard.steps.apiKeys.huggingface;
   });
 
   async function save(field: KeyField) {

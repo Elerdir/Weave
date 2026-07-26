@@ -68,8 +68,10 @@ pub struct GenerationStats {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelBackend {
-    #[default]
+    /// Historická hodnota — appka už Mistral API nenabízí, variant zůstává
+    /// jen kvůli deserializaci starých uložených zpráv.
     MistralApi,
+    #[default]
     LocalCuda,
     LocalMetal,
     LocalVulkan,

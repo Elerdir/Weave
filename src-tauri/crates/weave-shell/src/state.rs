@@ -15,7 +15,6 @@ pub type EmbeddedLlmKey = (String, u32, u32);
 pub struct AppState {
     pub pool: SqlitePool,
     pub keychain: Arc<dyn KeychainPort>,
-    pub llm: Arc<dyn LlmPort>,
     pub image_gen: Arc<dyn ImageGenPort>,
     pub model_manager: Arc<dyn ModelManagerPort>,
     /// Vyhledávání modelů na HuggingFace Hub (read-only katalog).
