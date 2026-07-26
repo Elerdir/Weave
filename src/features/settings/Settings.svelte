@@ -653,9 +653,9 @@
               </button>
             </div>
             {#if settingsStore.openvinoNpuStatus === "connected"}
-              <span class="conn-status connected">â—Ź {i18n.m.settings.llm.connected}</span>
+              <span class="conn-status connected">● {i18n.m.settings.llm.connected}</span>
             {:else if settingsStore.openvinoNpuStatus === "disconnected"}
-              <span class="conn-status disconnected">â—Ź {i18n.m.settings.llm.disconnected}</span>
+              <span class="conn-status disconnected">● {i18n.m.settings.llm.disconnected}</span>
             {:else if settingsStore.openvinoNpuStatus === "testing"}
               <span class="conn-status testing">{i18n.m.common.loading}</span>
             {/if}
@@ -1154,7 +1154,7 @@
                       title={i18n.m.settings.models.delete}
                       aria-label={i18n.m.settings.models.delete}
                       onclick={() => modelsStore.deleteModel(rec.id)}
-                    >đź—‘</button>
+                    >🗑</button>
                   </div>
                 {:else if modelsStore.download?.modelId === rec.id}
                   <span class="dl-inline">{modelDownloadPercent(rec.id)}%</span>
@@ -1204,7 +1204,7 @@
                       title={i18n.m.settings.models.delete}
                       aria-label={i18n.m.settings.models.delete}
                       onclick={() => modelsStore.deleteModel(rec.id)}
-                    >đź—‘</button>
+                    >🗑</button>
                   </div>
                 {:else if modelsStore.download?.modelId === rec.id}
                   <span class="dl-inline">{modelDownloadPercent(rec.id)}%</span>

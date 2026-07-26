@@ -1,11 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Hlavní oprávnění hlavního okna Weave (eventy, dialog, notifikace, otevírání odkazů).",
+  "description": "Oprávnění oken Weave (eventy, dialog, notifikace, otevírání odkazů). POZOR: každé nové okno sem musí přibýt, jinak mu Tauri odmítne core pluginy — vlastní #[tauri::command] fungují i bez toho, takže se výpadek projeví až u listen()/dialogu a vypadá jako zamrzlé UI.",
   "windows": [
     "main",
+    "settings",
     "logs",
     "gallery",
+    "gallery-detail-*",
     "subjects"
   ],
   "permissions": [
