@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   openvinoInstallStore,
   type OpenvinoRuntimeStatus,
@@ -7,6 +8,7 @@ import {
 } from "$lib/stores/openvino-install.svelte";
 
 const mockInvoke = vi.mocked(invoke);
+const mockListen = vi.mocked(listen);
 
 function status(overrides: Partial<OpenvinoRuntimeStatus> = {}): OpenvinoRuntimeStatus {
   return {
@@ -89,5 +91,33 @@ describe("openvinoInstallStore", () => {
     mockLoad(status({ installed: true, deviceCheck: null }));
     await openvinoInstallStore.load();
     expect(openvinoInstallStore.npuMissing).toBe(false);
+  });
+
+  // Regrese: stahování modelu (jednotky GB) dřív neposlouchalo progress kanál
+  // vůbec — UI ukazovalo jen "načítám" a vypadalo zaseknutě.
+  it("stahování modelu streamuje průběh do logu", async () => {
+    const unlisten = vi.fn();
+    let emit: ((e: { payload: unknown }) => void) | undefined;
+    mockListen.mockImplementation(async (_event: string, cb: any) => {
+      emit = cb;
+      return unlisten;
+    });
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "download_openvino_model_profile") {
+        emit?.({ payload: { type: "step", name: "Stahuji Qwen3 8B" } });
+        emit?.({ payload: { type: "output", line: "Fetching 12 files:  40%" } });
+        return status();
+      }
+      if (cmd === "get_openvino_runtime_status") return status();
+      if (cmd === "list_openvino_model_profiles") return profiles;
+      throw new Error(`neočekávaný příkaz: ${cmd}`);
+    });
+
+    await openvinoInstallStore.downloadRecommendedModel();
+
+    expect(openvinoInstallStore.log).toContain("> Stahuji Qwen3 8B");
+    expect(openvinoInstallStore.log).toContain("Fetching 12 files:  40%");
+    // Posluchač se musí odhlásit, jinak by se při opakovaném stahování hromadil.
+    expect(unlisten).toHaveBeenCalled();
   });
 });

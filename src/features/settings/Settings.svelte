@@ -526,7 +526,10 @@
                 </button>
               {/if}
             </div>
-            {#if openvinoInstallStore.installing}
+            <!-- Stahování modelu streamuje průběh stejným kanálem jako
+                 instalace, takže log patří i sem — jinak by vícegigové
+                 stahování vypadalo jako zamrzlé tlačítko. -->
+            {#if openvinoInstallStore.installing || openvinoInstallStore.downloadingModel}
               <div class="install-progress">
                 <div class="install-step">
                   <span class="spinner"></span>
@@ -834,11 +837,7 @@
                   <strong>OpenVINO / NPU</strong>
                   <small>{openvinoInstallStore.downloadingModel ? i18n.m.settings.downloads.openvinoModel : (openvinoInstallStore.currentStep || i18n.m.common.loading)}</small>
                 </div>
-                {#if openvinoInstallStore.installing}
-                  <pre class="install-log compact-log">{openvinoInstallStore.log.slice(-12).join("\n")}</pre>
-                {:else}
-                  <span class="conn-status testing">{i18n.m.common.loading}</span>
-                {/if}
+                <pre class="install-log compact-log">{openvinoInstallStore.log.slice(-12).join("\n")}</pre>
               </section>
             {/if}
 
