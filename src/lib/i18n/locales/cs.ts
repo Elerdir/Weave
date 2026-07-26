@@ -127,6 +127,8 @@ const cs = {
     genSettings: {
       title: "Parametry generování",
       context: "Kontextové okno (tokeny)",
+      contextVramWarning:
+        "Velké kontextové okno výrazně nafoukne KV cache ve VRAM a model se nemusí vejít. Ověř si taky, že tvůj model tak dlouhý kontext vůbec podporuje.",
       temperature: "Teplota (kreativita)",
       maxTokens: "Max. tokenů odpovědi",
       unlimited: "Neomezeno",
@@ -335,6 +337,8 @@ const cs = {
       gpuLayers: "Počet vrstev na GPU (999 = vše)",
       contextLength: "Kontextové okno (tokeny) — víc = delší konverzace i odpovědi, ale víc VRAM",
       recommendedTitle: "Doporučené modely",
+      modelsCtaHint: "Stahování a správa modelů má vlastní sekci.",
+      modelsCtaButton: "Spravovat modely",
       searchTitle: "Hledat na HuggingFace",
       searchHint: "Fulltext hledání GGUF modelů — s HF tokenem (Nastavení → API klíče) vidíš i gated modely (Llama…), bez něj vše veřejné.",
       searchPlaceholder: "např. llama 8b instruct, qwen coder…",
@@ -428,6 +432,8 @@ const cs = {
       recommendedRtx3090: "Doporučeno pro RTX 3090 / 24 GB VRAM a výbornou češtinu",
       downloadedTitle: "Stažené modely",
       npuRedirect: "Aktivní je OpenVINO NPU backend — GGUF modely pro GPU inferenci se nepoužívají. NPU modely spravuj v sekci „AI model“.",
+      manualIdPlaceholder: "ID modelu (např. qwen2.5-7b)",
+      manualUrlPlaceholder: "URL ke stažení (HuggingFace / CivitAI)",
     },
   },
   common: {

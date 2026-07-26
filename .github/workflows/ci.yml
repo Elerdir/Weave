@@ -52,9 +52,10 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      # Bez --all-features: GPU inference featury (llm-cuda/llm-metal/llm-vulkan)
-      # vyžadují CUDA/Metal/Vulkan toolchain, který CI runner nemá — testují se
-      # a buildí ručně (viz README, run-dev.bat), ne v CI.
+      # Bez --all-features: GPU inference featury vyžadují GPU toolchain, který
+      # tenhle runner nemá. Metal se kompiluje v jobu rust-macos, Vulkan v
+      # rust-vulkan; CUDA zůstává jen ruční (viz README, run-dev.bat) — CUDA
+      # toolkit je na CI moc velký.
       - name: Clippy
         run: cargo clippy --all-targets --workspace -- -D warnings
 
@@ -104,6 +105,45 @@ jobs:
       # Metal build llama.cpp (cmake + clang jsou na runneru předinstalované).
       - name: Check Metal build
         run: cargo check -p weave-infrastructure --features llm-metal
+
+  # Vulkan (AMD/Intel GPU) neměl dlouho v CI nic — na rozdíl od Metalu se nikde
+  # nekompiloval, takže se mohl tiše rozbít a zjistilo by se to až u uživatele
+  # s AMD kartou. Kompiluje se na Linuxu (levnější než Windows runner); ověřuje
+  # se tím llm-vulkan feature llama.cpp, ne běh na skutečném GPU — runner žádné
+  # nemá, takže tenhle job hlídá jen to, že build nepřestal procházet.
+  rust-vulkan:
+    name: rust-vulkan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      # libvulkan-dev = Vulkan loader/hlavičky, glslc = kompilátor GLSL shaderů,
+      # který si vynucuje ggml-vulkan. libsecret/pkg-config potřebuje keyring,
+      # libclang-dev bindgen v llama-cpp-sys-2.
+      - name: Install Vulkan + build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev \
+            glslc \
+            libsecret-1-dev \
+            libclang-dev \
+            cmake \
+            pkg-config
+
+      - name: Placeholder frontend dist
+        run: mkdir -p dist && echo '<!doctype html><title>Weave</title>' > dist/index.html
+
+      - name: Check Vulkan build
+        run: cargo check -p weave-infrastructure --features llm-vulkan
 
   frontend-test:
     name: frontend-test

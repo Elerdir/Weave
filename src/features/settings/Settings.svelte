@@ -108,7 +108,9 @@
 
   let { onClose, windowMode = false }: { onClose: () => void; windowMode?: boolean } = $props();
 
-  type Section = "appearance" | "language" | "apiKeys" | "llm" | "runtime" | "downloads" | "comfyui" | "models" | "notifications" | "logs" | "updates" | "backup";
+  // „appearance" zahrnuje i jazyk a oznámení, „runtime" i průběh stahování —
+  // samostatné sekce pro jeden přepínač byly zbytečné.
+  type Section = "appearance" | "apiKeys" | "llm" | "runtime" | "comfyui" | "models" | "logs" | "updates" | "backup";
   // Záloha dat: export/import ZIP (import se aplikuje po restartu)
   let backupBusy = $state(false);
   let backupNotice = $state<string | null>(null);
@@ -270,9 +272,6 @@
         <button class:active={section === "appearance"} onclick={() => (section = "appearance")}>
           {i18n.m.settings.sections.appearance}
         </button>
-        <button class:active={section === "language"} onclick={() => (section = "language")}>
-          {i18n.m.settings.sections.language}
-        </button>
         <button class:active={section === "apiKeys"} onclick={() => (section = "apiKeys")}>
           {i18n.m.settings.sections.apiKeys}
         </button>
@@ -282,9 +281,6 @@
         <button class:active={section === "runtime"} onclick={() => (section = "runtime")}>
           {i18n.m.settings.sections.runtime}
         </button>
-        <button class:active={section === "downloads"} onclick={() => (section = "downloads")}>
-          {i18n.m.settings.sections.downloads}
-        </button>
         <button class:active={section === "comfyui"} onclick={() => (section = "comfyui")}>
           {i18n.m.settings.sections.comfyui}
         </button>
@@ -293,9 +289,6 @@
         </button>
         <button class:active={section === "logs"} onclick={() => (section = "logs")}>
           {i18n.m.settings.sections.logs}
-        </button>
-        <button class:active={section === "notifications"} onclick={() => (section = "notifications")}>
-          {i18n.m.settings.sections.notifications}
         </button>
         <button class:active={section === "updates"} onclick={() => (section = "updates")}>
           {i18n.m.settings.sections.updates}
@@ -319,8 +312,8 @@
               </button>
             {/each}
           </div>
-        {:else if section === "language"}
-          <h3>{i18n.m.settings.sections.language}</h3>
+
+          <h4 class="sub-heading">{i18n.m.settings.sections.language}</h4>
           <div class="option-row">
             {#each locales as loc}
               <button
@@ -331,6 +324,25 @@
                 {loc.label}
               </button>
             {/each}
+          </div>
+
+          <h4 class="sub-heading">{i18n.m.settings.notifications.label}</h4>
+          <p class="hint">{i18n.m.settings.notifications.hint}</p>
+          <div class="option-row">
+            <button
+              class="chip"
+              class:selected={settingsStore.notificationsEnabled}
+              onclick={() => settingsStore.setNotifications(true)}
+            >
+              {i18n.m.settings.notifications.enabled}
+            </button>
+            <button
+              class="chip"
+              class:selected={!settingsStore.notificationsEnabled}
+              onclick={() => settingsStore.setNotifications(false)}
+            >
+              {i18n.m.settings.notifications.disabled}
+            </button>
           </div>
         {:else if section === "apiKeys"}
           <h3>{i18n.m.settings.sections.apiKeys}</h3>
@@ -415,181 +427,12 @@
               {/if}
             {/if}
 
-            <h4 class="sub-heading">{i18n.m.settings.llm.recommendedTitle}</h4>
-            <div class="recommended-list">
-              {#each modelsStore.recommended as rec (rec.id)}
-                {@const downloaded = modelsStore.isDownloaded(rec.id)}
-                {@const isActive = settingsStore.modelPath.endsWith(`${rec.id}.gguf`)}
-                <div class="recommended-item" class:active={isActive}>
-                  <div class="recommended-meta">
-                    <div class="recommended-name">
-                      {rec.name}
-                      {#if isActive}<span class="active-badge">{i18n.m.settings.llm.inUse}</span>{/if}
-                    </div>
-                    <div class="recommended-desc">{rec.description}</div>
-                    <div class="recommended-size">{formatBytes(rec.size_bytes)}</div>
-                  </div>
-                  {#if downloaded}
-                    <div class="recommended-actions">
-                      <button
-                        class="btn-sm"
-                        class:primary={!isActive}
-                        disabled={isActive}
-                        onclick={() => {
-                          const path = modelsStore.models.find((m) => m.id === rec.id)?.path ?? "";
-                          settingsStore.activateModel(path);
-                        }}
-                      >
-                        {isActive ? i18n.m.settings.llm.inUse : i18n.m.settings.llm.activate}
-                      </button>
-                      <button
-                        class="btn-sm danger"
-                        disabled={isActive}
-                        title={i18n.m.settings.models.delete}
-                        aria-label={i18n.m.settings.models.delete}
-                        onclick={() => modelsStore.deleteModel(rec.id)}
-                      >🗑</button>
-                    </div>
-                  {:else if modelsStore.download?.modelId === rec.id}
-                    <span class="dl-inline">
-                      {Math.round(((modelsStore.download.downloaded) / (modelsStore.download.total || 1)) * 100)}%
-                    </span>
-                  {:else}
-                    <button
-                      class="btn-sm primary"
-                      disabled={!!modelsStore.download}
-                      onclick={() => modelsStore.downloadRecommended(rec.id)}
-                    >
-                      {i18n.m.settings.llm.download}
-                    </button>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-
-            <h4 class="sub-heading">{i18n.m.settings.llm.searchTitle}</h4>
-            <p class="hint">{i18n.m.settings.llm.searchHint}</p>
-            <div class="comfyui-row">
-              <input
-                type="text"
-                placeholder={i18n.m.settings.llm.searchPlaceholder}
-                value={modelSearchStore.query}
-                oninput={(e) => modelSearchStore.setQuery((e.target as HTMLInputElement).value)}
-                onkeydown={(e) => e.key === "Enter" && modelSearchStore.search()}
-              />
-              <button
-                class="btn-sm primary"
-                disabled={modelSearchStore.searching || !modelSearchStore.query.trim()}
-                onclick={() => modelSearchStore.search()}
-              >
-                {modelSearchStore.searching
-                  ? i18n.m.settings.llm.searching
-                  : i18n.m.settings.llm.searchButton}
+            <div class="models-cta">
+              <span>{i18n.m.settings.llm.modelsCtaHint}</span>
+              <button class="btn-sm primary" onclick={() => (section = "models")}>
+                {i18n.m.settings.llm.modelsCtaButton}
               </button>
             </div>
-
-            {#if modelSearchStore.error}
-              <span class="conn-status disconnected">{modelSearchStore.error}</span>
-            {/if}
-
-            {#if modelSearchStore.searched && modelSearchStore.results.length === 0 && !modelSearchStore.searching}
-              <p class="hint">{i18n.m.settings.llm.searchEmpty}</p>
-            {/if}
-
-            {#if modelSearchStore.results.length > 0}
-              <div class="recommended-list">
-                {#each modelSearchStore.results as repo (repo.repo_id)}
-                  {@const isOpen = modelSearchStore.expandedRepo === repo.repo_id}
-                  <div class="recommended-item search-repo" class:active={isOpen}>
-                    <div class="recommended-meta">
-                      <div class="recommended-name">
-                        {repo.name}
-                        {#if repo.gated}
-                          <span class="gated-badge" title={i18n.m.settings.llm.gatedHint}>🔒</span>
-                        {/if}
-                      </div>
-                      <div class="recommended-desc">
-                        {repo.author} · ⬇ {repo.downloads.toLocaleString()} · ❤ {repo.likes.toLocaleString()}
-                      </div>
-                      {#if isOpen}
-                        {#if modelSearchStore.loadingFiles && modelSearchStore.filesFor(repo.repo_id).length === 0}
-                          <div class="recommended-size">{i18n.m.common.loading}</div>
-                        {:else if modelSearchStore.filesFor(repo.repo_id).length === 0}
-                          <div class="recommended-size">{i18n.m.settings.llm.noGgufFiles}</div>
-                        {:else}
-                          <div class="quant-list">
-                            {#each modelSearchStore.filesFor(repo.repo_id) as file (file.file_name)}
-                              {@const fileId = modelIdForFile(file.file_name)}
-                              {@const downloaded = modelsStore.isDownloaded(fileId)}
-                              {@const vram = (modelsStore.gpu?.vram_mb ?? 0) * 1024 * 1024}
-                              <div class="quant-row">
-                                <span class="quant-badge">{file.quant ?? "GGUF"}</span>
-                                <span class="quant-size">
-                                  {formatBytes(file.size_bytes)}
-                                  {#if vram > 0 && file.size_bytes > 0}
-                                    {#if file.size_bytes < vram * 0.8}
-                                      <span class="fit ok" title={i18n.m.settings.llm.vramFits}>●</span>
-                                    {:else if file.size_bytes < vram}
-                                      <span class="fit tight" title={i18n.m.settings.llm.vramTight}>●</span>
-                                    {:else}
-                                      <span class="fit over" title={i18n.m.settings.llm.vramOver}>●</span>
-                                    {/if}
-                                  {/if}
-                                </span>
-                                {#if downloaded}
-                                  <span class="dl-inline">✓ {i18n.m.wizard.steps.models.ready}</span>
-                                {:else if modelsStore.download?.modelId === fileId}
-                                  <span class="dl-inline">
-                                    {Math.round(((modelsStore.download.downloaded) / (modelsStore.download.total || 1)) * 100)}%
-                                  </span>
-                                {:else}
-                                  <button
-                                    class="btn-sm primary"
-                                    disabled={!!modelsStore.download}
-                                    onclick={() =>
-                                      modelsStore.downloadModel(fileId, file.download_url, file.sha256)}
-                                  >
-                                    {i18n.m.settings.llm.download}
-                                  </button>
-                                {/if}
-                              </div>
-                            {/each}
-                          </div>
-                        {/if}
-                      {/if}
-                    </div>
-                    <button class="btn-sm" onclick={() => modelSearchStore.toggleRepo(repo.repo_id)}>
-                      {isOpen ? i18n.m.settings.llm.hideQuants : i18n.m.settings.llm.showQuants}
-                    </button>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-
-            {#if modelsStore.download}
-              <div class="dl-progress" style="margin-top:0.75rem">
-                <div class="dl-head">
-                  <span>{modelsStore.download.modelId}</span>
-                  <span>
-                    {#if modelsStore.download.phase === "verifying"}
-                      {i18n.m.common.loading}
-                    {:else}
-                      {formatBytes(modelsStore.download.downloaded)} / {formatBytes(modelsStore.download.total)}{#if modelsStore.download.speedBytesPerSec > 0} · {formatSpeed(modelsStore.download.speedBytesPerSec)}{#if formatEta(modelsStore.download.total - modelsStore.download.downloaded, modelsStore.download.speedBytesPerSec)} · ⏱ {formatEta(modelsStore.download.total - modelsStore.download.downloaded, modelsStore.download.speedBytesPerSec)}{/if}{/if}
-                    {/if}
-                  </span>
-                </div>
-                <div class="dl-bar">
-                  <div
-                    class="dl-fill"
-                    style="width: {Math.round((modelsStore.download.downloaded / (modelsStore.download.total || 1)) * 100)}%"
-                  ></div>
-                </div>
-              </div>
-            {/if}
-
-            {#if modelsStore.error}
-              <span class="conn-status disconnected">{modelsStore.error}</span>
-            {/if}
 
             <details class="advanced-details">
               <summary>{i18n.m.settings.llm.advanced}</summary>
@@ -931,11 +774,7 @@
               {/if}
             </section>
           </div>
-        {:else if section === "downloads"}
-          <div class="section-title-row">
-            <h3>{i18n.m.settings.downloads.title}</h3>
-            <button class="btn-sm" onclick={refreshRuntime}>{i18n.m.settings.runtime.refresh}</button>
-          </div>
+          <h4 class="sub-heading">{i18n.m.settings.downloads.title}</h4>
           <section class="download-tuning">
             <label for="download-segments">
               <span>{i18n.m.settings.downloads.segments}</span>
@@ -1383,6 +1222,105 @@
             {/each}
           </div>
 
+          <h4 class="sub-heading">{i18n.m.settings.llm.searchTitle}</h4>
+          <p class="hint">{i18n.m.settings.llm.searchHint}</p>
+          <div class="comfyui-row">
+            <input
+              type="text"
+              placeholder={i18n.m.settings.llm.searchPlaceholder}
+              value={modelSearchStore.query}
+              oninput={(e) => modelSearchStore.setQuery((e.target as HTMLInputElement).value)}
+              onkeydown={(e) => e.key === "Enter" && modelSearchStore.search()}
+            />
+            <button
+              class="btn-sm primary"
+              disabled={modelSearchStore.searching || !modelSearchStore.query.trim()}
+              onclick={() => modelSearchStore.search()}
+            >
+              {modelSearchStore.searching
+                ? i18n.m.settings.llm.searching
+                : i18n.m.settings.llm.searchButton}
+            </button>
+          </div>
+
+          {#if modelSearchStore.error}
+            <span class="conn-status disconnected">{modelSearchStore.error}</span>
+          {/if}
+
+          {#if modelSearchStore.searched && modelSearchStore.results.length === 0 && !modelSearchStore.searching}
+            <p class="hint">{i18n.m.settings.llm.searchEmpty}</p>
+          {/if}
+
+          {#if modelSearchStore.results.length > 0}
+            <div class="recommended-list">
+              {#each modelSearchStore.results as repo (repo.repo_id)}
+                {@const isOpen = modelSearchStore.expandedRepo === repo.repo_id}
+                <div class="recommended-item search-repo" class:active={isOpen}>
+                  <div class="recommended-meta">
+                    <div class="recommended-name">
+                      {repo.name}
+                      {#if repo.gated}
+                        <span class="gated-badge" title={i18n.m.settings.llm.gatedHint}>🔒</span>
+                      {/if}
+                    </div>
+                    <div class="recommended-desc">
+                      {repo.author} · ⬇ {repo.downloads.toLocaleString()} · ❤ {repo.likes.toLocaleString()}
+                    </div>
+                    {#if isOpen}
+                      {#if modelSearchStore.loadingFiles && modelSearchStore.filesFor(repo.repo_id).length === 0}
+                        <div class="recommended-size">{i18n.m.common.loading}</div>
+                      {:else if modelSearchStore.filesFor(repo.repo_id).length === 0}
+                        <div class="recommended-size">{i18n.m.settings.llm.noGgufFiles}</div>
+                      {:else}
+                        <div class="quant-list">
+                          {#each modelSearchStore.filesFor(repo.repo_id) as file (file.file_name)}
+                            {@const fileId = modelIdForFile(file.file_name)}
+                            {@const downloaded = modelsStore.isDownloaded(fileId)}
+                            {@const vram = (modelsStore.gpu?.vram_mb ?? 0) * 1024 * 1024}
+                            <div class="quant-row">
+                              <span class="quant-badge">{file.quant ?? "GGUF"}</span>
+                              <span class="quant-size">
+                                {formatBytes(file.size_bytes)}
+                                {#if vram > 0 && file.size_bytes > 0}
+                                  {#if file.size_bytes < vram * 0.8}
+                                    <span class="fit ok" title={i18n.m.settings.llm.vramFits}>●</span>
+                                  {:else if file.size_bytes < vram}
+                                    <span class="fit tight" title={i18n.m.settings.llm.vramTight}>●</span>
+                                  {:else}
+                                    <span class="fit over" title={i18n.m.settings.llm.vramOver}>●</span>
+                                  {/if}
+                                {/if}
+                              </span>
+                              {#if downloaded}
+                                <span class="dl-inline">✓ {i18n.m.wizard.steps.models.ready}</span>
+                              {:else if modelsStore.download?.modelId === fileId}
+                                <span class="dl-inline">
+                                  {Math.round(((modelsStore.download.downloaded) / (modelsStore.download.total || 1)) * 100)}%
+                                </span>
+                              {:else}
+                                <button
+                                  class="btn-sm primary"
+                                  disabled={!!modelsStore.download}
+                                  onclick={() =>
+                                    modelsStore.downloadModel(fileId, file.download_url, file.sha256)}
+                                >
+                                  {i18n.m.settings.llm.download}
+                                </button>
+                              {/if}
+                            </div>
+                          {/each}
+                        </div>
+                      {/if}
+                    {/if}
+                  </div>
+                  <button class="btn-sm" onclick={() => modelSearchStore.toggleRepo(repo.repo_id)}>
+                    {isOpen ? i18n.m.settings.llm.hideQuants : i18n.m.settings.llm.showQuants}
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
           <h4 class="sub-heading">{i18n.m.settings.models.downloadedTitle}</h4>
           <div class="model-list">
             {#each modelsStore.models as model (model.id)}
@@ -1422,12 +1360,12 @@
             <div class="dl-form">
               <input
                 type="text"
-                placeholder="ID modelu (např. mistral-7b)"
+                placeholder={i18n.m.settings.models.manualIdPlaceholder}
                 bind:value={downloadId}
               />
               <input
                 type="text"
-                placeholder="URL ke stažení (HuggingFace / CivitAI)"
+                placeholder={i18n.m.settings.models.manualUrlPlaceholder}
                 bind:value={downloadUrl}
               />
               <button
@@ -1444,25 +1382,6 @@
             <span class="conn-status disconnected">{modelsStore.error}</span>
           {/if}
           {/if}
-        {:else if section === "notifications"}
-          <h3>{i18n.m.settings.notifications.label}</h3>
-          <p class="hint">{i18n.m.settings.notifications.hint}</p>
-          <div class="option-row">
-            <button
-              class="chip"
-              class:selected={settingsStore.notificationsEnabled}
-              onclick={() => settingsStore.setNotifications(true)}
-            >
-              {i18n.m.settings.notifications.enabled}
-            </button>
-            <button
-              class="chip"
-              class:selected={!settingsStore.notificationsEnabled}
-              onclick={() => settingsStore.setNotifications(false)}
-            >
-              {i18n.m.settings.notifications.disabled}
-            </button>
-          </div>
         {:else if section === "logs"}
           <h3>{i18n.m.settings.sections.logs}</h3>
           <button
@@ -2261,6 +2180,21 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .models-cta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    padding: 0.65rem 0.85rem;
+    margin: 1rem 0;
+    font-size: 0.82rem;
+    color: var(--color-text-muted);
   }
 
   .advanced-details {
