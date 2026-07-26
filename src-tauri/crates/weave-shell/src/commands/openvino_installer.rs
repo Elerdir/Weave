@@ -13,6 +13,11 @@ const OPENVINO_SERVER_PORT: u16 = 8091;
 const OPENVINO_SERVER_HOST: &str = "127.0.0.1";
 const OPENVINO_DEVICE: &str = "NPU";
 
+/// Výchozí NPU profil. Musí zůstat ten nejmenší — větší modely na části NPU
+/// neprojdou kompilací a uživatel by rovnou narazil na nefunkční výchozí stav.
+/// Stejná hodnota je i v `openvino-install.svelte.ts`.
+const DEFAULT_PROFILE_ID: &str = "phi-3.5-mini-int4-cw-ov";
+
 /// Poslední ručně zvolená složka s OpenVINO IR modelem. Bez uložení se po
 /// restartu appky ztratila a server nešlo spustit bez opětovného vyhledání.
 pub const OPENVINO_MODEL_DIR_KEY: &str = "llm.openvino_model_dir";
@@ -112,45 +117,20 @@ fn server_log_path(root: &Path) -> PathBuf {
 }
 
 fn default_model_dir(root: &Path) -> PathBuf {
-    root.join("models").join("qwen3-8b-int4-cw-ov")
+    root.join("models").join("phi-3.5-mini-instruct-int4-cw-ov")
 }
 
+/// NPU umí jen kanálově kvantované (`-cw-ov`) OpenVINO IR modely a těch
+/// OpenVINO publikuje jen hrstku — žádná Gemma 4 mezi nimi není a Gemma 3 4B
+/// je gated (vyžaduje HF token) a navíc multimodální, takže ji `LLMPipeline`
+/// nenačte. Pořadí = doporučení: menší modely NPU zkompiluje spolehlivěji,
+/// 7B/8B na části NPU spadne v Level Zero compileru už při startu.
 fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
     vec![
         OpenvinoModelProfile {
-            id: "qwen3-8b-int4-cw-ov".into(),
-            name: "Qwen3 8B INT4 OpenVINO".into(),
-            description: "Stabilni automaticky stazitelny OpenVINO IR model pro NPU. Dobra obecna kvalita, rychly start a rozumna pametova narocnost.".into(),
-            target_dir: root
-                .join("models")
-                .join("qwen3-8b-int4-cw-ov")
-                .display()
-                .to_string(),
-            repo_id: Some("OpenVINO/Qwen3-8B-int4-cw-ov".into()),
-            source_url: Some("https://huggingface.co/OpenVINO/Qwen3-8B-int4-cw-ov".into()),
-            auto_downloadable: true,
-            size_hint: "INT4 / NPU friendly".into(),
-            quality_tier: "Doporuceno pro NPU".into(),
-        },
-        OpenvinoModelProfile {
-            id: "gemma-3-4b-int4-cw-ov".into(),
-            name: "Gemma 3 4B Instruct INT4".into(),
-            description: "Mensi model s dobrou cestinou. Vhodny kompromis, kdyz je Qwen3 8B na NPU pomaly.".into(),
-            target_dir: root
-                .join("models")
-                .join("gemma-3-4b-it-int4-cw-ov")
-                .display()
-                .to_string(),
-            repo_id: Some("OpenVINO/gemma-3-4b-it-int4-cw-ov".into()),
-            source_url: Some("https://huggingface.co/OpenVINO/gemma-3-4b-it-int4-cw-ov".into()),
-            auto_downloadable: true,
-            size_hint: "4B INT4 / NPU friendly".into(),
-            quality_tier: "Vyvazeny pomer kvalita/rychlost".into(),
-        },
-        OpenvinoModelProfile {
             id: "phi-3.5-mini-int4-cw-ov".into(),
-            name: "Phi-3.5 mini Instruct INT4".into(),
-            description: "Nejmensi a nejrychlejsi profil -- dobry na prvni overeni, ze NPU inference vubec bezi. Cestina je slabsi nez u Qwen3.".into(),
+            name: "Phi-3.5 mini Instruct INT4 (3,8B)".into(),
+            description: "Nejspolehlivejsi volba pro NPU — mala a rychle se zkompiluje. Zacni tudy a over, ze NPU inference vubec bezi. Cestina je slabsi nez u vetsich modelu.".into(),
             target_dir: root
                 .join("models")
                 .join("phi-3.5-mini-instruct-int4-cw-ov")
@@ -161,8 +141,57 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
                 "https://huggingface.co/OpenVINO/Phi-3.5-mini-instruct-int4-cw-ov".into(),
             ),
             auto_downloadable: true,
-            size_hint: "3,8B INT4 / nejrychlejsi start".into(),
-            quality_tier: "Rychly test NPU".into(),
+            size_hint: "3,8B INT4 / ~2 GB".into(),
+            quality_tier: "Doporuceno pro NPU".into(),
+        },
+        OpenvinoModelProfile {
+            id: "phi-3-mini-4k-int4-cw-ov".into(),
+            name: "Phi-3 mini 4k Instruct INT4 (3,8B)".into(),
+            description: "Starsi sourozenec Phi-3.5 se stejnou velikosti. Zaloha, kdyz Phi-3.5 na tvem NPU z nejakeho duvodu neprojde kompilaci.".into(),
+            target_dir: root
+                .join("models")
+                .join("phi-3-mini-4k-instruct-int4-cw-ov")
+                .display()
+                .to_string(),
+            repo_id: Some("OpenVINO/Phi-3-mini-4k-instruct-int4-cw-ov".into()),
+            source_url: Some(
+                "https://huggingface.co/OpenVINO/Phi-3-mini-4k-instruct-int4-cw-ov".into(),
+            ),
+            auto_downloadable: true,
+            size_hint: "3,8B INT4 / ~2 GB".into(),
+            quality_tier: "Zalozni mala varianta".into(),
+        },
+        OpenvinoModelProfile {
+            id: "mistral-7b-v03-int4-cw-ov".into(),
+            name: "Mistral 7B Instruct v0.3 INT4".into(),
+            description: "Vetsi model s lepsi kvalitou i cestinou. Na slabsich NPU uz nemusi projit kompilaci — kdyz start skonci chybou Level Zero compileru, vrat se k Phi-3.5.".into(),
+            target_dir: root
+                .join("models")
+                .join("mistral-7b-instruct-v0.3-int4-cw-ov")
+                .display()
+                .to_string(),
+            repo_id: Some("OpenVINO/Mistral-7B-Instruct-v0.3-int4-cw-ov".into()),
+            source_url: Some(
+                "https://huggingface.co/OpenVINO/Mistral-7B-Instruct-v0.3-int4-cw-ov".into(),
+            ),
+            auto_downloadable: true,
+            size_hint: "7B INT4 / ~4 GB".into(),
+            quality_tier: "Vyssi kvalita, narocnejsi na NPU".into(),
+        },
+        OpenvinoModelProfile {
+            id: "qwen3-8b-int4-cw-ov".into(),
+            name: "Qwen3 8B INT4 (nejvetsi)".into(),
+            description: "Nejlepsi kvalita z NPU nabidky, ale i nejnarocnejsi — na mnoha NPU spadne uz pri kompilaci modelu (chyba Level Zero compileru). Zkousej az kdyz mensi profily bezi.".into(),
+            target_dir: root
+                .join("models")
+                .join("qwen3-8b-int4-cw-ov")
+                .display()
+                .to_string(),
+            repo_id: Some("OpenVINO/Qwen3-8B-int4-cw-ov".into()),
+            source_url: Some("https://huggingface.co/OpenVINO/Qwen3-8B-int4-cw-ov".into()),
+            auto_downloadable: true,
+            size_hint: "8B INT4 / ~4,4 GB".into(),
+            quality_tier: "Nejvyssi kvalita, casto nezkompilovatelny".into(),
         },
     ]
 }
@@ -374,8 +403,23 @@ async fn run_command_streamed(
     args: &[String],
     cwd: Option<&Path>,
 ) -> Result<(), String> {
+    run_command_streamed_env(window, program, args, cwd, &[]).await
+}
+
+/// Jako `run_command_streamed`, ale s doplněnými proměnnými prostředí —
+/// tudy se předává HF token, aby se neobjevil v argumentech (a tím i v logu).
+async fn run_command_streamed_env(
+    window: &Window,
+    program: &str,
+    args: &[String],
+    cwd: Option<&Path>,
+    env: &[(&str, String)],
+) -> Result<(), String> {
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
     weave_infrastructure::spawn::hide_console(&mut cmd);
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
@@ -659,13 +703,19 @@ if __name__ == "__main__":
     // POZOR: `local_dir_use_symlinks` ani `resume_download` se sem nesmí vrátit —
     // huggingface_hub 1.x je odstranil a volání padalo na TypeError. Stahování
     // do `local_dir` dnes navazuje na rozdělané soubory samo.
-    let downloader = r#"import sys
+    // Token bereme z prostředí (HF_TOKEN), ne z argumentu — v argumentech by
+    // se objevil ve výpisu procesů i ve streamovaném logu. Bez něj se gated
+    // repozitáře (Gemma) stáhnou jen zpola: README projde, váhy ne, a chyba
+    // se dřív ztratila, takže složka vypadala „stažená".
+    let downloader = r#"import os
+import sys
 from huggingface_hub import snapshot_download
 
 if len(sys.argv) != 3:
     raise SystemExit("usage: download_recommended_openvino_model.py <target-dir> <repo-id>")
 
-snapshot_download(repo_id=sys.argv[2], local_dir=sys.argv[1])
+token = os.environ.get("HF_TOKEN") or None
+snapshot_download(repo_id=sys.argv[2], local_dir=sys.argv[1], token=token)
 "#;
     std::fs::write(model_download_script_path(root), downloader).map_err(|e| e.to_string())?;
 
@@ -856,6 +906,30 @@ pub async fn uninstall_openvino_runtime(app: AppHandle) -> Result<(), String> {
     ))
 }
 
+/// Přeloží typické pády NPU startu do věty, se kterou jde něco udělat.
+/// Bez toho uživatel dostal jen zeď C++ výjimek z Level Zero compileru.
+fn npu_failure_hint(log_tail: &str) -> &'static str {
+    let lower = log_tail.to_lowercase();
+    if lower.contains("ze_result_error_invalid_argument")
+        || lower.contains("compilation failed")
+        || lower.contains("failed to create executable")
+    {
+        return "\n\nNPU nedokazalo model zkompilovat. Nejcasteji je model na tvoje NPU \
+                proste moc velky — zkus mensi profil (Phi-3.5 mini). Pokud padaji i male \
+                modely, aktualizuj ovladac NPU (Intel AI Boost / NPU Compute Accelerator \
+                ve Spravci zarizeni).";
+    }
+    if lower.contains("openvino_language_model.xml") || lower.contains("vlmpipeline") {
+        return "\n\nVypada to na multimodalni (obrazkovy) model — NPU server umi jen \
+                textove modely. Vyber jiny profil.";
+    }
+    if lower.contains("401") || lower.contains("403") || lower.contains("gated") {
+        return "\n\nModel je na HuggingFace gated. Prijmi jeho licenci na HuggingFace a \
+                vloz HF token v Nastaveni -> API klice.";
+    }
+    ""
+}
+
 fn read_log_tail(path: &Path) -> String {
     let Ok(text) = std::fs::read_to_string(path) else {
         return "OpenVINO server log zatim neni dostupny.".into();
@@ -981,10 +1055,12 @@ pub(crate) async fn start_server_inner(
             if let Some(child) = guard.as_mut() {
                 if let Ok(Some(status)) = child.try_wait() {
                     *guard = None;
+                    let tail = read_log_tail(&log_path);
                     return Err(format!(
-                        "OpenVINO server skoncil pred startem ({status}).\n\nPosledni radky logu ({}):\n{}",
+                        "OpenVINO server skoncil pred startem ({status}).{}\n\nPosledni radky logu ({}):\n{}",
+                        npu_failure_hint(&tail),
                         log_path.display(),
-                        read_log_tail(&log_path)
+                        tail
                     ));
                 }
             }
@@ -1030,7 +1106,7 @@ pub async fn download_openvino_recommended_model(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<OpenvinoRuntimeStatus, String> {
-    download_openvino_model_profile(window, app, "qwen3-8b-int4-cw-ov".into(), state).await
+    download_openvino_model_profile(window, app, DEFAULT_PROFILE_ID.into(), state).await
 }
 
 #[tauri::command]
@@ -1069,7 +1145,21 @@ pub async fn download_openvino_model_profile(
         format!("Stahuji {} ({repo_id})", profile.name),
     )
     .await;
-    let download_result = run_command_streamed(
+    // Gated repozitáře (Gemma a spol.) bez tokenu stáhnou jen README a mlčky
+    // skončí — pokud uživatel HF token v Nastavení má, použijeme ho.
+    let hf_token = state
+        .keychain
+        .retrieve(&weave_application::ports::keychain_port::ApiService::HuggingFace)
+        .await
+        .ok()
+        .flatten()
+        .filter(|t| !t.trim().is_empty());
+    let env: Vec<(&str, String)> = match hf_token {
+        Some(token) => vec![("HF_TOKEN", token)],
+        None => Vec::new(),
+    };
+
+    let download_result = run_command_streamed_env(
         &window,
         &venv_python(&root).display().to_string(),
         &[
@@ -1078,6 +1168,7 @@ pub async fn download_openvino_model_profile(
             repo_id,
         ],
         Some(&root),
+        &env,
     )
     .await;
     let _ = window.emit(
@@ -1186,8 +1277,31 @@ mod tests {
     fn default_profile_id_resolves() {
         let root = Path::new("C:/weave/openvino");
         // Na tohle ID padá `download_openvino_recommended_model` i fallback ve storu.
-        let profile = openvino_model_profile(root, "qwen3-8b-int4-cw-ov").expect("výchozí profil");
+        let profile = openvino_model_profile(root, DEFAULT_PROFILE_ID).expect("výchozí profil");
         assert!(profile.auto_downloadable);
         assert!(openvino_model_profile(root, "neexistuje").is_err());
+    }
+
+    #[test]
+    fn default_profile_is_the_smallest_one() {
+        // Regrese: výchozí byl Qwen3 8B, který na řadě NPU neprojde kompilací —
+        // uživatel tak narazil na nefunkční stav hned napoprvé.
+        let profiles = openvino_model_profiles(Path::new("C:/weave/openvino"));
+        assert_eq!(
+            profiles.first().expect("aspoň jeden profil").id,
+            DEFAULT_PROFILE_ID,
+            "výchozí profil musí být první v seznamu (nejmenší = nejspolehlivější)"
+        );
+    }
+
+    #[test]
+    fn npu_failure_hint_recognises_compiler_and_gating_errors() {
+        assert!(npu_failure_hint(
+            "Compilation failed. Level0 pfnCreate2 result: ZE_RESULT_ERROR_INVALID_ARGUMENT"
+        )
+        .contains("mensi profil"));
+        assert!(npu_failure_hint("401 Client Error: Unauthorized, repo is gated")
+            .contains("HF token"));
+        assert!(npu_failure_hint("vse v poradku, server bezi").is_empty());
     }
 }

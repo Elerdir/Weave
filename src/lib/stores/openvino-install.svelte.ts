@@ -34,6 +34,9 @@ export interface OpenvinoModelProfile {
   qualityTier: string;
 }
 
+/** Musí odpovídat DEFAULT_PROFILE_ID v openvino_installer.rs. */
+const DEFAULT_PROFILE_ID = "phi-3.5-mini-int4-cw-ov";
+
 interface InstallEvent {
   type: "step" | "output" | "done" | "error";
   name?: string;
@@ -50,7 +53,7 @@ function createOpenvinoInstallStore() {
   let error = $state<string | null>(null);
   let modelDir = $state("");
   let profiles = $state<OpenvinoModelProfile[]>([]);
-  let selectedProfileId = $state("qwen3-8b-int4-cw-ov");
+  let selectedProfileId = $state(DEFAULT_PROFILE_ID);
   let startingServer = $state(false);
   let stoppingServer = $state(false);
   let downloadingModel = $state(false);
@@ -140,7 +143,7 @@ function createOpenvinoInstallStore() {
       status = nextStatus;
       profiles = nextProfiles;
       if (!profiles.some((profile) => profile.id === selectedProfileId)) {
-        selectedProfileId = profiles[0]?.id ?? "qwen3-8b-int4-cw-ov";
+        selectedProfileId = profiles[0]?.id ?? DEFAULT_PROFILE_ID;
       }
       const selected = profiles.find((profile) => profile.id === selectedProfileId);
       if (!modelDir) {
@@ -236,7 +239,7 @@ function createOpenvinoInstallStore() {
       try {
         unlisten = await listenToProgress();
         const selected = profiles.find((profile) => profile.id === selectedProfileId);
-        const profileId = selected?.id ?? "qwen3-8b-int4-cw-ov";
+        const profileId = selected?.id ?? DEFAULT_PROFILE_ID;
         status = await invoke<OpenvinoRuntimeStatus>("download_openvino_model_profile", {
           profileId,
         });
