@@ -325,6 +325,10 @@ const cs = {
       npuDetected: "NPU detekováno",
       npuNotDetected: "NPU nebylo detekováno",
       detectNpu: "Znovu detekovat",
+      npuDriver: "Ovladač",
+      npuDriverOutdated:
+        "Ovladač NPU {version} je zastaralý. NPU kompiluje model až ve svém ovladači, takže na tomhle OpenVINO 2026 model nezkompiluje a start skončí chybou Level Zero compileru — bez ohledu na velikost modelu.",
+      npuDriverDownload: "Stáhnout aktuální ovladač Intel NPU",
       hint: "Appka běží čistě lokálně — vyber, jestli má model počítat na GPU (CUDA/Metal/Vulkan) nebo na NPU (Intel AI Boost / Ryzen AI / Snapdragon X).",
       test: "Test připojení",
       connected: "Připojeno",

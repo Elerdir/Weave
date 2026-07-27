@@ -96,6 +96,18 @@
     }
   }
 
+  /** Oficiální stránka ovladače Intel NPU (AI Boost). */
+  const NPU_DRIVER_URL =
+    "https://www.intel.com/content/www/us/en/download/794734/intel-npu-driver-windows.html";
+
+  async function openNpuDriverPage() {
+    try {
+      await openUrl(NPU_DRIVER_URL);
+    } catch (e) {
+      console.warn("Nepodarilo se otevrit stranku ovladace NPU:", e);
+    }
+  }
+
   async function openSelectedOpenvinoSource() {
     const sourceUrl = openvinoInstallStore.selectedProfile?.sourceUrl;
     if (!sourceUrl) return;
@@ -488,6 +500,11 @@
                   {#if settingsStore.npuInfo.manufacturer}
                     <small>{settingsStore.npuInfo.manufacturer}</small>
                   {/if}
+                  {#if settingsStore.npuInfo.driver_version}
+                    <small>
+                      {i18n.m.settings.llm.npuDriver}: {settingsStore.npuInfo.driver_version}{#if settingsStore.npuInfo.driver_date} ({settingsStore.npuInfo.driver_date}){/if}
+                    </small>
+                  {/if}
                 {:else}
                   <span>{i18n.m.settings.llm.npuNotDetected}</span>
                 {/if}
@@ -496,6 +513,19 @@
                 {i18n.m.settings.llm.detectNpu}
               </button>
             </div>
+            <!-- Zastaralý ovladač je nejčastější příčina toho, že model
+                 na NPU neprojde kompilací — říct to dřív, než uživatel
+                 stáhne gigabajty a narazí na chybu Level Zero compileru. -->
+            {#if settingsStore.npuInfo?.driver_outdated}
+              <p class="npu-warning">
+                {i18n.t("settings.llm.npuDriverOutdated", {
+                  version: settingsStore.npuInfo.driver_version ?? "?",
+                })}
+                <button class="link-btn" onclick={openNpuDriverPage}>
+                  {i18n.m.settings.llm.npuDriverDownload}
+                </button>
+              </p>
+            {/if}
             <h4 class="sub-heading">{i18n.m.settings.llm.openvinoRuntimeTitle}</h4>
             <div class="runtime-card">
               <div>

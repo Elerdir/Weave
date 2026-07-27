@@ -19,6 +19,11 @@ export interface NpuInfo {
   name: string | null;
   manufacturer: string | null;
   device_id: string | null;
+  /** Verze ovladače NPU; null, když ji nešlo zjistit. */
+  driver_version: string | null;
+  driver_date: string | null;
+  /** Ovladač je pro dnešní OpenVINO nejspíš moc starý — model se nezkompiluje. */
+  driver_outdated: boolean;
 }
 
 const COMFYUI_URL_KEY = "comfyui.url";

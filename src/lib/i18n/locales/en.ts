@@ -327,6 +327,10 @@ const en: Messages = {
       npuDetected: "NPU detected",
       npuNotDetected: "No NPU detected",
       detectNpu: "Detect again",
+      npuDriver: "Driver",
+      npuDriverOutdated:
+        "NPU driver {version} is outdated. The NPU compiles the model inside its own driver, so with OpenVINO 2026 compilation fails in the Level Zero compiler and startup errors out — regardless of model size.",
+      npuDriverDownload: "Download the current Intel NPU driver",
       hint: "The app runs fully locally — choose whether the model runs on GPU (CUDA/Metal/Vulkan) or NPU (Intel AI Boost / Ryzen AI / Snapdragon X).",
       test: "Test connection",
       connected: "Connected",

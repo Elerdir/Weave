@@ -17,12 +17,38 @@ pub struct ApiKeyStatus {
     pub masked: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+// POZOR: zůstává snake_case — frontend čte `device_id`, `driver_version`…
+// Přepnutí na camelCase by tiše rozbilo NPU panel v Nastavení.
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct NpuInfo {
     pub available: bool,
     pub name: Option<String>,
     pub manufacturer: Option<String>,
     pub device_id: Option<String>,
+    /// Verze ovladače NPU (např. "32.0.100.4778"). NPU kompiluje model až
+    /// v ovladači, takže starý ovladač neumí graf z novějšího OpenVINO a
+    /// start skončí nesrozumitelnou chybou Level Zero compileru.
+    pub driver_version: Option<String>,
+    pub driver_date: Option<String>,
+    /// Ovladač je pro dnešní OpenVINO nejspíš moc starý (heuristika níže).
+    pub driver_outdated: bool,
+}
+
+/// Build (4. složka verze), pod kterým ovladač považujeme za zastaralý.
+/// Heuristika, ne oficiální minimum: ovladače řady 32.0.100.2xxx jsou z roku
+/// 2024, zatímco runtime instalujeme 2026.x — v praxi na nich kompilace
+/// modelu padá na `ZE_RESULT_ERROR_INVALID_ARGUMENT`.
+const NPU_DRIVER_MIN_BUILD: u32 = 3000;
+
+/// Z "32.0.100.2540" vytáhne 2540. Jiný formát = nehodnotíme.
+fn npu_driver_build(version: &str) -> Option<u32> {
+    version.rsplit('.').next()?.parse().ok()
+}
+
+fn npu_driver_is_outdated(version: Option<&str>) -> bool {
+    version
+        .and_then(npu_driver_build)
+        .is_some_and(|build| build < NPU_DRIVER_MIN_BUILD)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -45,6 +71,10 @@ struct WindowsNpuDevice {
     manufacturer: Option<String>,
     #[serde(rename = "DeviceID")]
     device_id: Option<String>,
+    #[serde(rename = "DriverVersion")]
+    driver_version: Option<String>,
+    #[serde(rename = "DriverDate")]
+    driver_date: Option<String>,
 }
 
 fn parse_service(service: &str) -> Result<ApiService, String> {
@@ -168,7 +198,27 @@ pub async fn test_openvino_npu_connection(url: String) -> Result<bool, String> {
 
 #[cfg(target_os = "windows")]
 fn detect_npu_impl() -> NpuInfo {
-    let script = r#"$device = Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'NPU|Neural|AI Boost|XDNA|VPU|Hexagon' -or $_.PNPClass -eq 'ComputeAccelerator' } | Select-Object -First 1 Name,Manufacturer,DeviceID; if ($device) { $device | ConvertTo-Json -Compress }"#;
+    // Win32_PnPSignedDriver nese i verzi/datum ovladače — bez nich nešlo
+    // poznat, že start NPU padá kvůli letitému ovladači, ne kvůli modelu.
+    // Fallback na Win32_PnPEntity zůstává pro případ, že zařízení nemá
+    // podepsaný ovladač (pak jen nebudeme znát verzi).
+    let script = r#"$m = 'NPU|Neural|AI Boost|XDNA|VPU|Hexagon'
+$d = Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceName -match $m } | Select-Object -First 1
+if ($d) {
+  [pscustomobject]@{
+    Name = $d.DeviceName; Manufacturer = $d.Manufacturer; DeviceID = $d.DeviceID
+    DriverVersion = $d.DriverVersion
+    DriverDate = if ($d.DriverDate) { (Get-Date $d.DriverDate -Format 'yyyy-MM-dd') } else { $null }
+  } | ConvertTo-Json -Compress
+} else {
+  $e = Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match $m -or $_.PNPClass -eq 'ComputeAccelerator' } | Select-Object -First 1
+  if ($e) {
+    [pscustomobject]@{
+      Name = $e.Name; Manufacturer = $e.Manufacturer; DeviceID = $e.DeviceID
+      DriverVersion = $null; DriverDate = $null
+    } | ConvertTo-Json -Compress
+  }
+}"#;
     let mut cmd = std::process::Command::new("powershell");
     cmd.args([
         "-NoProfile",
@@ -181,57 +231,34 @@ fn detect_npu_impl() -> NpuInfo {
     let output = cmd.output();
 
     let Ok(output) = output else {
-        return NpuInfo {
-            available: false,
-            name: None,
-            manufacturer: None,
-            device_id: None,
-        };
+        return NpuInfo::default();
     };
-
     if !output.status.success() {
-        return NpuInfo {
-            available: false,
-            name: None,
-            manufacturer: None,
-            device_id: None,
-        };
+        return NpuInfo::default();
     }
 
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if text.is_empty() || text == "null" {
-        return NpuInfo {
-            available: false,
-            name: None,
-            manufacturer: None,
-            device_id: None,
-        };
+        return NpuInfo::default();
     }
 
     match serde_json::from_str::<WindowsNpuDevice>(&text) {
         Ok(device) => NpuInfo {
             available: true,
+            driver_outdated: npu_driver_is_outdated(device.driver_version.as_deref()),
             name: device.name,
             manufacturer: device.manufacturer,
             device_id: device.device_id,
+            driver_version: device.driver_version,
+            driver_date: device.driver_date,
         },
-        Err(_) => NpuInfo {
-            available: false,
-            name: None,
-            manufacturer: None,
-            device_id: None,
-        },
+        Err(_) => NpuInfo::default(),
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 fn detect_npu_impl() -> NpuInfo {
-    NpuInfo {
-        available: false,
-        name: None,
-        manufacturer: None,
-        device_id: None,
-    }
+    NpuInfo::default()
 }
 
 #[tauri::command]
@@ -467,4 +494,27 @@ pub async fn resolve_llm_with_backend(
     // Žádný backend nešel sestavit (embedded bez modelu, neznámá hodnota…) —
     // jasná chyba místo tichého pádu na cloud API bez klíče.
     Arc::new(UnconfiguredLlmClient)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn npu_driver_build_is_parsed_from_last_component() {
+        assert_eq!(npu_driver_build("32.0.100.2540"), Some(2540));
+        assert_eq!(npu_driver_build("32.0.100.4778"), Some(4778));
+        assert_eq!(npu_driver_build("neznama"), None);
+    }
+
+    #[test]
+    fn outdated_driver_is_flagged() {
+        // Reálný případ z hlášení: ovladač z 5/2024 proti runtime 2026.2 —
+        // model se nezkompiloval a chyba mířila na velikost modelu, ne na ovladač.
+        assert!(npu_driver_is_outdated(Some("32.0.100.2540")));
+        assert!(!npu_driver_is_outdated(Some("32.0.100.4778")));
+        // Neznámou verzi nehodnotíme — radši mlčet než strašit falešně.
+        assert!(!npu_driver_is_outdated(None));
+        assert!(!npu_driver_is_outdated(Some("")));
+    }
 }
