@@ -914,10 +914,12 @@ fn npu_failure_hint(log_tail: &str) -> &'static str {
         || lower.contains("compilation failed")
         || lower.contains("failed to create executable")
     {
-        return "\n\nNPU nedokazalo model zkompilovat. Nejcasteji je model na tvoje NPU \
-                proste moc velky — zkus mensi profil (Phi-3.5 mini). Pokud padaji i male \
-                modely, aktualizuj ovladac NPU (Intel AI Boost / NPU Compute Accelerator \
-                ve Spravci zarizeni).";
+        return "\n\nNPU nedokazalo model zkompilovat. Nejcasteji je vinik ZASTARALY OVLADAC \
+                NPU: kompilace probiha az v ovladaci, takze stary ovladac neumi graf z \
+                novejsiho OpenVINO. Zkontroluj verzi v Nastaveni -> AI model (sekce NPU \
+                zarizeni) a stahni aktualni z \
+                https://www.intel.com/content/www/us/en/download/794734/intel-npu-driver-windows.html \
+                Az kdyz je ovladac aktualni a chyba trva, zkus mensi profil (Phi-3.5 mini).";
     }
     if lower.contains("openvino_language_model.xml") || lower.contains("vlmpipeline") {
         return "\n\nVypada to na multimodalni (obrazkovy) model — NPU server umi jen \
