@@ -25,6 +25,9 @@ test.describe("Settings", () => {
 
   test("sekce Modely zobrazí formulář pro stažení", async ({ page }) => {
     await page.locator(".settings-nav").getByRole("button", { name: /Modely|Models/ }).click();
-    await expect(page.getByPlaceholder(/ID modelu/)).toBeVisible();
+    // Bez Tauri backendu spadne locale na jazyk prohlížeče, takže v CI je UI
+    // anglicky. Ostatní testy tu proto matchují obě mutace — tenhle jediný
+    // hledal jen českou variantu a padal na "element not found".
+    await expect(page.getByPlaceholder(/ID modelu|Model ID/)).toBeVisible();
   });
 });
