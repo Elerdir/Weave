@@ -310,7 +310,11 @@ const cs = {
       openvinoRuntimeMissing: "OpenVINO runtime není nainstalovaný",
       openvinoModelProfile: "Profil NPU modelu",
       openvinoModelDir: "Složka OpenVINO modelu",
-      openvinoModelHint: "Model pro NPU musí být OpenVINO IR adresář, ne GGUF. Gemma 4 26B+ je výborná pro RTX 3090 přes GGUF; pro NPU vyber připravený OpenVINO IR adresář.",
+      openvinoModelHint: "Model pro NPU musí být OpenVINO IR adresář, ne GGUF.",
+      openvinoWhyShortList:
+        "Proč je nabídka tak malá? NPU umí jen INT4 modely kvantované podle receptu z OpenVINO NPU guide — kanálově („-cw-ov“) nebo skupinově („-gq-ov“). Běžné „-int4-ov“ ani multimodální modely načíst nejdou. Profily do 8B jsou přímo od OpenVINO a jsou ověřené; větší jsou komunitní konverze se správným tvarem, ale bez záruky, že je NPU zkompiluje — čím větší model, tím vyšší riziko, že start skončí chybou Level Zero compileru.",
+      openvinoNoGemmaNote:
+        "Gemma 4 (26B ani 31B) pro NPU neexistuje — všechny její OpenVINO verze jsou multimodální, takže je nejde načíst. Nejsilnější náhrada s dobrou češtinou je Qwen3: 8B na jistotu, 14B jako rozumný krok nahoru, 32B jako maximum pro odvážné. Samotnou Gemmu 4 spustíš přes CUDA, kde ji v nabídce modelů máš.",
       openvinoDownloadRecommended: "Stáhnout doporučený model",
       openvinoDownloadSelected: "Stáhnout vybraný model",
       openvinoOpenSource: "Otevřít zdroj",
@@ -321,6 +325,8 @@ const cs = {
       openvinoServerRunning: "NPU server běží",
       openvinoServerStopped: "NPU server neběží",
       openvinoLog: "Log serveru",
+      openvinoFirstStartHint:
+        "První spuštění modelu kompiluje celý graf uvnitř NPU ovladače. U malých modelů je to pár desítek sekund, u těch největších klidně i půl hodiny — appka mezitím čeká a průběh píše do logu. Výsledek se ukládá do cache, takže každý další start je otázka sekund.",
       npuDevice: "NPU zařízení",
       npuDetected: "NPU detekováno",
       npuNotDetected: "NPU nebylo detekováno",

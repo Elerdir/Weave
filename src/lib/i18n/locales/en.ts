@@ -312,7 +312,11 @@ const en: Messages = {
       openvinoRuntimeMissing: "OpenVINO runtime is not installed",
       openvinoModelProfile: "NPU model profile",
       openvinoModelDir: "OpenVINO model folder",
-      openvinoModelHint: "The NPU model must be an OpenVINO IR directory, not GGUF. Gemma 4 26B+ is excellent on RTX 3090 via GGUF; for NPU, choose a prepared OpenVINO IR folder.",
+      openvinoModelHint: "The NPU model must be an OpenVINO IR directory, not GGUF.",
+      openvinoWhyShortList:
+        "Why so few models? The NPU only runs INT4 models quantised with the recipe from the OpenVINO NPU guide — channel-wise (\"-cw-ov\") or group-wise (\"-gq-ov\"). Plain \"-int4-ov\" and multimodal models cannot be loaded. Profiles up to 8B come from OpenVINO itself and are validated; the larger ones are community conversions with the right shape but no guarantee the NPU will compile them — the bigger the model, the likelier the start fails in the Level Zero compiler.",
+      openvinoNoGemmaNote:
+        "No Gemma 4 build exists for the NPU — neither 26B nor 31B. Every OpenVINO build of it is multimodal and therefore cannot be loaded. The strongest substitute with solid multilingual quality is Qwen3: 8B for a safe bet, 14B as a sensible step up, 32B as the ceiling if you feel brave. For Gemma 4 itself, switch the backend to CUDA, where it is in the model catalogue.",
       openvinoDownloadRecommended: "Download recommended model",
       openvinoDownloadSelected: "Download selected model",
       openvinoOpenSource: "Open source",
@@ -323,6 +327,8 @@ const en: Messages = {
       openvinoServerRunning: "NPU server is running",
       openvinoServerStopped: "NPU server is stopped",
       openvinoLog: "Server log",
+      openvinoFirstStartHint:
+        "The first start compiles the whole graph inside the NPU driver. That is tens of seconds for small models and can reach half an hour for the largest ones — the app keeps waiting and writes progress to the log. The result is cached, so every later start takes seconds.",
       npuDevice: "NPU device",
       npuDetected: "NPU detected",
       npuNotDetected: "No NPU detected",

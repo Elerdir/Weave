@@ -35,10 +35,10 @@ pub struct NpuInfo {
 }
 
 /// Build (4. složka verze), pod kterým ovladač považujeme za zastaralý.
-/// Heuristika, ne oficiální minimum: ovladače řady 32.0.100.2xxx jsou z roku
-/// 2024, zatímco runtime instalujeme 2026.x — v praxi na nich kompilace
-/// modelu padá na `ZE_RESULT_ERROR_INVALID_ARGUMENT`.
-const NPU_DRIVER_MIN_BUILD: u32 = 3000;
+/// Není to odhad: 32.0.100.4023 je minimum, které OpenVINO uvádí u svých
+/// NPU-kvantovaných modelů na HuggingFace. Na starším ovladači kompilace
+/// modelu padá na `ZE_RESULT_ERROR_INVALID_ARGUMENT` v Level Zero compileru.
+const NPU_DRIVER_MIN_BUILD: u32 = 4023;
 
 /// Z "32.0.100.2540" vytáhne 2540. Jiný formát = nehodnotíme.
 fn npu_driver_build(version: &str) -> Option<u32> {
@@ -513,6 +513,9 @@ mod tests {
         // model se nezkompiloval a chyba mířila na velikost modelu, ne na ovladač.
         assert!(npu_driver_is_outdated(Some("32.0.100.2540")));
         assert!(!npu_driver_is_outdated(Some("32.0.100.4778")));
+        // Hranice je oficialni minimum z OpenVINO modelu, ne kulate cislo.
+        assert!(npu_driver_is_outdated(Some("32.0.100.4022")));
+        assert!(!npu_driver_is_outdated(Some("32.0.100.4023")));
         // Neznámou verzi nehodnotíme — radši mlčet než strašit falešně.
         assert!(!npu_driver_is_outdated(None));
         assert!(!npu_driver_is_outdated(Some("")));

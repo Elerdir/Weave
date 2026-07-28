@@ -613,6 +613,8 @@
                   </small>
                 </div>
               {/if}
+              <p class="hint npu-list-note">{i18n.m.settings.llm.openvinoWhyShortList}</p>
+              <p class="hint npu-list-note">{i18n.m.settings.llm.openvinoNoGemmaNote}</p>
               <label class="field-label" for="openvino-model-dir" style="margin-top:1rem">
                 {i18n.m.settings.llm.openvinoModelDir}
               </label>
@@ -660,6 +662,7 @@
                   </button>
                 {/if}
               </div>
+              <p class="hint" style="margin-top:0.5rem">{i18n.m.settings.llm.openvinoFirstStartHint}</p>
               {#if openvinoInstallStore.status.serverLogPath}
                 <p class="hint" style="margin-top:0.5rem">
                   {i18n.m.settings.llm.openvinoLog}: {openvinoInstallStore.status.serverLogPath}
@@ -1861,6 +1864,12 @@
     color: var(--color-text-muted);
     font-size: 0.8rem;
     line-height: 1.45;
+  }
+
+  /* Vysvetleni, proc je seznam NPU profilu tak kratky -- bez nej lidi hledaji
+     modely (Gemma), ktere pro NPU proste neexistuji. */
+  .npu-list-note {
+    margin-top: 0.5rem;
   }
 
   .runtime-card {

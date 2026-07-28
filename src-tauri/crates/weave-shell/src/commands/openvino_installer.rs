@@ -22,6 +22,44 @@ const DEFAULT_PROFILE_ID: &str = "phi-3.5-mini-int4-cw-ov";
 /// restartu appky ztratila a server nešlo spustit bez opětovného vyhledání.
 pub const OPENVINO_MODEL_DIR_KEY: &str = "llm.openvino_model_dir";
 
+/// Kolik čekat na start serveru. První spuštění modelu na NPU znamená kompilaci
+/// celého grafu uvnitř ovladače a ta roste s velikostí modelu — 2GB Phi naběhne
+/// do minuty, ale naměřeno na 16,9GB Qwen3 32B: server byl připravený až po
+/// zhruba 28 minutách. Dřív tu byla pevná tříminutová hranice, která takový
+/// model zabila dávno předtím, než doběhl, a hlásila to jako selhání modelu.
+///
+/// 150 s na GB dává tomu naměřenému případu ještě rezervu (16 GB → 42 min).
+/// Nejde o odhad ceny kompilace, ale o strop pro případ, že se proces zasekne:
+/// pád se pozná okamžitě přes `try_wait`, takže velkorysost tu nic nestojí.
+const SERVER_START_BASE_SECS: u64 = 180;
+const SERVER_START_SECS_PER_GB: u64 = 150;
+const SERVER_START_CAP_SECS: u64 = 90 * 60;
+
+/// Jak často během čekání zalogovat, že kompilace pořád běží. Bez toho vypadá
+/// dvacetiminutové čekání v logu stejně jako zamrznutá appka.
+const SERVER_START_HEARTBEAT_SECS: u64 = 30;
+
+fn dir_size_bytes(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| match entry.metadata() {
+            Ok(meta) if meta.is_dir() => dir_size_bytes(&entry.path()),
+            Ok(meta) => meta.len(),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
+fn server_start_timeout_secs(model_dir: &Path) -> u64 {
+    let gigabytes = dir_size_bytes(model_dir) / 1_000_000_000;
+    SERVER_START_BASE_SECS
+        .saturating_add(SERVER_START_SECS_PER_GB.saturating_mul(gigabytes))
+        .min(SERVER_START_CAP_SECS)
+}
+
 static OPENVINO_SERVER: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
 
 fn server_state() -> &'static Mutex<Option<Child>> {
@@ -120,10 +158,31 @@ fn default_model_dir(root: &Path) -> PathBuf {
     root.join("models").join("phi-3.5-mini-instruct-int4-cw-ov")
 }
 
-/// NPU umí jen kanálově kvantované (`-cw-ov`) OpenVINO IR modely a těch
-/// OpenVINO publikuje jen hrstku — žádná Gemma 4 mezi nimi není a Gemma 3 4B
-/// je gated (vyžaduje HF token) a navíc multimodální, takže ji `LLMPipeline`
-/// nenačte. Pořadí = doporučení: menší modely NPU zkompiluje spolehlivěji,
+/// NPU umí jen INT4 modely kvantované podle receptu z OpenVINO NPU guide
+/// (`--sym --ratio 1.0`), a to buď kanálově (`-cw-ov`, group_size -1), nebo
+/// skupinově (`-gq-ov`, group_size 128; ten navíc vyžaduje ovladač
+/// 32.0.100.4023+). Běžné `-int4-ov` jsou INT4_ASYM s ratio < 1.0 a pro NPU
+/// nejsou určené. Ověřeno proti HF API: takhle kvantovaných textových modelů
+/// existuje jen hrstka a profily níž jsou prakticky celá ta množina.
+///
+/// OpenVINO sám nad 8B nic nepublikuje. Větší profily jsou komunitní konverze
+/// — bereme jen ty, které mají použitelný tvar (jediný `openvino_model.xml`
+/// plus tokenizer i detokenizer, symetrický nebo kanálový INT4) a jsou volně
+/// stažitelné. Že je NPU zkompiluje, nikdo negarantuje, proto jsou v UI
+/// označené jako experimentální a řazené podle velikosti.
+///
+/// Gemma tu chybí záměrně, ne omylem (ověřeno proti HF API):
+///   - Gemma 4 (E2B/E4B/26B-A4B/31B) má jen `-int4-ov`, tedy skupinovou
+///     kvantizaci (INT4_ASYM, group_size 128) — kanálově kvantovaná verze
+///     neexistuje. Navíc je celá rodina multimodální (`image-text-to-text`:
+///     repo nemá `openvino_model.xml`, ale rozpad na language/text/vision
+///     embeddings), takže ji `LLMPipeline` nenačte, a 31B váží 18,7 GB.
+///   - Gemma 3 4B `-int4-cw-ov` kanálově kvantovaná je, ale taky multimodální,
+///     takže by vyžadovala `VLMPipeline`.
+///
+/// Gemma 4 je proto v GGUF katalogu pro CUDA, ne tady.
+///
+/// Pořadí = doporučení: menší modely NPU zkompiluje spolehlivěji,
 /// 7B/8B na části NPU spadne v Level Zero compileru už při startu.
 fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
     vec![
@@ -180,8 +239,8 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
         },
         OpenvinoModelProfile {
             id: "qwen3-8b-int4-cw-ov".into(),
-            name: "Qwen3 8B INT4 (nejvetsi)".into(),
-            description: "Nejlepsi kvalita z NPU nabidky, ale i nejnarocnejsi — na mnoha NPU spadne uz pri kompilaci modelu (chyba Level Zero compileru). Zkousej az kdyz mensi profily bezi.".into(),
+            name: "Qwen3 8B INT4 (nejlepsi cestina)".into(),
+            description: "Nejvetsi overeny model od OpenVINO a nejlepsi cestina z bezpecne casti nabidky — Qwen3 je trenovany napric 119 jazyky, zatimco Phi je silne anglocentricke. Potrebuje ovladac 32.0.100.4023 nebo novejsi, na starsim start spadne v Level Zero compileru.".into(),
             target_dir: root
                 .join("models")
                 .join("qwen3-8b-int4-cw-ov")
@@ -190,8 +249,60 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
             repo_id: Some("OpenVINO/Qwen3-8B-int4-cw-ov".into()),
             source_url: Some("https://huggingface.co/OpenVINO/Qwen3-8B-int4-cw-ov".into()),
             auto_downloadable: true,
-            size_hint: "8B INT4 / ~4,4 GB".into(),
-            quality_tier: "Nejvyssi kvalita, casto nezkompilovatelny".into(),
+            size_hint: "8B INT4 / ~4,75 GB".into(),
+            quality_tier: "Nejlepsi overena cestina".into(),
+        },
+        // --- Nad 8B uz nic neni od OpenVINO. Profily niz jsou komunitni
+        // konverze, ktere maji spravny tvar (jediny openvino_model.xml plus
+        // tokenizer, symetricky nebo kanalovy INT4), ale nikdo u nich NPU
+        // negarantuje. Poradi je podle velikosti, protoze prave ta rozhoduje,
+        // jestli je Level Zero compiler jeste zvladne prelozit.
+        OpenvinoModelProfile {
+            id: "qwen3-14b-int4-sym-ov".into(),
+            name: "Qwen3 14B INT4 (experimentalni)".into(),
+            description: "Nejrozumnejsi krok nahoru za Qwen3 8B: stejne silna cestina, vic znalosti a lepsi uvazovani. Komunitni symetricka INT4 konverze — tvar modelu je pro NPU spravny, ale nikdo to na NPU neoveril. Pocitej s delsi prvni kompilaci.".into(),
+            target_dir: root
+                .join("models")
+                .join("qwen3-14b-int4-sym-ov")
+                .display()
+                .to_string(),
+            repo_id: Some("Echo9Zulu/Qwen3-14B-int4_sym-ov".into()),
+            source_url: Some("https://huggingface.co/Echo9Zulu/Qwen3-14B-int4_sym-ov".into()),
+            auto_downloadable: true,
+            size_hint: "14B INT4 / ~8,4 GB".into(),
+            quality_tier: "Vyssi kvalita, neovereno na NPU".into(),
+        },
+        OpenvinoModelProfile {
+            id: "gpt-oss-20b-int4-cw-ov".into(),
+            name: "gpt-oss 20B INT4 (experimentalni)".into(),
+            description: "MoE model — 20B parametru, ale na token jich pracuje jen zlomek, takze bezi svizne i na vetsi velikost. Jediny model nad 8B, ktery je kanalove kvantovany, tedy presne tak, jak to NPU chce. Cestina je slabsi nez u Qwen3, sila je v uvazovani a kodu.".into(),
+            target_dir: root
+                .join("models")
+                .join("gpt-oss-20b-int4-cw-ov")
+                .display()
+                .to_string(),
+            repo_id: Some("keitokei1994/gpt-oss-20b-int4-cw-ov".into()),
+            source_url: Some("https://huggingface.co/keitokei1994/gpt-oss-20b-int4-cw-ov".into()),
+            auto_downloadable: true,
+            size_hint: "20B MoE INT4 / ~11,1 GB".into(),
+            quality_tier: "Nejlepsi kvantizace pro NPU, slabsi cestina".into(),
+        },
+        OpenvinoModelProfile {
+            id: "qwen3-32b-int4-sym-awq-ov".into(),
+            name: "Qwen3 32B INT4 (maximum, casto nezkompilovatelny)".into(),
+            description: "Nejsilnejsi model, ktery pro NPU vubec existuje — vyborna cestina a znalosti. Bud ale realisticky: 18 GB je hodne za tim, co Level Zero compiler bezne zvladne, takze pocitej s tim, ze start muze skoncit chybou. Stahuj, jen kdyz to chces zkusit; na jistotu zustan u Qwen3 8B nebo 14B.".into(),
+            target_dir: root
+                .join("models")
+                .join("qwen3-32b-int4-sym-awq-ov")
+                .display()
+                .to_string(),
+            repo_id: Some("Echo9Zulu/Qwen3-32B-Instruct-int4_sym-awq-ov".into()),
+            source_url: Some(
+                "https://huggingface.co/Echo9Zulu/Qwen3-32B-Instruct-int4_sym-awq-ov".into(),
+            ),
+            auto_downloadable: true,
+            size_hint: "32B INT4 / ~18,2 GB".into(),
+            quality_tier: "Maximum, vysoke riziko nezkompilovani".into(),
         },
     ]
 }
@@ -493,6 +604,7 @@ print(json.dumps({
 
     let server = r#"import argparse
 import json
+import os
 import queue
 import threading
 import time
@@ -605,8 +717,22 @@ def main() -> None:
     args = parser.parse_args()
 
     ensure_device(args.device)
-    print(f"Nacitam model {args.model_dir} na {args.device} ...", flush=True)
-    pipe = ov_genai.LLMPipeline(args.model_dir, args.device)
+    # NPU kompiluje model uvnitr ovladace a u velkych modelu to trva desitky
+    # minut. CACHE_DIR ulozi zkompilovany blob, takze druhy a dalsi start je
+    # otazka sekund. Bez nej se cela kompilace opakovala pri kazdem spusteni.
+    cache_dir = os.path.join(args.model_dir, ".ov-cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    cached = os.listdir(cache_dir)
+    if cached:
+        print(f"Nacitam model {args.model_dir} na {args.device} z cache ...", flush=True)
+    else:
+        print(
+            f"Nacitam model {args.model_dir} na {args.device} ... "
+            "prvni start kompiluje model v ovladaci NPU a u velkych modelu "
+            "muze trvat i desitky minut. Dalsi starty uz budou rychle.",
+            flush=True,
+        )
+    pipe = ov_genai.LLMPipeline(args.model_dir, args.device, CACHE_DIR=cache_dir)
     print("Model nacten, spoustim server.", flush=True)
 
     app = FastAPI(title="Weave OpenVINO NPU Server")
@@ -762,6 +888,7 @@ pub async fn install_openvino_runtime(
     let root = openvino_dir(&app)?;
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     write_runtime_files(&root)?;
+    tracing::info!(target: "openvino", dir = %root.display(), "Instalace OpenVINO runtime zahajena");
 
     emit_step(&window, "Pripravuji Python venv pro OpenVINO").await;
     if !venv_python(&root).exists() {
@@ -835,12 +962,22 @@ pub async fn install_openvino_runtime(
                 let _ = std::fs::write(device_check_path(&root), json);
             }
             if check.has_npu {
+                tracing::info!(
+                    target: "openvino",
+                    devices = %check.devices.join(", "),
+                    "NPU nalezeno"
+                );
                 emit_step(
                     &window,
                     format!("NPU nalezeno (zarizeni: {})", check.devices.join(", ")),
                 )
                 .await;
             } else {
+                tracing::warn!(
+                    target: "openvino",
+                    devices = %check.devices.join(", "),
+                    "NPU nenalezeno, server nepujde spustit"
+                );
                 emit_step(
                     &window,
                     format!(
@@ -854,6 +991,7 @@ pub async fn install_openvino_runtime(
         }
         None => {
             let _ = std::fs::remove_file(device_check_path(&root));
+            tracing::warn!(target: "openvino", "Overeni zarizeni nevratilo ocekavany vystup");
             emit_step(
                 &window,
                 "VAROVANI: overeni zarizeni nevratilo ocekavany vystup",
@@ -863,6 +1001,7 @@ pub async fn install_openvino_runtime(
     }
 
     std::fs::write(marker_path(&root), "installed").map_err(|e| e.to_string())?;
+    tracing::info!(target: "openvino", dir = %root.display(), "OpenVINO runtime nainstalovan");
     let _ = window.emit(
         "openvino-install-progress",
         serde_json::json!({ "type": "done" }),
@@ -949,6 +1088,7 @@ fn read_log_tail(path: &Path) -> String {
 pub async fn stop_managed_server() -> Result<(), String> {
     let mut guard = server_state().lock().await;
     if let Some(mut child) = guard.take() {
+        tracing::info!(target: "openvino", pid = ?child.id(), "Zastavuji NPU server");
         let _ = child.kill().await;
         let _ = child.wait().await;
     }
@@ -969,8 +1109,10 @@ pub(crate) async fn start_server_inner(
     pool: &SqlitePool,
     model_dir: String,
 ) -> Result<OpenvinoRuntimeStatus, String> {
+    tracing::info!(target: "openvino", model_dir = %model_dir.trim(), "Pozadavek na start NPU serveru");
     let root = openvino_dir(app)?;
     if !marker_path(&root).exists() || !venv_python(&root).exists() {
+        tracing::warn!(target: "openvino", "Start odmitnut: runtime neni nainstalovany");
         return Err("OpenVINO runtime neni nainstalovany.".into());
     }
     write_runtime_files(&root)?;
@@ -1050,7 +1192,16 @@ pub(crate) async fn start_server_inner(
     *guard = Some(child);
     drop(guard);
 
-    for _ in 0..180 {
+    let timeout_secs = server_start_timeout_secs(&model_dir);
+    tracing::info!(
+        target: "openvino",
+        model_dir = %model_dir.display(),
+        device = OPENVINO_DEVICE,
+        timeout_secs,
+        "NPU server spusten, cekam na kompilaci modelu v ovladaci"
+    );
+
+    for elapsed in 1..=timeout_secs {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         {
             let mut guard = server_state().lock().await;
@@ -1058,6 +1209,13 @@ pub(crate) async fn start_server_inner(
                 if let Ok(Some(status)) = child.try_wait() {
                     *guard = None;
                     let tail = read_log_tail(&log_path);
+                    tracing::error!(
+                        target: "openvino",
+                        %status,
+                        elapsed_secs = elapsed,
+                        log = %log_path.display(),
+                        "NPU server skoncil pred startem"
+                    );
                     return Err(format!(
                         "OpenVINO server skoncil pred startem ({status}).{}\n\nPosledni radky logu ({}):\n{}",
                         npu_failure_hint(&tail),
@@ -1072,6 +1230,12 @@ pub(crate) async fn start_server_inner(
             .await
             .is_ok()
         {
+            tracing::info!(
+                target: "openvino",
+                elapsed_secs = elapsed,
+                model_dir = %model_dir.display(),
+                "NPU server je pripraveny"
+            );
             // Server běží → cestu k modelu si zapamatujeme, aby ji uživatel
             // po restartu appky nemusel hledat znovu.
             let _ = weave_infrastructure::db::app_config::set(
@@ -1082,11 +1246,26 @@ pub(crate) async fn start_server_inner(
             .await;
             return Ok(status_for(&root, pool).await);
         }
+
+        if elapsed % SERVER_START_HEARTBEAT_SECS == 0 {
+            tracing::info!(
+                target: "openvino",
+                elapsed_secs = elapsed,
+                timeout_secs,
+                "NPU porad kompiluje model"
+            );
+        }
     }
 
     let _ = stop_managed_server().await;
+    tracing::error!(
+        target: "openvino",
+        timeout_secs,
+        log = %log_path.display(),
+        "NPU server se nespustil v limitu"
+    );
     Err(format!(
-        "OpenVINO server se nespustil do 180 sekund.\n\nPosledni radky logu ({}):\n{}",
+        "OpenVINO server se nespustil do {timeout_secs} sekund.\n\nPosledni radky logu ({}):\n{}",
         log_path.display(),
         read_log_tail(&log_path)
     ))
@@ -1140,6 +1319,14 @@ pub async fn download_openvino_model_profile(
 
     let target = PathBuf::from(profile.target_dir);
     std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    tracing::info!(
+        target: "openvino",
+        profile = %profile.id,
+        repo = %repo_id,
+        size_hint = %profile.size_hint,
+        dir = %target.display(),
+        "Stahuji NPU model"
+    );
     // Stahování má jednotky GB — bez streamovaného průběhu (dřív se volalo
     // bufferovaně a bez jediného eventu) vypadalo UI celé minuty zaseknuté.
     emit_step(
@@ -1177,9 +1364,17 @@ pub async fn download_openvino_model_profile(
         "openvino-install-progress",
         serde_json::json!({ "type": "done" }),
     );
+    if let Err(err) = &download_result {
+        tracing::error!(target: "openvino", profile = %profile.id, %err, "Stahovani NPU modelu selhalo");
+    }
     download_result?;
 
     if !looks_like_openvino_ir(&target) {
+        tracing::error!(
+            target: "openvino",
+            dir = %target.display(),
+            "Stazena slozka neobsahuje openvino_model.xml"
+        );
         return Err(format!(
             "Stazena slozka {} neobsahuje OpenVINO IR model (openvino_model.xml). \
              Stahovani nejspis skoncilo predcasne — zkus to znovu.",
@@ -1187,6 +1382,13 @@ pub async fn download_openvino_model_profile(
         ));
     }
 
+    tracing::info!(
+        target: "openvino",
+        profile = %profile.id,
+        dir = %target.display(),
+        size_bytes = dir_size_bytes(&target),
+        "NPU model stazeny"
+    );
     Ok(status_for(&root, &state.pool).await)
 }
 
@@ -1294,6 +1496,56 @@ mod tests {
             DEFAULT_PROFILE_ID,
             "výchozí profil musí být první v seznamu (nejmenší = nejspolehlivější)"
         );
+    }
+
+    #[test]
+    fn server_start_timeout_grows_with_model_size() {
+        // Regrese: čekalo se pevných 180 s. Kompilace grafu v NPU ovladači
+        // roste s velikostí modelu, takže 18GB model byl useknutý dřív, než
+        // vůbec mohl naběhnout, a hlásilo se to jako selhání.
+        let small = temp_dir("timeout_small");
+        std::fs::write(small.join("openvino_model.bin"), vec![0u8; 1024]).expect("maly model");
+        assert_eq!(
+            server_start_timeout_secs(&small),
+            SERVER_START_BASE_SECS,
+            "u modelu pod 1 GB zustava zakladni limit"
+        );
+
+        let big = temp_dir("timeout_big");
+        std::fs::write(big.join("openvino_model.bin"), vec![0u8; 3_000_000_000]).expect("velky");
+        assert_eq!(
+            server_start_timeout_secs(&big),
+            SERVER_START_BASE_SECS + 3 * SERVER_START_SECS_PER_GB
+        );
+
+        // Neexistující složka nesmí panikařit ani vrátit nulu — jinak by se
+        // smyčka ukončila hned a server by se tvářil jako mrtvý.
+        assert_eq!(
+            server_start_timeout_secs(Path::new("C:/weave/neexistuje")),
+            SERVER_START_BASE_SECS
+        );
+
+        let _ = std::fs::remove_dir_all(&small);
+        let _ = std::fs::remove_dir_all(&big);
+    }
+
+    #[test]
+    fn large_profiles_are_offered_after_the_verified_ones() {
+        // Uživatel chtěl i velké modely. Riziko nezkompilování roste s
+        // velikostí, takže pořadí (a tím i doporučení v UI) musí zůstat
+        // vzestupné: ověřené profily od OpenVINO napřed, komunitní velké až
+        // za nimi. Kdyby někdo velký model omylem posunul nahoru nebo z něj
+        // udělal výchozí, chytí to tenhle test spolu s tím nad ním.
+        let profiles = openvino_model_profiles(Path::new("C:/weave/openvino"));
+        let ids: Vec<&str> = profiles.iter().map(|p| p.id.as_str()).collect();
+        let position = |id: &str| {
+            ids.iter()
+                .position(|candidate| *candidate == id)
+                .unwrap_or_else(|| panic!("chybí profil {id}"))
+        };
+        assert!(position("qwen3-8b-int4-cw-ov") < position("qwen3-14b-int4-sym-ov"));
+        assert!(position("qwen3-14b-int4-sym-ov") < position("gpt-oss-20b-int4-cw-ov"));
+        assert!(position("gpt-oss-20b-int4-cw-ov") < position("qwen3-32b-int4-sym-awq-ov"));
     }
 
     #[test]
