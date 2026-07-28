@@ -289,8 +289,8 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
         },
         OpenvinoModelProfile {
             id: "qwen3-32b-int4-sym-awq-ov".into(),
-            name: "Qwen3 32B INT4 (maximum, casto nezkompilovatelny)".into(),
-            description: "Nejsilnejsi model, ktery pro NPU vubec existuje — vyborna cestina a znalosti. Bud ale realisticky: 18 GB je hodne za tim, co Level Zero compiler bezne zvladne, takze pocitej s tim, ze start muze skoncit chybou. Stahuj, jen kdyz to chces zkusit; na jistotu zustan u Qwen3 8B nebo 14B.".into(),
+            name: "Qwen3 32B INT4 (maximum, na Core Ultra 155H nefunguje)".into(),
+            description: "Nejsilnejsi model, ktery pro NPU vubec existuje. Overeno na Intel AI Boost (Core Ultra 155H, ovladac 32.0.100.4778): zkompiloval se a server nabehl, ale pri prvnim generovani NPU spadlo na ZE_RESULT_ERROR_DEVICE_LOST — ovladac se zresetoval. Kompilace tedy neni ta prekazka, prekazka je beh. Ma smysl leda na vykonnejsim NPU; na tomhle zustan u Qwen3 14B nebo 8B.".into(),
             target_dir: root
                 .join("models")
                 .join("qwen3-32b-int4-sym-awq-ov")
@@ -302,7 +302,7 @@ fn openvino_model_profiles(root: &Path) -> Vec<OpenvinoModelProfile> {
             ),
             auto_downloadable: true,
             size_hint: "32B INT4 / ~18,2 GB".into(),
-            quality_tier: "Maximum, vysoke riziko nezkompilovani".into(),
+            quality_tier: "Maximum, overeno ze na beznem NPU spadne".into(),
         },
     ]
 }
@@ -614,7 +614,7 @@ from typing import Any, Optional
 import openvino as ov
 import openvino_genai as ov_genai
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -738,6 +738,30 @@ def main() -> None:
     app = FastAPI(title="Weave OpenVINO NPU Server")
     model_id = args.model_dir.replace("\\", "/").rstrip("/").split("/")[-1] or "openvino-npu"
 
+    # Kdyz NPU behem generovani spadne (ZE_RESULT_ERROR_DEVICE_LOST), ovladac
+    # se resetuje a pipeline uz je nepouzitelna -- kazdy dalsi dotaz skonci
+    # stejne. Drzime si to, aby uzivatel misto opakovaneho C++ tracebacku
+    # dostal jednu srozumitelnou vetu a vedel, co s tim.
+    device_lost = []
+
+    def friendly_error(exc: BaseException) -> str:
+        text = str(exc)
+        if "ZE_RESULT_ERROR_DEVICE_LOST" in text or "device hung" in text:
+            device_lost.append(True)
+            print(f"NPU DEVICE_LOST pri generovani: {text}", flush=True)
+            return (
+                "NPU se pri generovani zresetovalo. Model se sice zkompiloval a "
+                "server nabehl, ale na tohle NPU je pri behu prilis velky. "
+                "Vyber v Nastaveni mensi NPU profil (Qwen3 14B, nebo 8B na jistotu) "
+                "a spust server znovu."
+            )
+        return text
+
+    DEVICE_LOST_MESSAGE = (
+        "NPU je po predchozim padu (DEVICE_LOST) v nepouzitelnem stavu. "
+        "Zastav server, vyber mensi NPU profil a spust ho znovu."
+    )
+
     @app.get("/v1/models")
     def list_models():
         return {
@@ -748,12 +772,17 @@ def main() -> None:
     @app.post("/v1/chat/completions")
     def chat(req: ChatRequest):
         request_id = f"chatcmpl-{uuid.uuid4().hex}"
+        if device_lost:
+            raise HTTPException(status_code=503, detail=DEVICE_LOST_MESSAGE)
         inputs = build_inputs(req.messages)
         config = build_config(req)
 
         if not req.stream:
-            with PIPE_LOCK:
-                text = str(pipe.generate(inputs, config))
+            try:
+                with PIPE_LOCK:
+                    text = str(pipe.generate(inputs, config))
+            except BaseException as exc:  # noqa: BLE001 - hlasime klientovi
+                raise HTTPException(status_code=503, detail=friendly_error(exc)) from exc
             return {
                 "id": request_id,
                 "object": "chat.completion",
@@ -801,7 +830,7 @@ def main() -> None:
 
             if failure:
                 yield make_chunk(
-                    request_id, model_id, f"\n[chyba generovani: {failure[0]}]", "stop"
+                    request_id, model_id, f"\n[{friendly_error(failure[0])}]", "stop"
                 )
             else:
                 usage = {
