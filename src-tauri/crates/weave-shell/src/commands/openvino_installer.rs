@@ -1329,11 +1329,7 @@ pub async fn download_openvino_model_profile(
     );
     // Stahování má jednotky GB — bez streamovaného průběhu (dřív se volalo
     // bufferovaně a bez jediného eventu) vypadalo UI celé minuty zaseknuté.
-    emit_step(
-        &window,
-        format!("Stahuji {} ({repo_id})", profile.name),
-    )
-    .await;
+    emit_step(&window, format!("Stahuji {} ({repo_id})", profile.name)).await;
     // Gated repozitáře (Gemma a spol.) bez tokenu stáhnou jen README a mlčky
     // skončí — pokud uživatel HF token v Nastavení má, použijeme ho.
     let hf_token = state
@@ -1554,8 +1550,9 @@ mod tests {
             "Compilation failed. Level0 pfnCreate2 result: ZE_RESULT_ERROR_INVALID_ARGUMENT"
         )
         .contains("mensi profil"));
-        assert!(npu_failure_hint("401 Client Error: Unauthorized, repo is gated")
-            .contains("HF token"));
+        assert!(
+            npu_failure_hint("401 Client Error: Unauthorized, repo is gated").contains("HF token")
+        );
         assert!(npu_failure_hint("vse v poradku, server bezi").is_empty());
     }
 }

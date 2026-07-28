@@ -126,18 +126,24 @@ jobs:
           workspaces: ". -> target"
 
       # libvulkan-dev = Vulkan loader/hlavičky, glslc = kompilátor GLSL shaderů,
-      # který si vynucuje ggml-vulkan. libsecret/pkg-config potřebuje keyring,
-      # libclang-dev bindgen v llama-cpp-sys-2.
+      # který si vynucuje ggml-vulkan. spirv-headers dodává SPIRV-HeadersConfig.cmake
+      # — bez něj padá find_package(SPIRV-Headers) v ggml/src/ggml-vulkan hned
+      # při konfiguraci a libvulkan-dev ho s sebou netahá. libsecret/pkg-config
+      # potřebuje keyring, libclang-dev bindgen v llama-cpp-sys-2.
       - name: Install Vulkan + build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libvulkan-dev \
             glslc \
+            spirv-headers \
+            spirv-tools \
             libsecret-1-dev \
             libclang-dev \
             cmake \
             pkg-config
+          echo "Overuji, ze SPIRV-Headers ma CMake config:"
+          find /usr -name 'SPIRV-Headers*.cmake' -o -name 'spirv-headers*.cmake' | head
 
       - name: Placeholder frontend dist
         run: mkdir -p dist && echo '<!doctype html><title>Weave</title>' > dist/index.html
