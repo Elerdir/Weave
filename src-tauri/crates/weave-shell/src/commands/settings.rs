@@ -38,13 +38,19 @@ pub struct NpuInfo {
 /// Není to odhad: 32.0.100.4023 je minimum, které OpenVINO uvádí u svých
 /// NPU-kvantovaných modelů na HuggingFace. Na starším ovladači kompilace
 /// modelu padá na `ZE_RESULT_ERROR_INVALID_ARGUMENT` v Level Zero compileru.
+/// Verzi ovladače umí zjistit jen windowsová větev `detect_npu_impl`, takže
+/// jinde by tyhle tři položky byly mrtvý kód a CI s `-D warnings` na nich
+/// padalo. `test` je v podmínce proto, aby testy běžely na všech platformách.
+#[cfg(any(target_os = "windows", test))]
 const NPU_DRIVER_MIN_BUILD: u32 = 4023;
 
 /// Z "32.0.100.2540" vytáhne 2540. Jiný formát = nehodnotíme.
+#[cfg(any(target_os = "windows", test))]
 fn npu_driver_build(version: &str) -> Option<u32> {
     version.rsplit('.').next()?.parse().ok()
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn npu_driver_is_outdated(version: Option<&str>) -> bool {
     version
         .and_then(npu_driver_build)
