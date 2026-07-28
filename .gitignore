@@ -29,6 +29,10 @@ Thumbs.db
 .env
 .env.local
 
+# Lokalni launcher specificky pro jeden stroj (CUDA verze / GPU architektura).
+# Verzovane varianty jsou run-dev.bat, run-dev-vulkan.bat a run-dev-cpu.bat.
+run-dev-local.bat
+
 # Logs
 *.log
 

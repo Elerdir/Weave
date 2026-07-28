@@ -13,6 +13,18 @@ REM
 REM Vysledny .msi najdes v: target\release\bundle\msi\
 
 setlocal
+
+REM --- Pracuj vzdy v adresari skriptu, at uz se spusti odkudkoli ---
+cd /d "%~dp0"
+
+if not exist "package.json" (
+    echo CHYBA: v "%CD%" neni package.json.
+    echo Skript musi zustat v korenovem adresari repozitare Weave.
+    pause
+    endlocal
+    exit /b 1
+)
+
 set "SQLX_OFFLINE=true"
 
 where pnpm >nul 2>&1
@@ -33,12 +45,13 @@ set "OVERRIDE=%TEMP%\weave-installer-override.json"
 > "%OVERRIDE%" echo {"bundle":{"createUpdaterArtifacts":false}}
 
 call pnpm tauri build --bundles msi --config "%OVERRIDE%"
-if errorlevel 1 (
+set "EXITCODE=%errorlevel%"
+if not "%EXITCODE%"=="0" (
     echo.
-    echo === Build MSI selhal ^(kod %errorlevel%^) - viz vypis vyse ===
+    echo === Build MSI selhal ^(kod %EXITCODE%^) - viz vypis vyse ===
     pause
-    endlocal
-    exit /b 1
+    REM %EXITCODE% se musi expandovat driv, nez ho endlocal zahodi -- proto "&".
+    endlocal & exit /b %EXITCODE%
 )
 
 echo.

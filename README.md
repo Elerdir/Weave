@@ -33,12 +33,28 @@ pnpm tauri dev --features llm-metal
 
 # Vulkan (AMD/Intel/cross-platform)
 pnpm tauri dev --features llm-vulkan
+
+# Jen CPU, bez GPU toolchainu
+pnpm tauri dev --features llm-embedded
 ```
 
-Na Windows viz `run-dev.bat` — nastavuje `CMAKE_CUDA_ARCHITECTURES` (uprav podle
-GPU: RTX 30xx=86, RTX 40xx=89, RTX 20xx=75) a vybírá funkční CUDA verzi (CUDA 13.x
-pro novější MSVC/Visual Studio — CUDA 12.x starší VS odmítá). Pro AMD/Intel GPU
-na Windows viz `run-dev-vulkan.bat` (vyžaduje Vulkan SDK).
+Na Windows jsou na to připravené dávky v kořeni repozitáře — všechny si samy
+přepnou do svého adresáře, takže je můžeš spustit odkudkoli (dvojklikem
+i z terminálu):
+
+| skript | backend | co potřebuje navíc |
+| --- | --- | --- |
+| `run-dev.bat` | CUDA (NVIDIA) | CUDA Toolkit |
+| `run-dev-vulkan.bat` | Vulkan (AMD/Intel) | Vulkan SDK |
+| `run-dev-cpu.bat` | jen CPU | nic (stačí CMake + MSVC) |
+
+Název `run-dev-local.bat` je vyhrazený pro tvůj vlastní launcher na míru stroji —
+je v `.gitignore`, takže ho commit nesebere.
+
+`run-dev.bat` si sám najde nejnovější nainstalovaný CUDA Toolkit a zjistí
+compute capability karty přes `nvidia-smi`; obojí jde přebít proměnnými
+`CUDA_PATH` a `CMAKE_CUDA_ARCHITECTURES`. Pozn.: CUDA 12.x odmítá novější
+Visual Studio, proto se vyplatí mít CUDA 13.x.
 
 Na macOS (Apple Silicon) viz `run-dev-mac.sh` — Metal nepotřebuje žádný extra
 toolchain kromě Xcode Command Line Tools + CMake (`brew install cmake`). GPU
