@@ -122,8 +122,8 @@ pub fn read_gguf_info(path: &Path) -> Result<GgufInfo, String> {
         }
 
         if NUMERIC_SUFFIXES.iter().any(|s| key.ends_with(s)) {
-            // Některé modely mají hodnoty per-vrstvu jako pole — ty
-            // přeskočíme, odhad si poradí i bez nich.
+            // Některé modely (Gemma 4) mají hodnoty per-vrstvu jako pole —
+            // z těch se bere maximum, viz `read_scalar_u32`.
             if let Some(value) = read_scalar_u32(&mut r, value_type)? {
                 numbers.push((key, value));
             }
@@ -155,9 +155,19 @@ pub fn read_gguf_info(path: &Path) -> Result<GgufInfo, String> {
     })
 }
 
-/// Přečte celočíselnou hodnotu, pokud je skalární; jinak ji přeskočí
-/// a vrátí `None`.
+/// Přečte celočíselnou hodnotu. Skalár vrací přímo, u pole vrací **maximum**
+/// z prvků; ostatní typy přeskočí a vrátí `None`.
+///
+/// Pole tu nejsou exotika: Gemma 4 uvádí `attention.head_count_kv` per vrstvu
+/// (`[8, 8, 8, 8, 8, 2, …]`), protože se u ní počet KV hlav mezi vrstvami liší.
+/// Dřív se takový klíč přeskočil, odhad KV cache spadl na hrubý paušál a
+/// u velkého kontextu vyšel několikanásobně vyšší, než jaký je — model pak
+/// skončil celý na CPU, i když se hybridní plán ve skutečnosti vešel.
+/// Maximum je správná volba: plán tím nadhodnotí, ne podhodnotí.
 fn read_scalar_u32(r: &mut impl Read, value_type: u32) -> Result<Option<u32>, String> {
+    if value_type == T_ARRAY {
+        return read_numeric_array_max(r);
+    }
     let value = match value_type {
         T_U8 | T_I8 => {
             let mut b = [0u8; 1];
@@ -180,6 +190,52 @@ fn read_scalar_u32(r: &mut impl Read, value_type: u32) -> Result<Option<u32>, St
         }
     };
     Ok(Some(value))
+}
+
+/// Pole celých čísel → jeho maximum. Nečíselné pole se přeskočí (`None`).
+/// Hlavička už je za sebou přečtená až k typu prvku, takže se čte dál odsud.
+fn read_numeric_array_max(r: &mut impl Read) -> Result<Option<u32>, String> {
+    let elem_type = read_u32(r)?;
+    let count = read_u64(r)?;
+    if count > MAX_META_STRING {
+        return Err(format!(
+            "GGUF metadata: pole o {count} prvcích je podezřelé."
+        ));
+    }
+
+    // Nečíselné pole musíme i tak přeskočit celé — jinak by čtečka zůstala
+    // uprostřed hodnoty a všechny další klíče by se rozsypaly.
+    let elem_size: u64 = match elem_type {
+        T_U8 | T_I8 | T_BOOL => 1,
+        T_U16 | T_I16 => 2,
+        T_U32 | T_I32 => 4,
+        T_U64 | T_I64 => 8,
+        T_F32 => {
+            skip_bytes(r, count.saturating_mul(4))?;
+            return Ok(None);
+        }
+        T_F64 => {
+            skip_bytes(r, count.saturating_mul(8))?;
+            return Ok(None);
+        }
+        _ => {
+            // Stringy a vnořená pole: po prvcích přes už existující skip_value.
+            for _ in 0..count {
+                skip_value(r, elem_type)?;
+            }
+            return Ok(None);
+        }
+    };
+
+    let mut max: Option<u32> = None;
+    for _ in 0..count {
+        let mut buf = [0u8; 8];
+        read_exact(r, &mut buf[..elem_size as usize])?;
+        let value = u64::from_le_bytes(buf);
+        let value = u32::try_from(value).unwrap_or(u32::MAX);
+        max = Some(max.map_or(value, |m: u32| m.max(value)));
+    }
+    Ok(max)
 }
 
 // ---------- primitivní čtení (little-endian) --------------------------------
@@ -359,15 +415,53 @@ mod tests {
         out.extend_from_slice(&T_U32.to_le_bytes());
         out.extend_from_slice(&4u32.to_le_bytes());
 
-        // Pole místo skaláru — musí se přeskočit bez chyby.
+        // Pole místo skaláru — Gemma 4 takhle uvádí hodnoty, které se mezi
+        // vrstvami liší. Bere se maximum, ať odhad KV cache spíš nadhodnotí.
         write_string(&mut out, "gemma4.attention.head_count");
         out.extend_from_slice(&T_ARRAY.to_le_bytes());
         out.extend_from_slice(&T_U32.to_le_bytes());
-        out.extend_from_slice(&2u64.to_le_bytes());
+        out.extend_from_slice(&3u64.to_le_bytes());
         out.extend_from_slice(&8u32.to_le_bytes());
+        out.extend_from_slice(&2u32.to_le_bytes());
         out.extend_from_slice(&8u32.to_le_bytes());
 
         out
+    }
+
+    #[test]
+    fn string_array_in_numeric_key_does_not_desync_the_reader() {
+        // Kdyby se nečíselné pole nepřeskočilo celé, čtečka by zůstala uprostřed
+        // hodnoty a všechny další klíče by se rozsypaly — tenhle test hlídá, že
+        // se klíč za polem pořád přečte správně.
+        let mut out = Vec::new();
+        out.extend_from_slice(b"GGUF");
+        out.extend_from_slice(&3u32.to_le_bytes());
+        out.extend_from_slice(&0u64.to_le_bytes());
+        out.extend_from_slice(&3u64.to_le_bytes());
+
+        write_string(&mut out, "general.architecture");
+        out.extend_from_slice(&T_STRING.to_le_bytes());
+        write_string(&mut out, "gemma4");
+
+        write_string(&mut out, "gemma4.attention.head_count");
+        out.extend_from_slice(&T_ARRAY.to_le_bytes());
+        out.extend_from_slice(&T_STRING.to_le_bytes());
+        out.extend_from_slice(&2u64.to_le_bytes());
+        write_string(&mut out, "prvni");
+        write_string(&mut out, "druhy");
+
+        write_string(&mut out, "gemma4.block_count");
+        out.extend_from_slice(&T_U32.to_le_bytes());
+        out.extend_from_slice(&30u32.to_le_bytes());
+
+        let path = write_temp(&out);
+        let info = read_gguf_info(&path).expect("info");
+        assert_eq!(info.head_count, None, "pole stringů se nedá zprůměrovat");
+        assert_eq!(
+            info.block_count,
+            Some(30),
+            "klíč za polem se musí přečíst správně"
+        );
     }
 
     #[test]
@@ -378,7 +472,11 @@ mod tests {
         assert_eq!(info.expert_count, Some(128));
         assert_eq!(info.block_count, Some(48));
         assert_eq!(info.head_count_kv, Some(4));
-        assert_eq!(info.head_count, None, "pole se má přeskočit");
+        assert_eq!(
+            info.head_count,
+            Some(8),
+            "z pole se bere maximum, ne přeskočení"
+        );
         assert!(info.is_moe());
         std::fs::remove_file(path).ok();
     }

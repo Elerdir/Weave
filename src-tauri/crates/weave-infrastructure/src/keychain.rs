@@ -18,17 +18,42 @@ impl OsKeychain {
         }
     }
 
-    /// Serializuje `Entry::new`. keyring 4.x inicializuje credential store líně
-    /// při prvním `Entry::new`, ale příznak "už inicializováno" si nastaví JEŠTĚ
-    /// PŘED samotnou inicializací (viz `keyring::v1::Entry::new`). Druhé vlákno,
-    /// které se do toho okna trefí, tak init přeskočí a spadne na
-    /// "No default store has been set" — a protože se příznak nikdy nevrátí zpět,
-    /// zůstane keychain rozbitý až do restartu a všechno spadne na DPAPI fallback.
-    /// Nastavení načítá klíče paralelně (`Promise.all`), takže se to trefovalo
-    /// spolehlivě. Zámek je levný — entry se vytváří jen při práci s klíči.
+    /// Zaregistruje systémové úložiště hesel. Musí proběhnout dřív, než vznikne
+    /// první `Entry`.
+    ///
+    /// Proč to děláme sami: keyring 4.1.3 si má store nastavit líně při prvním
+    /// `Entry::new`, jenže tam má obrácené porovnání —
+    /// `compare_exchange(false, true, …) == Ok(true)`. `compare_exchange` vrací
+    /// při úspěchu `Ok(předchozí_hodnota)`, tedy `Ok(false)`, takže podmínka
+    /// není pravdivá **nikdy** a `set_credential_store()` se nezavolá. Příznak
+    /// se přitom nastaví, takže ani další pokusy nepomůžou a každá operace
+    /// skončí na „No default store has been set" a spadne na DPAPI fallback.
+    ///
+    /// Není to tedy souběh (což byl můj dřívější odhad, proto tu býval zámek),
+    /// ale chyba v knihovně, která nastane vždycky. Až ji upstream opraví, tohle
+    /// volání může zmizet — je idempotentní, takže do té doby nevadí.
+    fn ensure_store() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            #[cfg(target_os = "windows")]
+            let store = windows_native_keyring_store::Store::new();
+            #[cfg(target_os = "macos")]
+            let store = apple_native_keyring_store::keychain::Store::new();
+            #[cfg(all(unix, not(target_os = "macos")))]
+            let store = zbus_secret_service_keyring_store::Store::new();
+
+            match store {
+                Ok(store) => keyring_core::set_default_store(store),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "Systémové úložiště hesel nejde otevřít; klíče půjdou do šifrovaného souboru"
+                ),
+            }
+        });
+    }
+
     fn entry(service: &ApiService) -> AppResult<Entry> {
-        static INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        Self::ensure_store();
         Entry::new("weave", service.key_name()).map_err(|e| AppError::Keychain(e.to_string()))
     }
 

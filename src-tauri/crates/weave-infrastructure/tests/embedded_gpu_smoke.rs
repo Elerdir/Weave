@@ -1,8 +1,16 @@
 //! Manuální smoke test reálné GPU inference. Vyžaduje feature `llm-embedded`
 //! (typicky `llm-vulkan`) a proměnnou WEAVE_SMOKE_MODEL s cestou k .gguf modelu.
-//! Nikdy neběží v CI (#[ignore] + feature gate) — spouští se ručně:
+//! Nikdy neběží v CI (#[ignore] + feature gate) — spouští se ručně.
 //!
-//!   WEAVE_SMOKE_MODEL=C:/path/model.gguf cargo test --features llm-vulkan \
+//! **Na Windows musí běžet ve stejném prostředí, jaké chystá `run-dev.bat`**:
+//! bez `CMAKE_GENERATOR=Ninja` (a Ninji v PATH) spadne build llama.cpp na
+//! MSBuildu při kompilaci Vulkan shaderů. Prosté `cargo test --features
+//! llm-vulkan` z čistého terminálu tedy NEfunguje. Nejjednodušší je pustit
+//! `run-dev.bat` jednou (nastaví prostředí a zahřeje cache) a pak v tomtéž
+//! okně:
+//!
+//!   set WEAVE_SMOKE_MODEL=D:/models/model.gguf
+//!   cargo test -p weave-infrastructure --features llm-vulkan \
 //!     --test embedded_gpu_smoke -- --ignored --nocapture
 //!
 //! Testy spouštěj jednotlivě (--test-threads=1, nebo přes název testu), ne

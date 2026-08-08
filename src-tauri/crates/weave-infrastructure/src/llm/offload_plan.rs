@@ -126,6 +126,55 @@ pub fn tune_threads(physical_cores: usize) -> i32 {
     physical_cores.clamp(1, 32) as i32
 }
 
+/// Největší kontext, pro který se KV cache ještě vejde do `kv_budget`.
+///
+/// Slouží k tomu, aby plán uměl říct **co s tím**, ne jen „nevejde se".
+/// U modelů s velkými hlavami (Gemma 4 má 512 dimenzí) sežere KV cache celou
+/// VRAM dřív než váhy, takže rozdíl mezi 64k a 16k kontextem rozhoduje o tom,
+/// jestli model poběží hybridně na GPU, nebo celý na CPU.
+fn max_context_for_kv_budget(info: &GgufInfo, kv_budget: u64) -> Option<u32> {
+    // Jen když známe skutečnou geometrii. Paušální fallback by na jeden token
+    // vyšel na 100 MB a doporučená hodnota by byla nesmysl.
+    let per_token = kv_bytes_per_token(info)?;
+    let tokens = kv_budget / per_token;
+    // Pod 512 tokenů je to k ničemu — to už není rada, ale výsměch.
+    (tokens >= 512).then(|| u32::try_from(tokens).unwrap_or(u32::MAX))
+}
+
+/// Kolik bajtů KV cache (Q8_0) zabere jeden token. `None` = model neuvádí
+/// rozměry, ze kterých to jde spočítat.
+fn kv_bytes_per_token(info: &GgufInfo) -> Option<u64> {
+    let blocks = u64::from(info.block_count?);
+    let head_dim = kv_head_dim(info)?;
+    let kv_heads = u64::from(info.head_count_kv?);
+    let bytes = blocks * kv_heads * head_dim * 2;
+    (bytes > 0).then_some(bytes)
+}
+
+/// Rozměr K/V hlavy: buď explicitně z metadat (Gemma ho uvádí a NENÍ to
+/// `embedding_length / head_count`), nebo dopočítaný.
+fn kv_head_dim(info: &GgufInfo) -> Option<u64> {
+    info.key_length
+        .map(u64::from)
+        .or_else(|| match (info.embedding_length, info.head_count) {
+            (Some(emb), Some(heads)) if heads > 0 => Some(u64::from(emb / heads)),
+            _ => None,
+        })
+        .filter(|dim| *dim > 0)
+}
+
+/// Doporučení pro hlášku: „sniž kontext na N". Prázdné, když by to nepomohlo.
+fn context_advice(info: &GgufInfo, kv_budget: u64) -> String {
+    match max_context_for_kv_budget(info, kv_budget) {
+        // Zaokrouhlíme dolů na tisíce, ať to vypadá jako nastavitelná hodnota.
+        Some(tokens) => format!(
+            " Snížením kontextu na ~{} tisíc tokenů by model běžel na GPU.",
+            tokens / 1000
+        ),
+        None => String::new(),
+    }
+}
+
 /// Odhad velikosti KV cache pro dané okno kontextu.
 fn estimate_kv_bytes(info: &GgufInfo, context_tokens: u32, quantized: bool) -> u64 {
     let bytes_per_element: u64 = if quantized { 1 } else { 2 };
@@ -258,8 +307,19 @@ pub fn plan_offload(
     let bytes_per_layer = (model_bytes / blocks as u64).max(1);
     let fits = (after_kv / bytes_per_layer) as u32;
     if fits == 0 {
+        // Skoro vždy za to může KV cache, ne váhy: u modelu s velkými hlavami
+        // ji kontext nafoukne přes celý rozpočet dřív, než dojde na vrstvy.
+        // Řekneme rovnou, kam kontext stáhnout, ať uživatel nehádá.
+        let resident = if info.is_moe() {
+            (model_bytes as f64 * (1.0 - MOE_EXPERT_WEIGHT_SHARE)) as u64
+        } else {
+            bytes_per_layer
+        };
+        let advice = context_advice(info, weights_budget.saturating_sub(resident));
         return cpu_only(format!(
-            "Do VRAM ({} MB) se nevejde ani jedna vrstva modelu — počítám na CPU.",
+            "Kontext {context_tokens} tokenů si žádá {} MB KV cache, takže do VRAM \
+             ({} MB) nezbude místo ani na jednu vrstvu — počítám na CPU.{advice}",
+            kv_q8 / (1024 * 1024),
             vram / (1024 * 1024)
         ));
     }
@@ -299,6 +359,49 @@ mod tests {
             key_length: Some(256),
             value_length: Some(256),
         }
+    }
+
+    /// Skutečná geometrie z `D:\models\gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf`,
+    /// jak ji hlásí llama.cpp: 30 vrstev, hlavy 512 dimenzí, `head_count_kv`
+    /// je pole `[8, …, 2, …]` (bereme maximum 8).
+    fn gemma4_26b_info() -> GgufInfo {
+        GgufInfo {
+            architecture: "gemma4".into(),
+            expert_count: Some(128),
+            block_count: Some(30),
+            embedding_length: Some(2560),
+            head_count: Some(8),
+            head_count_kv: Some(8),
+            key_length: Some(512),
+            value_length: Some(512),
+        }
+    }
+
+    #[test]
+    fn huge_context_falls_back_to_cpu_but_says_what_to_do() {
+        // Reálný případ z tohohle stroje: 16,2GB model, RTX 4070 Laptop se
+        // 7180 MB volné VRAM, kontext 64k. KV cache u hlav o 512 dimenzích
+        // sežere víc než celý rozpočet, takže hybrid nevyjde. Hláška ale musí
+        // říct, kam kontext stáhnout — bez toho uživatel jen vidí, že je to
+        // pomalé, a netuší proč.
+        let info = gemma4_26b_info();
+        let machine = MachineProfile {
+            vram_bytes: Some(7180 * 1024 * 1024),
+            device_index: Some(0),
+            cpu_cores: 16,
+        };
+        let decision = plan_offload(16_200_000_000, &info, &machine, 64_000, true);
+        assert_eq!(decision.plan, OffloadPlan::Cpu);
+        assert!(
+            decision.reason.contains("Snížením kontextu"),
+            "hláška má poradit menší kontext, ne jen konstatovat pád: {}",
+            decision.reason
+        );
+
+        // A při tom menším kontextu už hybrid vyjít musí, jinak je rada lež.
+        let smaller = plan_offload(16_200_000_000, &info, &machine, 8_000, true);
+        assert_eq!(smaller.plan, OffloadPlan::HybridMoe);
+        assert!(smaller.cpu_moe);
     }
 
     fn dense_info() -> GgufInfo {

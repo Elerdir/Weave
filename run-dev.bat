@@ -43,12 +43,67 @@ if not defined VULKAN_SDK (
     exit /b 1
 )
 
+REM --- Visual Studio: kompilator do PATH pro Ninju ---
+set "VCVARS="
+for %%V in (18 17 16) do (
+    for %%E in (Community Professional Enterprise BuildTools) do (
+        if exist "%ProgramFiles%\Microsoft Visual Studio\%%V\%%E\VC\Auxiliary\Build\vcvars64.bat" (
+            if not defined VCVARS set "VCVARS=%ProgramFiles%\Microsoft Visual Studio\%%V\%%E\VC\Auxiliary\Build\vcvars64.bat"
+        )
+    )
+)
+if not defined VCVARS (
+    echo CHYBA: Visual Studio s C++ workloadem nenalezeno.
+    echo Nainstaluj "Desktop development with C++":
+    echo   https://visualstudio.microsoft.com/downloads/?q=build+tools
+    pause
+    endlocal
+    exit /b 1
+)
+REM vcvars64 hleda vswhere.exe v PATH; kdyz tam neni, vypise matouci
+REM "'vswhere.exe' is not recognized" a teprve pak si poradi sam.
+REM
+REM Pozor: uvnitr zavorkovaneho bloku se musi psat !ProgramFiles(x86)!, ne
+REM %ProgramFiles(x86)%. Zavorky v nazvu promenne pri beznem rozvoji ukonci
+REM blok predcasne a zbytek radku cmd zkusi spustit jako prikaz.
+if exist "!ProgramFiles(x86)!\Microsoft Visual Studio\Installer\vswhere.exe" (
+    set "PATH=!ProgramFiles(x86)!\Microsoft Visual Studio\Installer;!PATH!"
+)
+call "%VCVARS%" >nul
+
+REM --- Ninja misto MSBuildu ---
+REM MSBuild pada pri kompilaci Vulkan shaderu ("cannot find the batch label
+REM VCEnd"): llama-cpp-sys-2 si pro Vulkan vypina TrackFileAccess a to rozbije
+REM paralelni custom build kroky. Ninja tuhle davkovou masinerii nepouziva.
+REM Ninja je soucasti VS, takze se nic doinstalovavat nemusi.
+set "NINJA_DIR="
+for %%V in (18 17 16) do (
+    for %%E in (Community Professional Enterprise BuildTools) do (
+        if exist "%ProgramFiles%\Microsoft Visual Studio\%%V\%%E\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe" (
+            if not defined NINJA_DIR set "NINJA_DIR=%ProgramFiles%\Microsoft Visual Studio\%%V\%%E\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja"
+        )
+    )
+)
+if defined NINJA_DIR (
+    set "PATH=%NINJA_DIR%;%PATH%"
+    set "CMAKE_GENERATOR=Ninja"
+) else (
+    echo VAROVANI: Ninja nenalezen - build Vulkan shaderu nejspis spadne na MSBuildu.
+)
+
+REM Pozn.: LLAMA_STATIC_CRT se tu zamerne NEnastavuje. Weave nema
+REM .cargo/config.toml s crt-static, takze Rust i llama.cpp jedou na dynamicke
+REM CRT (/MD). Vynuceni staticke by rozbilo linkovani na LNK2038.
+
 REM --- sqlx pouziva commitnutou offline cache, DB neni pri buildu potreba ---
 set "SQLX_OFFLINE=true"
 
 echo.
 echo === Weave dev (Vulkan build) ===
 echo VULKAN_SDK=%VULKAN_SDK%
+echo GENERATOR=%CMAKE_GENERATOR%
+echo.
+echo Prvni build llama.cpp + Vulkan shaderu trva jednotky minut.
 echo.
 
 where pnpm >nul 2>&1
