@@ -129,10 +129,15 @@ klíč z GitHub Secrets; oficiální podepsané instalátory (NSIS + MSI) staví
 workflow při tagu `v*`.
 
 MSI se instaluje pro celý počítač (vyžaduje práva správce). Instalátor obsahuje
-jen aplikaci — modely i ComfyUI se stahují až z aplikace
-podle toho, co uživatel zapne. Build je bez GPU featur (`llm-vulkan`/`llm-metal`),
-aby aplikace běžela i na stroji bez Vulkan SDK; vestavěnou
-inferenci si sestav lokálně přes `run-dev.bat`.
+jen aplikaci — modely i ComfyUI se stahují až z aplikace podle toho, co uživatel
+zapne.
+
+Staví se **s `--features llm-vulkan`**, a to nutně: vestavěná inference je jediný
+backend, který appka má, takže build bez ní vyrobí aplikaci, která se nainstaluje
+a spustí, ale na první zprávu odpoví, že není nastavený žádný AI model. Vulkan SDK
+přitom potřebuje jen stroj, který instalátor staví — uživatel ne, runtime
+`vulkan-1.dll` je součástí ovladače grafiky. Totéž platí pro `release.yml`
+(Windows staví s Vulkanem, macOS s Metalem).
 
 ## Architektura
 

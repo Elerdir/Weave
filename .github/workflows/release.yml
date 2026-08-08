@@ -40,10 +40,40 @@ jobs:
       - name: Install deps
         run: pnpm install
 
+      # Vulkan SDK je potřeba jen k BUILDU (hlavičky, vulkan-1.lib, glslc pro
+      # shadery). Uživatel instalátoru ho nepotřebuje — runtime vulkan-1.dll
+      # je součástí ovladače grafiky.
+      #
+      # Ninja proto, že MSBuild padá při kompilaci Vulkan shaderů
+      # ("cannot find the batch label VCEnd"): llama-cpp-sys-2 si pro Vulkan
+      # vypíná TrackFileAccess a to rozbije paralelní custom build kroky.
+      - name: Install Vulkan SDK + Ninja
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk ninja -y --no-progress
+          $sdk = (Get-ChildItem "C:\VulkanSDK" -Directory |
+                  Sort-Object Name -Descending | Select-Object -First 1).FullName
+          if (-not $sdk) { throw "Vulkan SDK se nenainstaloval do C:\VulkanSDK" }
+          "VULKAN_SDK=$sdk"        | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CMAKE_GENERATOR=Ninja"  | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$sdk\Bin"               | Out-File -FilePath $env:GITHUB_PATH -Append
+          Write-Host "VULKAN_SDK=$sdk"
+
       # Sestaví frontend (vite) + Rust release + Windows bundly (NSIS + MSI).
       # createUpdaterArtifacts v tauri.conf.json vygeneruje k instalátoru .sig.
-      - name: Build Tauri app
-        run: pnpm tauri build
+      #
+      # --features llm-vulkan NENÍ volitelný luxus: vestavěná inference je
+      # jediný backend, který appka má. Build bez ní vyrobí aplikaci, která
+      # se nainstaluje a spustí, ale na první zprávu odpoví, že není nastavený
+      # žádný AI model.
+      #
+      # Ninja potřebuje cl.exe v PATH, proto se napřed volá vcvars64. Cestu
+      # k Visual Studiu hledá vswhere, ať to nezávisí na verzi image runneru.
+      - name: Build Tauri app (Vulkan)
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          pnpm tauri build --features llm-vulkan
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
