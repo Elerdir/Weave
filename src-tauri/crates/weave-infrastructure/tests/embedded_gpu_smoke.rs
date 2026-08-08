@@ -1,8 +1,8 @@
 //! Manuální smoke test reálné GPU inference. Vyžaduje feature `llm-embedded`
-//! (typicky `llm-cuda`) a proměnnou WEAVE_SMOKE_MODEL s cestou k .gguf modelu.
+//! (typicky `llm-vulkan`) a proměnnou WEAVE_SMOKE_MODEL s cestou k .gguf modelu.
 //! Nikdy neběží v CI (#[ignore] + feature gate) — spouští se ručně:
 //!
-//!   WEAVE_SMOKE_MODEL=C:/path/model.gguf cargo test --features llm-cuda \
+//!   WEAVE_SMOKE_MODEL=C:/path/model.gguf cargo test --features llm-vulkan \
 //!     --test embedded_gpu_smoke -- --ignored --nocapture
 //!
 //! Testy spouštěj jednotlivě (--test-threads=1, nebo přes název testu), ne

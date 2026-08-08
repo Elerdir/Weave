@@ -1,20 +1,23 @@
 @echo off
-REM Spusti Weave ve vyvojovem rezimu s vestavenou CUDA GPU inferenci (llama.cpp).
+REM Spusti Weave ve vyvojovem rezimu s vestavenou GPU inferenci pres Vulkan.
+REM
+REM Vulkan je hlavni cesta pro VSECHNY karty -- NVIDIA, AMD i Intel. CUDA se
+REM pro text uz nestavi: u modelu vetsich nez VRAM nerozhoduje backend, ale
+REM rozlozeni modelu (experti v RAM, attention na GPU -- viz llm::offload_plan),
+REM a Vulkan SDK je proti CUDA Toolkitu o rad mensi. CUDA v projektu zustava
+REM jen pro ComfyUI, ktere si ji instaluje samo do vlastniho Python prostredi.
 REM
 REM Predpoklady:
-REM   - CUDA Toolkit (skript si sam najde nejnovejsi nainstalovanou verzi)
+REM   - Vulkan SDK (https://vulkan.lunarg.com/sdk/home) -- instalator nastavi
+REM     promennou VULKAN_SDK; build z nej potrebuje glslc a hlavicky
 REM   - CMake, Visual Studio (MSVC) s C++ workloadem
-REM   - NVIDIA GPU
 REM
-REM Nemas NVIDII nebo nechces stavet CUDA? Pouzij:
-REM   run-dev-cpu.bat    (jen CPU, nepotrebuje CUDA ani Vulkan SDK)
-REM   run-dev-vulkan.bat   (AMD / Intel GPU)
+REM Nechces stavet GPU backend? Pouzij run-dev-cpu.bat (jen CPU).
 REM
-REM Chces jinou CUDA verzi nez tu nejnovejsi? Nastav si pred spustenim
-REM promennou CUDA_PATH a skript ji respektuje.
-REM
-REM Model (.gguf) a pocet GPU vrstev se nastavuji v aplikaci:
+REM Model (.gguf) se nastavuje v aplikaci:
 REM   Nastaveni -> AI model -> Vestavena GPU inference
+REM Pocet vrstev na GPU uz nastavovat nemusis -- appka si rozlozeni spocita
+REM sama podle velikosti modelu, GGUF hlavicky a volne VRAM.
 
 setlocal enabledelayedexpansion
 
@@ -29,43 +32,23 @@ if not exist "package.json" (
     exit /b 1
 )
 
-REM --- CUDA Toolkit: respektuj CUDA_PATH, jinak najdi nejnovejsi nainstalovanou ---
-set "CUDA_ROOT=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
-if not defined CUDA_PATH (
-    for /f "delims=" %%d in ('dir /b /ad /on "%CUDA_ROOT%\v*" 2^>nul') do set "CUDA_PATH=%CUDA_ROOT%\%%d"
-)
-
-if not exist "%CUDA_PATH%\bin\nvcc.exe" (
-    echo CHYBA: nenasel jsem CUDA Toolkit ^(nvcc.exe^).
-    echo Hledal jsem v: %CUDA_ROOT%\v*
+if not defined VULKAN_SDK (
+    echo CHYBA: promenna VULKAN_SDK neni nastavena.
+    echo Nainstaluj Vulkan SDK z https://vulkan.lunarg.com/sdk/home
+    echo a otevri novy terminal ^(promenne se nacitaji pri otevreni okna^).
     echo.
-    echo Bud nainstaluj CUDA Toolkit z
-    echo   https://developer.nvidia.com/cuda-downloads
-    echo nebo pouzij run-dev-cpu.bat ^(jen CPU, bez CUDA^).
+    echo Nez SDK nainstalujes, muzes zatim pouzit run-dev-cpu.bat.
     pause
     endlocal
     exit /b 1
 )
 
-set "CUDACXX=%CUDA_PATH%\bin\nvcc.exe"
-set "PATH=%CUDA_PATH%\bin;%PATH%"
-
-REM --- Cilova GPU architektura: zeptej se karty, jinak fallback na 86 (RTX 30xx) ---
-if not defined CMAKE_CUDA_ARCHITECTURES (
-    for /f "usebackq tokens=1 delims=, " %%c in (`nvidia-smi --query-gpu^=compute_cap --format^=csv^,noheader 2^>nul`) do (
-        if not defined CMAKE_CUDA_ARCHITECTURES set "CMAKE_CUDA_ARCHITECTURES=%%c"
-    )
-    set "CMAKE_CUDA_ARCHITECTURES=!CMAKE_CUDA_ARCHITECTURES:.=!"
-)
-if not defined CMAKE_CUDA_ARCHITECTURES set "CMAKE_CUDA_ARCHITECTURES=86"
-
-REM --- sqlx pouziva commitnutou offline cache, DB se neni potreba pripojovat pri buildu ---
+REM --- sqlx pouziva commitnutou offline cache, DB neni pri buildu potreba ---
 set "SQLX_OFFLINE=true"
 
 echo.
-echo === Weave dev (CUDA build) ===
-echo CUDA_PATH=%CUDA_PATH%
-echo CMAKE_CUDA_ARCHITECTURES=%CMAKE_CUDA_ARCHITECTURES%
+echo === Weave dev (Vulkan build) ===
+echo VULKAN_SDK=%VULKAN_SDK%
 echo.
 
 where pnpm >nul 2>&1
@@ -79,7 +62,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-call pnpm tauri dev --features llm-cuda
+call pnpm tauri dev --features llm-vulkan
 set "EXITCODE=%errorlevel%"
 if not "%EXITCODE%"=="0" (
     echo.

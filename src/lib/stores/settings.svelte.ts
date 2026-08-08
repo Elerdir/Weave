@@ -193,10 +193,13 @@ function createSettingsStore() {
     },
 
     /**
-     * Přepne aktivní model a zároveň dopočítá `gpu_layers` podle skutečně
-     * volné VRAM (max. 80 % — viz `recommend_gpu_layers_for_path` na backendu),
-     * ať model, co se nevejde, neskončí OOM/nepředvídatelně pomalým částečným
-     * GPU offloadem, ale rovnou běží celý v RAM.
+     * Přepne aktivní model a zároveň si od backendu vyžádá odhad `gpu_layers`
+     * (`recommend_gpu_layers_for_path`).
+     *
+     * Je to jen orientační hodnota pro UI. Skutečné rozložení modelu mezi GPU
+     * a RAM se počítá až při jeho načtení — tam je k dispozici GGUF hlavička
+     * i volná VRAM všech karet, takže MoE model větší než VRAM neskončí celý
+     * v RAM, ale poběží hybridně (experti v RAM, attention na GPU).
      */
     async activateModel(path: string) {
       this.setModelPath(path);

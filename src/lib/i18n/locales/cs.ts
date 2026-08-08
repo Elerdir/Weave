@@ -48,7 +48,7 @@ const cs = {
       },
       models: {
         title: "Místní modely",
-        description: "Stáhni si model pro GPU (CUDA) inferenci — appka běží čistě lokálně, bez cloudové API.",
+        description: "Stáhni si model pro GPU (Vulkan) inferenci — appka běží čistě lokálně, bez cloudové API.",
         download: "Stáhnout ({size})",
         skip: "Přeskočit",
         downloading: "Stahuji...",
@@ -314,7 +314,7 @@ const cs = {
       openvinoWhyShortList:
         "Proč je nabídka tak malá? NPU umí jen INT4 modely kvantované podle receptu z OpenVINO NPU guide — kanálově („-cw-ov“) nebo skupinově („-gq-ov“). Běžné „-int4-ov“ ani multimodální modely načíst nejdou. Profily do 8B jsou přímo od OpenVINO a jsou ověřené; větší jsou komunitní konverze se správným tvarem, ale bez záruky, že je NPU zkompiluje — čím větší model, tím vyšší riziko, že start skončí chybou Level Zero compileru.",
       openvinoNoGemmaNote:
-        "Gemma 4 (26B ani 31B) pro NPU neexistuje — všechny její OpenVINO verze jsou multimodální, takže je nejde načíst. Nejsilnější náhrada s dobrou češtinou je Qwen3: 8B na jistotu, 14B jako rozumný krok nahoru, 32B jako maximum pro odvážné. Samotnou Gemmu 4 spustíš přes CUDA, kde ji v nabídce modelů máš.",
+        "Gemma 4 (26B ani 31B) pro NPU neexistuje — všechny její OpenVINO verze jsou multimodální, takže je nejde načíst. Nejsilnější náhrada s dobrou češtinou je Qwen3: 8B na jistotu, 14B jako rozumný krok nahoru, 32B jako maximum pro odvážné. Samotnou Gemmu 4 spustíš na GPU přes Vulkan, kde ji v nabídce modelů máš.",
       openvinoDownloadRecommended: "Stáhnout doporučený model",
       openvinoDownloadSelected: "Stáhnout vybraný model",
       openvinoOpenSource: "Otevřít zdroj",
@@ -335,12 +335,12 @@ const cs = {
       npuDriverOutdated:
         "Ovladač NPU {version} je zastaralý. NPU kompiluje model až ve svém ovladači, takže na tomhle OpenVINO 2026 model nezkompiluje a start skončí chybou Level Zero compileru — bez ohledu na velikost modelu.",
       npuDriverDownload: "Stáhnout aktuální ovladač Intel NPU",
-      hint: "Appka běží čistě lokálně — vyber, jestli má model počítat na GPU (CUDA/Metal/Vulkan) nebo na NPU (Intel AI Boost / Ryzen AI / Snapdragon X).",
+      hint: "Appka běží čistě lokálně — vyber, jestli má model počítat na GPU (Vulkan/Metal) nebo na NPU (Intel AI Boost / Ryzen AI / Snapdragon X).",
       test: "Test připojení",
       connected: "Připojeno",
       disconnected: "Nepřipojeno",
       embedded: "Vestavěná GPU inference",
-      embeddedHint: "Model se stáhne přímo do Weave a poběží na GPU (CUDA/Metal/Vulkan) — vše lokálně, bez externího serveru či cloudu.",
+      embeddedHint: "Model se stáhne přímo do Weave a poběží na GPU (Vulkan/Metal) — vše lokálně, bez externího serveru či cloudu.",
       modelPath: "Soubor modelu (.gguf)",
       modelPathPlaceholder: "Nevybráno — vyber .gguf soubor",
       browse: "Vybrat jiný soubor",

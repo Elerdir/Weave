@@ -1,7 +1,10 @@
-//! Vestavěná inference přes llama.cpp (feature `llm-embedded` / `llm-cuda` …).
+//! Vestavěná inference přes llama.cpp (feature `llm-embedded` / `llm-vulkan` …).
 //!
 //! Model není `Send`, proto ho vlastní dedikované vlákno a komunikuje se přes
 //! kanál — `EmbeddedLlamaClient` drží jen `Sender` (je `Send + Sync`).
+//!
+//! Jak se model rozloží mezi GPU a RAM nerozhoduje tenhle soubor, ale
+//! [`super::offload_plan`] — sem se plán jen aplikuje na parametry llama.cpp.
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -9,7 +12,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use async_trait::async_trait;
 use llama_cpp_2::{
-    context::params::LlamaContextParams,
+    context::params::{KvCacheType, LlamaContextParams},
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
     model::{params::LlamaModelParams, AddBos, LlamaModel},
@@ -22,16 +25,14 @@ use weave_application::{
 };
 use weave_domain::message::{GenerationStats, Message, ModelBackend, Role};
 
-#[cfg(feature = "llm-cuda")]
-const ACTIVE_BACKEND: ModelBackend = ModelBackend::LocalCuda;
-#[cfg(all(feature = "llm-metal", not(feature = "llm-cuda")))]
+use super::gguf_meta::GgufInfo;
+use super::offload_plan::{plan_offload, MachineProfile, OffloadDecision};
+
+#[cfg(feature = "llm-metal")]
 const ACTIVE_BACKEND: ModelBackend = ModelBackend::LocalMetal;
-#[cfg(all(
-    feature = "llm-vulkan",
-    not(any(feature = "llm-cuda", feature = "llm-metal"))
-))]
+#[cfg(all(feature = "llm-vulkan", not(feature = "llm-metal")))]
 const ACTIVE_BACKEND: ModelBackend = ModelBackend::LocalVulkan;
-#[cfg(not(any(feature = "llm-cuda", feature = "llm-metal", feature = "llm-vulkan")))]
+#[cfg(not(any(feature = "llm-metal", feature = "llm-vulkan")))]
 const ACTIVE_BACKEND: ModelBackend = ModelBackend::LocalCpu;
 
 struct WorkerRequest {
@@ -102,13 +103,100 @@ impl LlmPort for EmbeddedLlamaClient {
     }
 }
 
-/// Načte model do (V)RAM. Oddělené, aby šlo znovu-načíst po `Unload`.
+/// Zjistí, na čem se dá počítat. Musí se volat **až po** `LlamaBackend::init()`
+/// — dřív ggml žádné backendy zaregistrované nemá a seznam vyjde prázdný.
+fn detect_machine() -> MachineProfile {
+    let cpu_cores = super::device_catalog::physical_cores();
+    let devices = super::device_catalog::list_devices();
+    match super::device_catalog::choose_device(&devices) {
+        Some(device) => {
+            tracing::info!(
+                index = device.index,
+                backend = %device.backend,
+                free_mb = device.memory_free / (1024 * 1024),
+                "Počítám na zařízení: {}",
+                device.description
+            );
+            MachineProfile {
+                // Volná paměť je to, co reálně dostaneme; když ji backend
+                // nehlásí, spadneme na celkovou.
+                vram_bytes: Some(if device.memory_free > 0 {
+                    device.memory_free
+                } else {
+                    device.memory_total
+                }),
+                device_index: Some(device.index),
+                cpu_cores,
+            }
+        }
+        None => {
+            tracing::info!("Žádné GPU zařízení — počítám na CPU");
+            MachineProfile {
+                vram_bytes: None,
+                device_index: None,
+                cpu_cores,
+            }
+        }
+    }
+}
+
+/// Spočítá, jak model rozložit. `force_cpu` odpovídá tomu, že uživatel
+/// v nastavení nechal 0 vrstev na GPU.
+fn decide_offload(model_path: &std::path::Path, n_ctx: u32, force_cpu: bool) -> OffloadDecision {
+    let model_bytes = std::fs::metadata(model_path).map(|m| m.len()).unwrap_or(0);
+    let info = super::gguf_meta::read_gguf_info(model_path).unwrap_or_else(|e| {
+        // Bez metadat plán degraduje na hrubší odhad, ale pořád je lepší
+        // než naivní „všechny vrstvy na GPU".
+        tracing::warn!(error = %e, "GGUF hlavičku nejde přečíst, plánuji bez metadat");
+        GgufInfo::default()
+    });
+    let machine = if force_cpu {
+        MachineProfile {
+            vram_bytes: None,
+            device_index: None,
+            cpu_cores: super::device_catalog::physical_cores(),
+        }
+    } else {
+        detect_machine()
+    };
+    plan_offload(model_bytes, &info, &machine, n_ctx, !force_cpu)
+}
+
+/// Načte model do (V)RAM podle plánu. Oddělené, aby šlo znovu-načíst po
+/// `Unload`.
 fn load_model(
     backend: &LlamaBackend,
     model_path: &std::path::Path,
-    n_gpu_layers: u32,
+    decision: &OffloadDecision,
 ) -> Result<LlamaModel, String> {
-    let params = LlamaModelParams::default().with_n_gpu_layers(n_gpu_layers);
+    let mut params = LlamaModelParams::default().with_n_gpu_layers(decision.gpu_layers);
+    if let Some(index) = decision.device_index {
+        // Bez explicitní volby vezme llama.cpp nulté zařízení podle driveru —
+        // na notebooku s hybridní grafikou bývá integrované. Horší je výchozí
+        // split_mode = Layer, který rozdělí vrstvy mezi *všechna* zařízení.
+        match params.with_devices(&[index]) {
+            Ok(p) => params = p,
+            Err(e) => {
+                tracing::warn!(index, error = %e, "Zařízení nejde vybrat, nechávám volbu na llama.cpp");
+                params = LlamaModelParams::default().with_n_gpu_layers(decision.gpu_layers);
+            }
+        }
+    }
+
+    let mut params = Box::pin(params);
+    if decision.cpu_moe {
+        // Záměrně **ne** `add_cpu_moe_override()` z knihovny. Ta má vzor
+        // `\.ffn_(up|down|gate)_(ch|)exps`, který nechytí Gemmu 4: ta má gate
+        // a up slité do jednoho tenzoru `ffn_gate_up_exps`, a to je zrovna
+        // ten největší. Zůstal by ve VRAM a načtení skončilo na
+        // `ErrorOutOfDeviceMemory`.
+        //
+        // Prostý podřetězec sedí na všechny podoby a naopak nechytí router
+        // `ffn_gate_inp` — ten je malý, počítá se pro každý token a na GPU
+        // patří.
+        params.as_mut().add_cpu_buft_override(c"exps");
+    }
+
     LlamaModel::load_from_file(backend, model_path, &params)
         .map_err(|e| format!("Načtení modelu selhalo: {e}"))
 }
@@ -178,14 +266,26 @@ fn worker_loop(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32, rx: Receiver<
         }
     };
 
+    // Plán se počítá jednou — výčet zařízení i čtení GGUF hlavičky stojí čas
+    // a mezi načteními se nic z toho nemění.
+    let decision = decide_offload(&model_path, n_ctx, n_gpu_layers == 0);
+    tracing::info!(
+        ?model_path,
+        plan = decision.plan.label(),
+        gpu_layers = decision.gpu_layers,
+        cpu_moe = decision.cpu_moe,
+        op_offload = decision.op_offload,
+        threads = decision.threads,
+        kv = if decision.quantized_kv { "Q8_0" } else { "F16" },
+        "{}",
+        decision.reason
+    );
+
     // Model načteme rovnou (předehřátí VRAM při startu). `Unload` ho dropne
     // a `Infer` ho v případě potřeby zase líně načte — díky tomu se dá VRAM
     // dočasně uvolnit pro generování obrázků, aniž by se rušil worker.
-    let mut model: Option<LlamaModel> = match load_model(&backend, &model_path, n_gpu_layers) {
-        Ok(m) => {
-            tracing::info!(?model_path, n_gpu_layers, "Vestavěný model načten (GPU)");
-            Some(m)
-        }
+    let mut model: Option<LlamaModel> = match load_model(&backend, &model_path, &decision) {
+        Ok(m) => Some(m),
         Err(e) => {
             tracing::error!("{e}");
             None
@@ -205,7 +305,7 @@ fn worker_loop(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32, rx: Receiver<
             }
             WorkerMsg::Infer(req) => {
                 if model.is_none() {
-                    match load_model(&backend, &model_path, n_gpu_layers) {
+                    match load_model(&backend, &model_path, &decision) {
                         Ok(m) => {
                             tracing::info!("Vestavěný model znovu načten do VRAM");
                             model = Some(m);
@@ -217,7 +317,7 @@ fn worker_loop(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32, rx: Receiver<
                     }
                 }
                 let loaded = model.as_ref().expect("model je načtený");
-                if let Err(e) = run_inference(&backend, loaded, n_ctx, &req) {
+                if let Err(e) = run_inference(&backend, loaded, n_ctx, &decision, &req) {
                     let _ = req.tx.blocking_send(StreamChunk::Error(e.to_string()));
                 }
             }
@@ -248,6 +348,7 @@ fn run_inference(
     backend: &LlamaBackend,
     model: &LlamaModel,
     n_ctx: u32,
+    decision: &OffloadDecision,
     req: &WorkerRequest,
 ) -> AppResult<()> {
     // Per-konverzační kontext má přednost před globálním nastavením;
@@ -255,9 +356,21 @@ fn run_inference(
     let n_ctx_requested = req.request.context_length.unwrap_or(n_ctx);
     let n_ctx_eff = n_ctx_requested.max(512).min(model.n_ctx_train());
 
-    let ctx_params = LlamaContextParams::default()
+    let mut ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(n_ctx_eff))
-        .with_n_batch(N_BATCH as u32);
+        .with_n_batch(N_BATCH as u32)
+        .with_n_threads(decision.threads)
+        .with_n_threads_batch(decision.threads)
+        // Když váhy leží v RAM, tahat jednotlivé operace na GPU se nevyplatí —
+        // první token je pak zhruba dvakrát pomalejší.
+        .with_op_offload(decision.op_offload);
+    if decision.quantized_kv {
+        // U paměťově napjatých plánů ušetří polovinu VRAM za KV cache při
+        // zanedbatelné ztrátě kvality.
+        ctx_params = ctx_params
+            .with_type_k(KvCacheType::Q8_0)
+            .with_type_v(KvCacheType::Q8_0);
+    }
     let mut ctx = model
         .new_context(backend, ctx_params)
         .map_err(|e| AppError::Llm(format!("Kontext: {e}")))?;

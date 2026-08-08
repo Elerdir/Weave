@@ -1,9 +1,9 @@
 use tauri::{Emitter, State, Window};
 use tokio::sync::mpsc;
 use weave_application::ports::model_manager_port::{DownloadProgress, GpuInfo, LocalModel};
-use weave_domain::recommended_models::{
-    recommend_gpu_layers, recommended_models, RecommendedModel,
-};
+use weave_domain::recommended_models::{recommended_models, RecommendedModel};
+use weave_infrastructure::llm::offload_plan::ALL_GPU_LAYERS;
+use weave_infrastructure::llm::{plan_offload, read_gguf_info, MachineProfile};
 
 use crate::state::AppState;
 
@@ -215,7 +215,7 @@ pub async fn download_recommended_model(
         .map_err(|e| e.to_string())?
         .map(|gpu| gpu.free_vram_mb)
         .unwrap_or(0);
-    let gpu_layers = recommend_gpu_layers(recommended.size_bytes, free_vram_mb);
+    let gpu_layers = plan_gpu_layers(&local_model.path, recommended.size_bytes, free_vram_mb);
 
     app_config::set(&state.pool, super::settings::LLM_BACKEND_KEY, "embedded")
         .await
@@ -238,10 +238,13 @@ pub async fn download_recommended_model(
     Ok(())
 }
 
-/// Doporučí `gpu_layers` pro libovolný `.gguf` soubor podle jeho velikosti na
-/// disku a aktuálně volné VRAM — používá se při ručním přepnutí na jiný
-/// stažený model nebo výběru vlastního souboru, ať mají stejnou VRAM-aware
-/// logiku jako jednoklikové stažení doporučeného modelu.
+/// Doporučí `gpu_layers` pro libovolný `.gguf` soubor — používá se při ručním
+/// přepnutí na jiný stažený model nebo výběru vlastního souboru.
+///
+/// Je to jen **odhad pro UI**. Závazné rozhodnutí padá až při načtení modelu
+/// ve `weave_infrastructure::llm::embedded`, protože teprve tam je
+/// inicializovaný ggml a s ním i seznam zařízení se skutečnou volnou pamětí
+/// (ten na rozdíl od `detect_gpu` vidí i AMD a Intel, ne jen NVIDII).
 #[tauri::command]
 pub async fn recommend_gpu_layers_for_path(
     path: String,
@@ -258,5 +261,27 @@ pub async fn recommend_gpu_layers_for_path(
         .map_err(|e| e.to_string())?
         .map(|gpu| gpu.free_vram_mb)
         .unwrap_or(0);
-    Ok(recommend_gpu_layers(size_bytes, free_vram_mb))
+    Ok(plan_gpu_layers(&path, size_bytes, free_vram_mb))
 }
+
+/// Společný odhad pro obě cesty (jednoklikové stažení i ruční výběr).
+fn plan_gpu_layers(path: &str, size_bytes: u64, free_vram_mb: u64) -> u32 {
+    // Neznámá VRAM neznamená „počítej na CPU" — znamená jen, že tenhle
+    // (NVIDIA-only) detektor kartu nenašel. Necháme rozhodnutí na načítání
+    // modelu, kde se ggml zeptá i AMD a Intelu.
+    if free_vram_mb == 0 {
+        return ALL_GPU_LAYERS;
+    }
+    let info = read_gguf_info(std::path::Path::new(path)).unwrap_or_default();
+    let machine = MachineProfile {
+        vram_bytes: Some(free_vram_mb * 1024 * 1024),
+        device_index: None,
+        cpu_cores: std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4),
+    };
+    plan_offload(size_bytes, &info, &machine, DEFAULT_PLAN_CONTEXT, true).gpu_layers
+}
+
+/// Kontext, se kterým se odhaduje KV cache, když ho uživatel ještě nezvolil.
+const DEFAULT_PLAN_CONTEXT: u32 = 8192;

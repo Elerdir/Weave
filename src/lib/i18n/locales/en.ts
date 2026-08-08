@@ -50,7 +50,7 @@ const en: Messages = {
       },
       models: {
         title: "Local Models",
-        description: "Download a model for GPU (CUDA) inference — the app runs fully locally, with no cloud API.",
+        description: "Download a model for GPU (Vulkan) inference — the app runs fully locally, with no cloud API.",
         download: "Download ({size})",
         skip: "Skip",
         downloading: "Downloading...",
@@ -316,7 +316,7 @@ const en: Messages = {
       openvinoWhyShortList:
         "Why so few models? The NPU only runs INT4 models quantised with the recipe from the OpenVINO NPU guide — channel-wise (\"-cw-ov\") or group-wise (\"-gq-ov\"). Plain \"-int4-ov\" and multimodal models cannot be loaded. Profiles up to 8B come from OpenVINO itself and are validated; the larger ones are community conversions with the right shape but no guarantee the NPU will compile them — the bigger the model, the likelier the start fails in the Level Zero compiler.",
       openvinoNoGemmaNote:
-        "No Gemma 4 build exists for the NPU — neither 26B nor 31B. Every OpenVINO build of it is multimodal and therefore cannot be loaded. The strongest substitute with solid multilingual quality is Qwen3: 8B for a safe bet, 14B as a sensible step up, 32B as the ceiling if you feel brave. For Gemma 4 itself, switch the backend to CUDA, where it is in the model catalogue.",
+        "No Gemma 4 build exists for the NPU — neither 26B nor 31B. Every OpenVINO build of it is multimodal and therefore cannot be loaded. The strongest substitute with solid multilingual quality is Qwen3: 8B for a safe bet, 14B as a sensible step up, 32B as the ceiling if you feel brave. For Gemma 4 itself, switch the backend to the GPU (Vulkan), where it is in the model catalogue.",
       openvinoDownloadRecommended: "Download recommended model",
       openvinoDownloadSelected: "Download selected model",
       openvinoOpenSource: "Open source",
@@ -337,12 +337,12 @@ const en: Messages = {
       npuDriverOutdated:
         "NPU driver {version} is outdated. The NPU compiles the model inside its own driver, so with OpenVINO 2026 compilation fails in the Level Zero compiler and startup errors out — regardless of model size.",
       npuDriverDownload: "Download the current Intel NPU driver",
-      hint: "The app runs fully locally — choose whether the model runs on GPU (CUDA/Metal/Vulkan) or NPU (Intel AI Boost / Ryzen AI / Snapdragon X).",
+      hint: "The app runs fully locally — choose whether the model runs on GPU (Vulkan/Metal) or NPU (Intel AI Boost / Ryzen AI / Snapdragon X).",
       test: "Test connection",
       connected: "Connected",
       disconnected: "Disconnected",
       embedded: "Embedded GPU inference",
-      embeddedHint: "The model downloads directly into Weave and runs on the GPU (CUDA/Metal/Vulkan) — fully local, no external server or cloud.",
+      embeddedHint: "The model downloads directly into Weave and runs on the GPU (Vulkan/Metal) — fully local, no external server or cloud.",
       modelPath: "Model file (.gguf)",
       modelPathPlaceholder: "Not selected — pick a .gguf file",
       browse: "Choose another file",

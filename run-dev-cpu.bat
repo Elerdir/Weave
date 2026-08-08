@@ -1,7 +1,7 @@
 @echo off
 REM Spusti Weave ve vyvojovem rezimu s vestavenou inferenci bezici jen na CPU.
 REM
-REM Proti run-dev.bat (CUDA) a run-dev-vulkan.bat nepotrebuje zadne GPU SDK --
+REM Proti run-dev.bat (Vulkan) nepotrebuje zadne GPU SDK --
 REM staci CMake a Visual Studio (MSVC) s C++ workloadem. Hodi se, kdyz
 REM   - nemas nainstalovanou CUDU / Vulkan SDK,
 REM   - GPU build z nejakeho duvodu selhava a chces overit zbytek aplikace,

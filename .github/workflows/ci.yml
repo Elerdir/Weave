@@ -53,9 +53,8 @@ jobs:
         run: cargo fmt --all -- --check
 
       # Bez --all-features: GPU inference featury vyžadují GPU toolchain, který
-      # tenhle runner nemá. Metal se kompiluje v jobu rust-macos, Vulkan v
-      # rust-vulkan; CUDA zůstává jen ruční (viz README, run-dev.bat) — CUDA
-      # toolkit je na CI moc velký.
+      # tenhle runner nemá. Metal se kompiluje v jobu rust-macos, Vulkan
+      # (hlavní cesta) v rust-vulkan.
       - name: Clippy
         run: cargo clippy --all-targets --workspace -- -D warnings
 

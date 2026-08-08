@@ -71,9 +71,12 @@ pub enum ModelBackend {
     /// Historická hodnota — appka už Mistral API nenabízí, variant zůstává
     /// jen kvůli deserializaci starých uložených zpráv.
     MistralApi,
-    #[default]
+    /// Historická hodnota. CUDA se pro text už nestaví (Vulkan pokrývá NVIDII
+    /// stejně dobře a nepotřebuje toolkit); variant zůstává kvůli zprávám,
+    /// které se s ní vygenerovaly dřív.
     LocalCuda,
     LocalMetal,
+    #[default]
     LocalVulkan,
     LocalCpu,
     OpenvinoNpu,

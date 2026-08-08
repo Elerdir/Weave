@@ -13,11 +13,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 # Vestavěná GPU inference (llama.cpp). Zapíná se při buildu:
-#   cargo tauri dev --features llm-cuda   (viz run-dev.bat)
+#   cargo tauri dev --features llm-vulkan   (viz run-dev.bat)
 # llm-embedded = jen CPU, bez GPU akcelerace (viz run-dev-local.bat) -- build
 # nepotrebuje CUDA ani Vulkan SDK, jen CMake + MSVC.
 llm-embedded = ["weave-shell/llm-embedded"]
-llm-cuda = ["weave-shell/llm-cuda"]
+# CUDA tu není záměrně — viz komentář ve weave-infrastructure/Cargo.toml.
 llm-metal = ["weave-shell/llm-metal"]
 llm-vulkan = ["weave-shell/llm-vulkan"]
 

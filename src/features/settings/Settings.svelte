@@ -179,9 +179,10 @@
   let downloadId = $state("");
 
   const backendLabel: Record<string, string> = {
-    cuda: "CUDA (NVIDIA)",
+    // "cuda" se pro text už nestaví — zůstává kvůli zprávám z dřívějších verzí.
+    cuda: "CUDA (NVIDIA, historické)",
     metal: "Metal (Apple)",
-    vulkan: "Vulkan",
+    vulkan: "Vulkan (NVIDIA / AMD / Intel)",
     cpu: "CPU",
   };
 
