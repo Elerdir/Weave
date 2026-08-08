@@ -104,6 +104,33 @@ fn wants_wide_image(prompt: &str) -> bool {
     WIDE_IMAGE_KEYWORDS.iter().any(|k| lower.contains(k))
 }
 
+/// Popisuje prompt ležící/sedící pózu?
+///
+/// Potřebujeme to kvůli promptům, které si odporují: appka sama u celé postavy
+/// přidává „standing", a když si uživatel takový prompt jednou zkopíruje a pak
+/// v něm změní pózu na ležící, zůstane v textu obojí. Model pak míchá stoj
+/// a leh dohromady a výsledkem je pokroucená anatomie. Text uživatele
+/// nepřepisujeme — jen protichůdné slovo pošleme do negativního promptu.
+fn wants_reclining_pose(prompt: &str) -> bool {
+    const RECLINING: &[&str] = &[
+        "lying",
+        "lies down",
+        "laying",
+        "reclin",
+        "sitting",
+        "seated",
+        "kneeling",
+        "crouch",
+        "lezici",
+        "lezi ",
+        "sedici",
+        "sedi ",
+        "kleci",
+    ];
+    let lower = strip_czech_diacritics(prompt).to_lowercase();
+    RECLINING.iter().any(|k| lower.contains(k))
+}
+
 /// Vypadá text jako hotový anglický SD prompt? (převážně ASCII, komma-
 /// separovaný výčet deskriptorů, dost dlouhý). Takový prompt pošleme do
 /// generátoru rovnou, bez LLM překladu — mj. aby ho cenzurovaný model
@@ -1090,7 +1117,12 @@ impl SendMessageUseCase {
         let wide_image = wants_wide_image(&prompt) || wants_wide_image(&sd_prompt);
         let uses_reference_images = !reference_image_paths.is_empty();
         let (width, height) = if wide_image {
-            (1280, 720)
+            // 1344×768, ne 1280×720. SDXL (a tím i Pony) je trénovaný na sadě
+            // poměrů kolem 1 Mpx a 1344×768 je z nich ten širokoúhlý; 1280×720
+            // do žádného nepatří a má o desetinu míň pixelů. Na postavě přes
+            // celou výšku se to pozná nejvíc — 720 px je na hlavu i chodidla
+            // zároveň málo a model začne skládat anatomii dohromady špatně.
+            (1344, 768)
         } else if full_body && uses_reference_images {
             (768, 1152)
         } else if full_body {
@@ -1107,10 +1139,17 @@ impl SendMessageUseCase {
             );
             negative_prompt.push_str(", portrait orientation, vertical image, close-up crop");
         }
+        // Ležící/sedící póza vs. „standing" v tomtéž promptu = pokroucená
+        // postava. Vlastní text uživatele nepřepisujeme, ale dáme modelu jasně
+        // najevo, která z těch dvou pozic platit nemá.
+        let reclining = wants_reclining_pose(&prompt) || wants_reclining_pose(&sd_prompt);
+        if reclining {
+            negative_prompt.push_str(", standing, upright pose");
+        }
         if full_body {
             // U celé postavy je obličej malý → tagy na oči + hi-res průchod,
             // aby oči nevycházely rozmazané/„divné".
-            if wide_image {
+            if wide_image || reclining {
                 sd_prompt.push_str(
                     ", full body, entire figure in frame, visible feet, detailed face, \
                      detailed symmetric eyes",
@@ -2726,6 +2765,24 @@ mod tests {
     }
 
     #[test]
+    fn reclining_pose_is_detected_even_next_to_standing() {
+        // Přesně ten případ z hlášení: prompt na tapetu, kde postava leží,
+        // ale zůstalo v něm i "standing" z dřívějšího generování celé postavy.
+        let prompt = "wide cinematic 16:9 wallpaper of a woman lying on her side on a beach, \
+                      reclining side pose, full body, visible feet, standing, detailed face";
+        assert!(wants_reclining_pose(prompt));
+        assert!(wants_wide_image(prompt));
+        assert!(wants_full_body(prompt));
+
+        assert!(wants_reclining_pose("zena lezici na plazi"));
+        assert!(wants_reclining_pose("sitting on a chair"));
+        assert!(
+            !wants_reclining_pose("a woman standing on a beach, full body"),
+            "stojici poza nesmi spustit negativni tag"
+        );
+    }
+
+    #[test]
     fn wants_wide_image_detects_wallpaper_requests() {
         assert!(wants_wide_image("wide cinematic 16:9 desktop wallpaper"));
         assert!(wants_wide_image("na sirku, tapeta pro QHD monitor"));
@@ -2975,7 +3032,8 @@ mod tests {
 
         let mut image_gen = MockImageGenPort::new();
         image_gen.expect_generate().returning(|req, tx| {
-            assert_eq!((req.width, req.height), (1280, 720));
+            // SDXL bucket pro 16:9, ne 1280x720 (viz komentar u volby rozliseni).
+            assert_eq!((req.width, req.height), (1344, 768));
             assert!(req.prompt.contains("wide 16:9 landscape composition"));
             assert!(!req.prompt.contains("standing"));
             assert!(req
