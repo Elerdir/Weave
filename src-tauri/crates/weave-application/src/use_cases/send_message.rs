@@ -1276,8 +1276,8 @@ impl SendMessageUseCase {
     }
 
     /// `model_id` je jen popisek do `GenerationStats` — s Mistralem pryč ho
-    /// žádný zbývající backend (embedded/OpenVINO) k výběru modelu nepoužívá
-    /// (embedded má model daný cestou k .gguf, OpenVINO tím, co server nahrál).
+    /// žádný zbývající backend k výběru modelu nepoužívá
+    /// (embedded má model daný cestou k .gguf).
     fn model_for_intent(intent: &weave_domain::model::Intent) -> String {
         use weave_domain::model::Intent::*;
         match intent {

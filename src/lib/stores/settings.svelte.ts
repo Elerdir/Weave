@@ -14,24 +14,10 @@ interface StoredApiKeyStatus {
   masked: string | null;
 }
 
-export interface NpuInfo {
-  available: boolean;
-  name: string | null;
-  manufacturer: string | null;
-  device_id: string | null;
-  /** Verze ovladače NPU; null, když ji nešlo zjistit. */
-  driver_version: string | null;
-  driver_date: string | null;
-  /** Ovladač je pro dnešní OpenVINO nejspíš moc starý — model se nezkompiluje. */
-  driver_outdated: boolean;
-}
-
 const COMFYUI_URL_KEY = "comfyui.url";
 const DEFAULT_COMFYUI_URL = "http://localhost:8199";
 const LEGACY_COMFYUI_URL = "http://localhost:8188";
 const LLM_BACKEND_KEY = "llm.backend";
-const LLM_OPENVINO_NPU_URL_KEY = "llm.openvino_npu_url";
-const DEFAULT_OPENVINO_NPU_URL = "http://localhost:8091";
 const LLM_MODEL_PATH_KEY = "llm.model_path";
 const LLM_GPU_LAYERS_KEY = "llm.gpu_layers";
 const DEFAULT_GPU_LAYERS = "999"; // "všechny vrstvy na GPU"
@@ -39,7 +25,7 @@ const LLM_CTX_KEY = "llm.context_length";
 const DEFAULT_LLM_CTX = "8192"; // musí odpovídat DEFAULT_LLM_CTX v settings.rs
 const NOTIFICATIONS_KEY = "notifications.enabled";
 
-export type LlmBackend = "embedded" | "openvino_npu";
+export type LlmBackend = "embedded";
 type ConnStatus = "unknown" | "testing" | "connected" | "disconnected";
 
 const SERVICES: ApiServiceId[] = ["civitai", "huggingface"];
@@ -54,9 +40,6 @@ function createSettingsStore() {
   let comfyuiStatus = $state<ConnStatus>("unknown");
 
   let llmBackend = $state<LlmBackend>("embedded");
-  let openvinoNpuUrl = $state(DEFAULT_OPENVINO_NPU_URL);
-  let openvinoNpuStatus = $state<ConnStatus>("unknown");
-  let npuInfo = $state<NpuInfo | null>(null);
   let modelPath = $state("");
   let gpuLayers = $state(DEFAULT_GPU_LAYERS);
   let contextLength = $state(DEFAULT_LLM_CTX);
@@ -84,15 +67,6 @@ function createSettingsStore() {
     get llmBackend() {
       return llmBackend;
     },
-    get openvinoNpuUrl() {
-      return openvinoNpuUrl;
-    },
-    get openvinoNpuStatus() {
-      return openvinoNpuStatus;
-    },
-    get npuInfo() {
-      return npuInfo;
-    },
     get modelPath() {
       return modelPath;
     },
@@ -118,16 +92,10 @@ function createSettingsStore() {
         comfyuiUrl = comfy;
       }
       const backend = await invoke<string | null>("get_app_setting", { key: LLM_BACKEND_KEY });
-      llmBackend = backend === "openvino_npu" ? "openvino_npu" : "embedded";
-      const npuUrl = await invoke<string | null>("get_app_setting", {
-        key: LLM_OPENVINO_NPU_URL_KEY,
-      });
-      openvinoNpuUrl = npuUrl ?? DEFAULT_OPENVINO_NPU_URL;
-      try {
-        npuInfo = await invoke<NpuInfo>("detect_npu");
-      } catch {
-        npuInfo = null;
-      }
+      // Jediný backend je vestavěná inference; starší uložená hodnota
+      // (openvino_npu) se tím tiše přemapuje.
+      void backend;
+      llmBackend = "embedded";
       const mpath = await invoke<string | null>("get_app_setting", { key: LLM_MODEL_PATH_KEY });
       modelPath = mpath ?? "";
       const layers = await invoke<string | null>("get_app_setting", { key: LLM_GPU_LAYERS_KEY });
@@ -146,34 +114,6 @@ function createSettingsStore() {
     async setBackend(backend: LlmBackend) {
       llmBackend = backend;
       await invoke("set_app_setting", { key: LLM_BACKEND_KEY, value: backend });
-    },
-
-    setOpenvinoNpuUrl(url: string) {
-      openvinoNpuUrl = url;
-      openvinoNpuStatus = "unknown";
-    },
-
-    async saveOpenvinoNpuUrl() {
-      await invoke("set_app_setting", {
-        key: LLM_OPENVINO_NPU_URL_KEY,
-        value: openvinoNpuUrl,
-      });
-    },
-
-    async testOpenvinoNpu() {
-      openvinoNpuStatus = "testing";
-      try {
-        const ok = await invoke<boolean>("test_openvino_npu_connection", {
-          url: openvinoNpuUrl,
-        });
-        openvinoNpuStatus = ok ? "connected" : "disconnected";
-      } catch {
-        openvinoNpuStatus = "disconnected";
-      }
-    },
-
-    async detectNpu() {
-      npuInfo = await invoke<NpuInfo>("detect_npu");
     },
 
     setModelPath(path: string) {

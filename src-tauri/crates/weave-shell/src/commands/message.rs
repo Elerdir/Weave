@@ -206,7 +206,7 @@ pub async fn set_conversation_settings(
     if let Some(backend) = settings.runtime_backend.as_deref().map(str::trim) {
         match backend {
             "" => settings.runtime_backend = None,
-            "default" | "embedded" | "openvino_npu" => {
+            "default" | "embedded" => {
                 settings.runtime_backend = Some(backend.to_string());
             }
             other => return Err(format!("Neznamy runtime backend: {other}")),

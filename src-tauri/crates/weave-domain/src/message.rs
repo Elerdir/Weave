@@ -79,6 +79,8 @@ pub enum ModelBackend {
     #[default]
     LocalVulkan,
     LocalCpu,
+    /// Historická hodnota — NPU (OpenVINO) backend byl z appky odstraněn,
+    /// variant zůstává jen kvůli deserializaci starých uložených zpráv.
     OpenvinoNpu,
     ComfyUi,
 }

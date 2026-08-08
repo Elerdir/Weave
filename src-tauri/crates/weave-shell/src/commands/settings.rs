@@ -1,13 +1,8 @@
-// Deserialize používá jen windows-only WindowsNpuDevice — na Linuxu (CI
-// clippy -D warnings) by byl import nepoužitý.
-#[cfg(target_os = "windows")]
-use serde::Deserialize;
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{Manager, State};
 use weave_application::{
     ports::keychain_port::ApiService, use_cases::manage_api_keys::ManageApiKeysUseCase,
 };
-use weave_domain::message::ModelBackend;
 
 use crate::state::AppState;
 
@@ -17,70 +12,11 @@ pub struct ApiKeyStatus {
     pub masked: Option<String>,
 }
 
-// POZOR: zůstává snake_case — frontend čte `device_id`, `driver_version`…
-// Přepnutí na camelCase by tiše rozbilo NPU panel v Nastavení.
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct NpuInfo {
-    pub available: bool,
-    pub name: Option<String>,
-    pub manufacturer: Option<String>,
-    pub device_id: Option<String>,
-    /// Verze ovladače NPU (např. "32.0.100.4778"). NPU kompiluje model až
-    /// v ovladači, takže starý ovladač neumí graf z novějšího OpenVINO a
-    /// start skončí nesrozumitelnou chybou Level Zero compileru.
-    pub driver_version: Option<String>,
-    pub driver_date: Option<String>,
-    /// Ovladač je pro dnešní OpenVINO nejspíš moc starý (heuristika níže).
-    pub driver_outdated: bool,
-}
-
-/// Build (4. složka verze), pod kterým ovladač považujeme za zastaralý.
-/// Není to odhad: 32.0.100.4023 je minimum, které OpenVINO uvádí u svých
-/// NPU-kvantovaných modelů na HuggingFace. Na starším ovladači kompilace
-/// modelu padá na `ZE_RESULT_ERROR_INVALID_ARGUMENT` v Level Zero compileru.
-/// Verzi ovladače umí zjistit jen windowsová větev `detect_npu_impl`, takže
-/// jinde by tyhle tři položky byly mrtvý kód a CI s `-D warnings` na nich
-/// padalo. `test` je v podmínce proto, aby testy běžely na všech platformách.
-#[cfg(any(target_os = "windows", test))]
-const NPU_DRIVER_MIN_BUILD: u32 = 4023;
-
-/// Z "32.0.100.2540" vytáhne 2540. Jiný formát = nehodnotíme.
-#[cfg(any(target_os = "windows", test))]
-fn npu_driver_build(version: &str) -> Option<u32> {
-    version.rsplit('.').next()?.parse().ok()
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn npu_driver_is_outdated(version: Option<&str>) -> bool {
-    version
-        .and_then(npu_driver_build)
-        .is_some_and(|build| build < NPU_DRIVER_MIN_BUILD)
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeRestartResult {
     pub embedded_unloaded: bool,
     pub comfyui_stopped: bool,
-    pub openvino_stopped: bool,
-    pub openvino_started: bool,
-}
-
-// Používá se jen ve windows detekci NPU (detect_npu_impl) — na jiných
-// platformách by byl dead code a CI clippy (-D warnings na Linuxu) by spadl.
-#[cfg(target_os = "windows")]
-#[derive(Debug, Deserialize)]
-struct WindowsNpuDevice {
-    #[serde(rename = "Name")]
-    name: Option<String>,
-    #[serde(rename = "Manufacturer")]
-    manufacturer: Option<String>,
-    #[serde(rename = "DeviceID")]
-    device_id: Option<String>,
-    #[serde(rename = "DriverVersion")]
-    driver_version: Option<String>,
-    #[serde(rename = "DriverDate")]
-    driver_date: Option<String>,
 }
 
 fn parse_service(service: &str) -> Result<ApiService, String> {
@@ -193,88 +129,6 @@ pub async fn test_comfyui_connection(url: String) -> Result<bool, String> {
     Ok(client.is_available().await)
 }
 
-/// Ověří dostupnost OpenAI-kompatibilního OpenVINO/OVMS endpointu pro NPU.
-#[tauri::command]
-pub async fn test_openvino_npu_connection(url: String) -> Result<bool, String> {
-    use weave_infrastructure::llm::local_client::LocalLlmClient;
-
-    let client = LocalLlmClient::with_backend(url, ModelBackend::OpenvinoNpu);
-    Ok(client.is_available().await)
-}
-
-#[cfg(target_os = "windows")]
-fn detect_npu_impl() -> NpuInfo {
-    // Win32_PnPSignedDriver nese i verzi/datum ovladače — bez nich nešlo
-    // poznat, že start NPU padá kvůli letitému ovladači, ne kvůli modelu.
-    // Fallback na Win32_PnPEntity zůstává pro případ, že zařízení nemá
-    // podepsaný ovladač (pak jen nebudeme znát verzi).
-    let script = r#"$m = 'NPU|Neural|AI Boost|XDNA|VPU|Hexagon'
-$d = Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceName -match $m } | Select-Object -First 1
-if ($d) {
-  [pscustomobject]@{
-    Name = $d.DeviceName; Manufacturer = $d.Manufacturer; DeviceID = $d.DeviceID
-    DriverVersion = $d.DriverVersion
-    DriverDate = if ($d.DriverDate) { (Get-Date $d.DriverDate -Format 'yyyy-MM-dd') } else { $null }
-  } | ConvertTo-Json -Compress
-} else {
-  $e = Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match $m -or $_.PNPClass -eq 'ComputeAccelerator' } | Select-Object -First 1
-  if ($e) {
-    [pscustomobject]@{
-      Name = $e.Name; Manufacturer = $e.Manufacturer; DeviceID = $e.DeviceID
-      DriverVersion = $null; DriverDate = $null
-    } | ConvertTo-Json -Compress
-  }
-}"#;
-    let mut cmd = std::process::Command::new("powershell");
-    cmd.args([
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        script,
-    ]);
-    weave_infrastructure::spawn::hide_console_std(&mut cmd);
-    let output = cmd.output();
-
-    let Ok(output) = output else {
-        return NpuInfo::default();
-    };
-    if !output.status.success() {
-        return NpuInfo::default();
-    }
-
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if text.is_empty() || text == "null" {
-        return NpuInfo::default();
-    }
-
-    match serde_json::from_str::<WindowsNpuDevice>(&text) {
-        Ok(device) => NpuInfo {
-            available: true,
-            driver_outdated: npu_driver_is_outdated(device.driver_version.as_deref()),
-            name: device.name,
-            manufacturer: device.manufacturer,
-            device_id: device.device_id,
-            driver_version: device.driver_version,
-            driver_date: device.driver_date,
-        },
-        Err(_) => NpuInfo::default(),
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn detect_npu_impl() -> NpuInfo {
-    NpuInfo::default()
-}
-
-#[tauri::command]
-pub async fn detect_npu() -> Result<NpuInfo, String> {
-    tokio::task::spawn_blocking(detect_npu_impl)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Stav (V)RAM pro indikátor v UI: čísla z GPU + kdo paměť právě drží.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VramStatus {
@@ -285,11 +139,10 @@ pub struct VramStatus {
     /// Název souboru načteného modelu (bez cesty), když je co ukázat.
     pub embedded_model: Option<String>,
     pub comfyui_running: bool,
-    pub openvino_running: bool,
 }
 
 /// Snímek využití (V)RAM: celkem/volno z nvidia-smi + kteří držitelé běží
-/// (vestavěný LLM, ComfyUI server, OpenVINO server). Volá se periodicky
+/// (vestavěný LLM, ComfyUI server). Volá se periodicky
 /// z indikátoru v hlavičce chatu.
 #[tauri::command]
 pub async fn get_vram_status(state: State<'_, AppState>) -> Result<VramStatus, String> {
@@ -323,14 +176,12 @@ pub async fn get_vram_status(state: State<'_, AppState>) -> Result<VramStatus, S
         state.comfy_installer.status().await,
         Ok(weave_application::ports::comfy_installer_port::ComfyStatus::Running)
     );
-    let openvino_running = crate::commands::openvino_installer::is_server_running().await;
 
     Ok(VramStatus {
         gpu,
         embedded_loaded,
         embedded_model,
         comfyui_running,
-        openvino_running,
     })
 }
 
@@ -354,11 +205,7 @@ pub async fn unload_embedded_model(state: State<'_, AppState>) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn restart_runtime(
-    openvino_model_dir: Option<String>,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<RuntimeRestartResult, String> {
+pub async fn restart_runtime(state: State<'_, AppState>) -> Result<RuntimeRestartResult, String> {
     let client = {
         let mut cache = state
             .embedded_llm
@@ -372,31 +219,14 @@ pub async fn restart_runtime(
     }
 
     let comfyui_stopped = state.comfy_installer.stop_server().await.is_ok();
-    let openvino_stopped = crate::commands::openvino_installer::stop_managed_server()
-        .await
-        .is_ok();
-
-    let mut openvino_started = false;
-    if let Some(model_dir) = openvino_model_dir
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    {
-        crate::commands::openvino_installer::start_server_inner(&app, &state.pool, model_dir)
-            .await?;
-        openvino_started = true;
-    }
 
     Ok(RuntimeRestartResult {
         embedded_unloaded,
         comfyui_stopped,
-        openvino_stopped,
-        openvino_started,
     })
 }
 
 pub const LLM_BACKEND_KEY: &str = "llm.backend";
-pub const LLM_OPENVINO_NPU_URL_KEY: &str = "llm.openvino_npu_url";
-pub const DEFAULT_OPENVINO_NPU_URL: &str = "http://localhost:8091";
 pub const LLM_MODEL_PATH_KEY: &str = "llm.model_path";
 pub const LLM_GPU_LAYERS_KEY: &str = "llm.gpu_layers";
 pub const LLM_CTX_KEY: &str = "llm.context_length";
@@ -405,7 +235,7 @@ pub const LLM_CTX_KEY: &str = "llm.context_length";
 pub const DEFAULT_LLM_CTX: u32 = 8192;
 
 /// Sestaví aktivní LLM klienta podle uloženého nastavení
-/// (vestavěná GPU inference / OpenVINO NPU).
+/// (vestavěná GPU inference).
 pub async fn resolve_llm(
     state: &AppState,
 ) -> std::sync::Arc<dyn weave_application::ports::llm_port::LlmPort> {
@@ -419,10 +249,7 @@ pub async fn resolve_llm_with_backend(
     backend_override: Option<&str>,
 ) -> std::sync::Arc<dyn weave_application::ports::llm_port::LlmPort> {
     use std::sync::Arc;
-    use weave_infrastructure::{
-        db::app_config, llm::local_client::LocalLlmClient,
-        llm::unconfigured_client::UnconfiguredLlmClient,
-    };
+    use weave_infrastructure::{db::app_config, llm::unconfigured_client::UnconfiguredLlmClient};
 
     let backend = match backend_override.filter(|b| !b.is_empty() && *b != "default") {
         Some(backend) => backend.to_string(),
@@ -432,6 +259,10 @@ pub async fn resolve_llm_with_backend(
             .flatten()
             .unwrap_or_else(|| "embedded".to_string()),
     };
+    // Bez feature llm-embedded nezbyl backend, který by šlo sestavit —
+    // proměnná by pak byla nepoužitá a CI clippy (-D warnings) spadl.
+    #[cfg(not(feature = "llm-embedded"))]
+    let _ = backend;
 
     // Vestavěná GPU inference (jen když je zkompilovaná feature llm-embedded).
     #[cfg(feature = "llm-embedded")]
@@ -488,42 +319,7 @@ pub async fn resolve_llm_with_backend(
         tracing::info!("Uvolňuji kešovaný vestavěný model (přepnuto na jiný backend)");
     }
 
-    if backend == "openvino_npu" {
-        let url = app_config::get(&state.pool, LLM_OPENVINO_NPU_URL_KEY)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| DEFAULT_OPENVINO_NPU_URL.to_string());
-        return Arc::new(LocalLlmClient::with_backend(url, ModelBackend::OpenvinoNpu));
-    }
-
     // Žádný backend nešel sestavit (embedded bez modelu, neznámá hodnota…) —
     // jasná chyba místo tichého pádu na cloud API bez klíče.
     Arc::new(UnconfiguredLlmClient)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn npu_driver_build_is_parsed_from_last_component() {
-        assert_eq!(npu_driver_build("32.0.100.2540"), Some(2540));
-        assert_eq!(npu_driver_build("32.0.100.4778"), Some(4778));
-        assert_eq!(npu_driver_build("neznama"), None);
-    }
-
-    #[test]
-    fn outdated_driver_is_flagged() {
-        // Reálný případ z hlášení: ovladač z 5/2024 proti runtime 2026.2 —
-        // model se nezkompiloval a chyba mířila na velikost modelu, ne na ovladač.
-        assert!(npu_driver_is_outdated(Some("32.0.100.2540")));
-        assert!(!npu_driver_is_outdated(Some("32.0.100.4778")));
-        // Hranice je oficialni minimum z OpenVINO modelu, ne kulate cislo.
-        assert!(npu_driver_is_outdated(Some("32.0.100.4022")));
-        assert!(!npu_driver_is_outdated(Some("32.0.100.4023")));
-        // Neznámou verzi nehodnotíme — radši mlčet než strašit falešně.
-        assert!(!npu_driver_is_outdated(None));
-        assert!(!npu_driver_is_outdated(Some("")));
-    }
 }

@@ -7,14 +7,13 @@ export interface VramStatus {
   embeddedLoaded: boolean;
   embeddedModel: string | null;
   comfyuiRunning: boolean;
-  openvinoRunning: boolean;
 }
 
 const REFRESH_MS = 5000;
 
 /**
  * VRAM indikátor v hlavičce chatu: využití paměti GPU (nvidia-smi) a kdo ji
- * právě drží (vestavěný LLM / ComfyUI / OpenVINO). Mimo Tauri (Playwright)
+ * právě drží (vestavěný LLM / ComfyUI). Mimo Tauri (Playwright)
  * invoke selže → indikátor se prostě nezobrazí.
  */
 function createVramStore() {
@@ -47,7 +46,6 @@ function createVramStore() {
       const holders: string[] = [];
       if (status.embeddedLoaded) holders.push(status.embeddedModel ?? "LLM");
       if (status.comfyuiRunning) holders.push("ComfyUI");
-      if (status.openvinoRunning) holders.push("OpenVINO");
       return holders;
     },
 

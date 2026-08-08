@@ -6,7 +6,7 @@ use weave_application::{
 };
 
 /// Používá se, když není nastavený žádný funkční backend (chybí GPU model
-/// i NPU) — dřív se v tomhle stavu tiše zkoušel Mistral s prázdným API
+///) — dřív se v tomhle stavu tiše zkoušel Mistral s prázdným API
 /// klíčem, což skončilo matoucí chybou z cizího API. Tohle dá rovnou jasnou
 /// instrukci, co v appce udělat.
 pub struct UnconfiguredLlmClient;
@@ -20,7 +20,7 @@ impl LlmPort for UnconfiguredLlmClient {
     ) -> AppResult<()> {
         Err(AppError::Llm(
             "Není nastavený žádný AI model. V Nastavení → AI model dokonči nastavení GPU \
-             (CUDA) modelu nebo NPU inference."
+             modelu (.gguf)."
                 .to_string(),
         ))
     }

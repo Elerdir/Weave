@@ -14,7 +14,6 @@
   import { modelSearchStore, modelIdForFile } from "$lib/stores/model-search.svelte";
   import { civitaiBrowserStore } from "$lib/stores/civitai-browser.svelte";
   import { comfyInstallStore } from "$lib/stores/comfy-install.svelte";
-  import { openvinoInstallStore } from "$lib/stores/openvino-install.svelte";
   import { updaterStore } from "$lib/stores/updater.svelte";
   import { getVersion } from "@tauri-apps/api/app";
   import { TOKEN_URLS } from "$lib/token-urls";
@@ -51,11 +50,7 @@
     restartingRuntime = true;
     runtimeRestartNotice = null;
     try {
-      await invoke("restart_runtime", {
-        openvinoModelDir: openvinoInstallStore.status?.serverRunning
-          ? openvinoInstallStore.modelDir.trim()
-          : null,
-      });
+      await invoke("restart_runtime");
       runtimeRestartNotice = i18n.m.settings.runtime.restartDone;
       await refreshRuntime();
     } catch (e) {
@@ -72,12 +67,6 @@
     }
   }
 
-  async function pickOpenvinoModelDir() {
-    const dir = await openFilePicker({ directory: true, multiple: false });
-    if (typeof dir === "string") {
-      openvinoInstallStore.setModelDir(dir);
-    }
-  }
 
   async function uninstallComfyui() {
     if (!confirm(i18n.m.settings.comfyui.uninstallConfirm)) return;
@@ -96,27 +85,6 @@
     }
   }
 
-  /** Oficiální stránka ovladače Intel NPU (AI Boost). */
-  const NPU_DRIVER_URL =
-    "https://www.intel.com/content/www/us/en/download/794734/intel-npu-driver-windows.html";
-
-  async function openNpuDriverPage() {
-    try {
-      await openUrl(NPU_DRIVER_URL);
-    } catch (e) {
-      console.warn("Nepodarilo se otevrit stranku ovladace NPU:", e);
-    }
-  }
-
-  async function openSelectedOpenvinoSource() {
-    const sourceUrl = openvinoInstallStore.selectedProfile?.sourceUrl;
-    if (!sourceUrl) return;
-    try {
-      await openUrl(sourceUrl);
-    } catch (e) {
-      console.warn("Nepodarilo se otevrit OpenVINO model zdroj:", e);
-    }
-  }
 
   let { onClose, windowMode = false }: { onClose: () => void; windowMode?: boolean } = $props();
 
@@ -202,21 +170,6 @@
     { id: "huggingface", label: "HuggingFace" },
   ];
 
-  function isRtx3090Model(rec: { id: string; size_bytes: number }) {
-    return (
-      rec.size_bytes >= 7_000_000_000 ||
-      rec.id.includes("gemma-3-12b") ||
-      rec.id.includes("tiger-gemma") ||
-      rec.id.includes("gemma-3-27b") ||
-      rec.id.includes("gemma-4-26") ||
-      rec.id.includes("gemma-4-31")
-    );
-  }
-
-  function isMobile4070Model(rec: { id: string; size_bytes: number }) {
-    return rec.size_bytes <= 6_200_000_000 && !isRtx3090Model(rec);
-  }
-
   function modelDownloadPercent(modelId: string): number {
     const d = modelsStore.download;
     if (!d || d.modelId !== modelId || d.total === 0) return 0;
@@ -227,7 +180,6 @@
     settingsStore.load().catch((e) => console.warn("settings load selhal:", e));
     modelsStore.load().catch((e) => console.warn("models load selhal:", e));
     comfyInstallStore.load().catch((e) => console.warn("comfy status load selhal:", e));
-    openvinoInstallStore.load().catch((e) => console.warn("openvino status load selhal:", e));
     getVersion()
       .then((v) => (appVersion = v))
       .catch((e) => console.warn("app version load selhal:", e));
@@ -251,7 +203,6 @@
       settingsStore.load(),
       modelsStore.load(),
       comfyInstallStore.load(),
-      openvinoInstallStore.load(),
     ]);
   }
 
@@ -402,23 +353,6 @@
         {:else if section === "llm"}
           <h3>{i18n.m.settings.llm.backend}</h3>
           <p class="hint">{i18n.m.settings.llm.hint}</p>
-          <div class="option-row">
-            <button
-              class="chip"
-              class:selected={settingsStore.llmBackend === "openvino_npu"}
-              onclick={() => settingsStore.setBackend("openvino_npu")}
-            >
-              {i18n.m.settings.llm.openvinoNpu}
-            </button>
-            <button
-              class="chip"
-              class:selected={settingsStore.llmBackend === "embedded"}
-              onclick={() => settingsStore.setBackend("embedded")}
-            >
-              {i18n.m.settings.llm.embedded}
-            </button>
-          </div>
-
           {#if settingsStore.llmBackend === "embedded"}
             <p class="hint" style="margin-top:1rem">{i18n.m.settings.llm.embeddedHint}</p>
 
@@ -491,209 +425,6 @@
             </details>
           {/if}
 
-          {#if settingsStore.llmBackend === "openvino_npu"}
-            <p class="hint" style="margin-top:1rem">{i18n.m.settings.llm.openvinoNpuHint}</p>
-            <div class="npu-info">
-              <div>
-                <strong>{i18n.m.settings.llm.npuDevice}</strong>
-                {#if settingsStore.npuInfo?.available}
-                  <span>{settingsStore.npuInfo.name ?? i18n.m.settings.llm.npuDetected}</span>
-                  {#if settingsStore.npuInfo.manufacturer}
-                    <small>{settingsStore.npuInfo.manufacturer}</small>
-                  {/if}
-                  {#if settingsStore.npuInfo.driver_version}
-                    <small>
-                      {i18n.m.settings.llm.npuDriver}: {settingsStore.npuInfo.driver_version}{#if settingsStore.npuInfo.driver_date} ({settingsStore.npuInfo.driver_date}){/if}
-                    </small>
-                  {/if}
-                {:else}
-                  <span>{i18n.m.settings.llm.npuNotDetected}</span>
-                {/if}
-              </div>
-              <button class="btn-sm" onclick={() => settingsStore.detectNpu()}>
-                {i18n.m.settings.llm.detectNpu}
-              </button>
-            </div>
-            <!-- Zastaralý ovladač je nejčastější příčina toho, že model
-                 na NPU neprojde kompilací — říct to dřív, než uživatel
-                 stáhne gigabajty a narazí na chybu Level Zero compileru. -->
-            {#if settingsStore.npuInfo?.driver_outdated}
-              <p class="npu-warning">
-                {i18n.t("settings.llm.npuDriverOutdated", {
-                  version: settingsStore.npuInfo.driver_version ?? "?",
-                })}
-                <button class="link-btn" onclick={openNpuDriverPage}>
-                  {i18n.m.settings.llm.npuDriverDownload}
-                </button>
-              </p>
-            {/if}
-            <h4 class="sub-heading">{i18n.m.settings.llm.openvinoRuntimeTitle}</h4>
-            <div class="runtime-card">
-              <div>
-                <strong>
-                  {openvinoInstallStore.status?.installed
-                    ? i18n.m.settings.llm.openvinoRuntimeInstalled
-                    : i18n.m.settings.llm.openvinoRuntimeMissing}
-                </strong>
-                {#if openvinoInstallStore.status}
-                  <small>{openvinoInstallStore.status.installDir}</small>
-                {/if}
-              </div>
-              {#if openvinoInstallStore.status?.installed}
-                <button
-                  class="btn-sm danger"
-                  disabled={openvinoInstallStore.uninstalling || openvinoInstallStore.installing}
-                  onclick={() => openvinoInstallStore.uninstall()}
-                >
-                  {openvinoInstallStore.uninstalling ? i18n.m.common.loading : i18n.m.settings.llm.openvinoRuntimeUninstall}
-                </button>
-              {:else}
-                <button
-                  class="btn-sm primary"
-                  disabled={openvinoInstallStore.installing}
-                  onclick={() => openvinoInstallStore.install()}
-                >
-                  {openvinoInstallStore.installing ? i18n.m.common.loading : i18n.m.settings.llm.openvinoRuntimeInstall}
-                </button>
-              {/if}
-            </div>
-            <!-- Stahování modelu streamuje průběh stejným kanálem jako
-                 instalace, takže log patří i sem — jinak by vícegigové
-                 stahování vypadalo jako zamrzlé tlačítko. -->
-            {#if openvinoInstallStore.installing || openvinoInstallStore.downloadingModel}
-              <div class="install-progress">
-                <div class="install-step">
-                  <span class="spinner"></span>
-                  <span>{openvinoInstallStore.currentStep || i18n.m.common.loading}</span>
-                </div>
-                <pre class="install-log">{openvinoInstallStore.log.join("\n")}</pre>
-              </div>
-            {/if}
-            {#if openvinoInstallStore.error}
-              <span class="conn-status disconnected">{openvinoInstallStore.error}</span>
-            {/if}
-            {#if openvinoInstallStore.npuMissing}
-              <p class="npu-warning">
-                {i18n.m.settings.llm.openvinoNoNpuWarning}
-                {#if openvinoInstallStore.availableDevices.length > 0}
-                  <span>{openvinoInstallStore.availableDevices.join(", ")}</span>
-                {/if}
-              </p>
-            {/if}
-            {#if openvinoInstallStore.status?.installed}
-              <label class="field-label" for="openvino-model-profile" style="margin-top:1rem">
-                {i18n.m.settings.llm.openvinoModelProfile}
-              </label>
-              <div class="comfyui-row">
-                <select
-                  id="openvino-model-profile"
-                  value={openvinoInstallStore.selectedProfileId}
-                  onchange={(e) => openvinoInstallStore.setSelectedProfile((e.target as HTMLSelectElement).value)}
-                >
-                  {#each openvinoInstallStore.profiles as profile (profile.id)}
-                    <option value={profile.id}>
-                      {profile.name} - {profile.qualityTier}
-                    </option>
-                  {/each}
-                </select>
-                {#if openvinoInstallStore.selectedProfile?.sourceUrl}
-                  <button class="btn-sm" onclick={openSelectedOpenvinoSource}>
-                    {i18n.m.settings.llm.openvinoOpenSource}
-                  </button>
-                {/if}
-              </div>
-              {#if openvinoInstallStore.selectedProfile}
-                <div class="npu-profile-card">
-                  <strong>{openvinoInstallStore.selectedProfile.name}</strong>
-                  <span>{openvinoInstallStore.selectedProfile.description}</span>
-                  <small>
-                    {openvinoInstallStore.selectedProfile.autoDownloadable
-                      ? i18n.m.settings.llm.openvinoProfileAuto
-                      : i18n.m.settings.llm.openvinoProfileManual}
-                    - {openvinoInstallStore.selectedProfile.sizeHint}
-                  </small>
-                </div>
-              {/if}
-              <p class="hint npu-list-note">{i18n.m.settings.llm.openvinoWhyShortList}</p>
-              <p class="hint npu-list-note">{i18n.m.settings.llm.openvinoNoGemmaNote}</p>
-              <label class="field-label" for="openvino-model-dir" style="margin-top:1rem">
-                {i18n.m.settings.llm.openvinoModelDir}
-              </label>
-              <div class="comfyui-row">
-                <input
-                  id="openvino-model-dir"
-                  type="text"
-                  value={openvinoInstallStore.modelDir}
-                  placeholder={openvinoInstallStore.status.defaultModelDir}
-                  oninput={(e) => openvinoInstallStore.setModelDir((e.target as HTMLInputElement).value)}
-                />
-                <button
-                  class="btn-sm"
-                  onclick={pickOpenvinoModelDir}
-                >
-                  {i18n.m.settings.llm.browse}
-                </button>
-                <button
-                  class="btn-sm"
-                  disabled={openvinoInstallStore.downloadingModel || !openvinoInstallStore.selectedProfile?.autoDownloadable}
-                  onclick={() => openvinoInstallStore.downloadRecommendedModel()}
-                >
-                  {openvinoInstallStore.downloadingModel ? i18n.m.common.loading : i18n.m.settings.llm.openvinoDownloadSelected}
-                </button>
-              </div>
-              <p class="hint" style="margin-top:0.35rem">{i18n.m.settings.llm.openvinoModelHint}</p>
-              <div class="comfy-status-row">
-                {#if openvinoInstallStore.status.serverRunning}
-                  <span class="conn-status connected">● {i18n.m.settings.llm.openvinoServerRunning}</span>
-                  <button
-                    class="btn-sm danger"
-                    disabled={openvinoInstallStore.stoppingServer}
-                    onclick={() => openvinoInstallStore.stopServer()}
-                  >
-                    {openvinoInstallStore.stoppingServer ? i18n.m.common.loading : i18n.m.settings.llm.openvinoStopServer}
-                  </button>
-                {:else}
-                  <span class="conn-status testing">{i18n.m.settings.llm.openvinoServerStopped}</span>
-                  <button
-                    class="btn-sm primary"
-                    disabled={openvinoInstallStore.startingServer || !openvinoInstallStore.modelDir.trim()}
-                    onclick={() => openvinoInstallStore.startServer()}
-                  >
-                    {openvinoInstallStore.startingServer ? i18n.m.common.loading : i18n.m.settings.llm.openvinoStartServer}
-                  </button>
-                {/if}
-              </div>
-              <p class="hint" style="margin-top:0.5rem">{i18n.m.settings.llm.openvinoFirstStartHint}</p>
-              {#if openvinoInstallStore.status.serverLogPath}
-                <p class="hint" style="margin-top:0.5rem">
-                  {i18n.m.settings.llm.openvinoLog}: {openvinoInstallStore.status.serverLogPath}
-                </p>
-              {/if}
-            {/if}
-            <label class="field-label" for="openvino-npu-url" style="margin-top:1rem">
-              {i18n.m.settings.llm.openvinoNpuUrl}
-            </label>
-            <div class="comfyui-row">
-              <input
-                id="openvino-npu-url"
-                type="text"
-                value={settingsStore.openvinoNpuUrl}
-                oninput={(e) =>
-                  settingsStore.setOpenvinoNpuUrl((e.target as HTMLInputElement).value)}
-                onblur={() => settingsStore.saveOpenvinoNpuUrl()}
-              />
-              <button class="btn-sm primary" onclick={() => settingsStore.testOpenvinoNpu()}>
-                {i18n.m.settings.llm.test}
-              </button>
-            </div>
-            {#if settingsStore.openvinoNpuStatus === "connected"}
-              <span class="conn-status connected">● {i18n.m.settings.llm.connected}</span>
-            {:else if settingsStore.openvinoNpuStatus === "disconnected"}
-              <span class="conn-status disconnected">● {i18n.m.settings.llm.disconnected}</span>
-            {:else if settingsStore.openvinoNpuStatus === "testing"}
-              <span class="conn-status testing">{i18n.m.common.loading}</span>
-            {/if}
-          {/if}
         {:else if section === "runtime"}
           <div class="section-title-row">
             <h3>{i18n.m.settings.runtime.title}</h3>
@@ -778,38 +509,6 @@
               {/if}
             </section>
 
-            <section class="runtime-card">
-              <div>
-                <strong>OpenVINO / NPU</strong>
-                <small>{openvinoInstallStore.status?.installDir ?? "..."}</small>
-              </div>
-              {#if openvinoInstallStore.status?.serverRunning}
-                <span class="conn-status connected">● {i18n.m.settings.runtime.running}</span>
-              {:else if openvinoInstallStore.status?.installed}
-                <span class="conn-status testing">● {i18n.m.settings.runtime.installedStopped}</span>
-              {:else}
-                <span class="conn-status disconnected">● {i18n.m.settings.runtime.notInstalled}</span>
-              {/if}
-              <div class="runtime-actions">
-                {#if openvinoInstallStore.status?.serverRunning}
-                  <button class="btn-sm danger" disabled={openvinoInstallStore.stoppingServer} onclick={() => openvinoInstallStore.stopServer()}>
-                    {openvinoInstallStore.stoppingServer ? i18n.m.common.loading : i18n.m.settings.llm.openvinoStopServer}
-                  </button>
-                {:else if openvinoInstallStore.status?.installed}
-                  <button class="btn-sm primary" disabled={openvinoInstallStore.startingServer || !openvinoInstallStore.modelDir.trim()} onclick={() => openvinoInstallStore.startServer()}>
-                    {openvinoInstallStore.startingServer ? i18n.m.common.loading : i18n.m.settings.llm.openvinoStartServer}
-                  </button>
-                {:else}
-                  <button class="btn-sm primary" disabled={openvinoInstallStore.installing} onclick={() => openvinoInstallStore.install()}>
-                    {openvinoInstallStore.installing ? i18n.m.common.loading : i18n.m.settings.llm.openvinoRuntimeInstall}
-                  </button>
-                {/if}
-                <button class="btn-sm" onclick={() => (section = "llm")}>{i18n.m.settings.runtime.details}</button>
-              </div>
-              {#if openvinoInstallStore.error}
-                <span class="conn-status disconnected">{openvinoInstallStore.error}</span>
-              {/if}
-            </section>
           </div>
           <h4 class="sub-heading">{i18n.m.settings.downloads.title}</h4>
           <section class="download-tuning">
@@ -865,17 +564,7 @@
               </section>
             {/if}
 
-            {#if openvinoInstallStore.installing || openvinoInstallStore.downloadingModel}
-              <section class="download-row">
-                <div>
-                  <strong>OpenVINO / NPU</strong>
-                  <small>{openvinoInstallStore.downloadingModel ? i18n.m.settings.downloads.openvinoModel : (openvinoInstallStore.currentStep || i18n.m.common.loading)}</small>
-                </div>
-                <pre class="install-log compact-log">{openvinoInstallStore.log.slice(-12).join("\n")}</pre>
-              </section>
-            {/if}
-
-            {#if !modelsStore.download && !comfyInstallStore.installing && !openvinoInstallStore.installing && !openvinoInstallStore.downloadingModel}
+            {#if !modelsStore.download && !comfyInstallStore.installing}
               <p class="hint">{i18n.m.settings.downloads.empty}</p>
             {/if}
           </div>
@@ -1126,9 +815,6 @@
         {:else if section === "models"}
           <h3>{i18n.m.settings.models.title}</h3>
 
-          {#if settingsStore.llmBackend !== "embedded"}
-            <p class="hint">{i18n.m.settings.models.npuRedirect}</p>
-          {:else}
           <label class="field-label" for="models-dir">{i18n.m.settings.models.dirLabel}</label>
           <div class="comfyui-row">
             <input id="models-dir" type="text" readonly value={modelsStore.modelsDir} />
@@ -1155,59 +841,9 @@
             </div>
           {/if}
 
-          <h4 class="sub-heading">{i18n.m.settings.models.recommendedMobile}</h4>
+          <h4 class="sub-heading">{i18n.m.settings.models.recommendedTitle}</h4>
           <div class="recommended-list">
-            {#each modelsStore.recommended.filter(isMobile4070Model) as rec (rec.id)}
-              {@const downloaded = modelsStore.isDownloaded(rec.id)}
-              {@const isActive = settingsStore.modelPath.endsWith(`${rec.id}.gguf`)}
-              <div class="recommended-item" class:active={isActive}>
-                <div class="recommended-meta">
-                  <div class="recommended-name">
-                    {rec.name}
-                    <span class="model-chip">{formatBytes(rec.size_bytes)}</span>
-                    {#if isActive}<span class="active-badge">{i18n.m.settings.llm.inUse}</span>{/if}
-                  </div>
-                  <div class="recommended-desc">{rec.description}</div>
-                </div>
-                {#if downloaded}
-                  <div class="recommended-actions">
-                    <button
-                      class="btn-sm"
-                      class:primary={!isActive}
-                      disabled={isActive}
-                      onclick={() => {
-                        const path = modelsStore.models.find((m) => m.id === rec.id)?.path ?? "";
-                        settingsStore.activateModel(path);
-                      }}
-                    >
-                      {isActive ? i18n.m.settings.llm.inUse : i18n.m.settings.llm.activate}
-                    </button>
-                    <button
-                      class="btn-sm danger"
-                      disabled={isActive}
-                      title={i18n.m.settings.models.delete}
-                      aria-label={i18n.m.settings.models.delete}
-                      onclick={() => modelsStore.deleteModel(rec.id)}
-                    >🗑</button>
-                  </div>
-                {:else if modelsStore.download?.modelId === rec.id}
-                  <span class="dl-inline">{modelDownloadPercent(rec.id)}%</span>
-                {:else}
-                  <button
-                    class="btn-sm primary"
-                    disabled={!!modelsStore.download}
-                    onclick={() => modelsStore.downloadRecommended(rec.id)}
-                  >
-                    {i18n.m.settings.llm.download}
-                  </button>
-                {/if}
-              </div>
-            {/each}
-          </div>
-
-          <h4 class="sub-heading">{i18n.m.settings.models.recommendedRtx3090}</h4>
-          <div class="recommended-list">
-            {#each modelsStore.recommended.filter(isRtx3090Model) as rec (rec.id)}
+            {#each modelsStore.recommended as rec (rec.id)}
               {@const downloaded = modelsStore.isDownloaded(rec.id)}
               {@const isActive = settingsStore.modelPath.endsWith(`${rec.id}.gguf`)}
               <div class="recommended-item" class:active={isActive}>
@@ -1413,7 +1049,6 @@
 
           {#if modelsStore.error}
             <span class="conn-status disconnected">{modelsStore.error}</span>
-          {/if}
           {/if}
         {:else if section === "logs"}
           <h3>{i18n.m.settings.sections.logs}</h3>
@@ -1838,40 +1473,8 @@
     font-weight: 600;
   }
 
-  .npu-info {
-    align-items: center;
-    background: var(--color-surface-2);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    display: flex;
-    gap: 0.75rem;
-    justify-content: space-between;
-    padding: 0.6rem 0.8rem;
-  }
 
-  .npu-profile-card {
-    background: var(--color-surface-2);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    margin-top: 0.5rem;
-    padding: 0.7rem 0.8rem;
-  }
 
-  .npu-profile-card span,
-  .npu-profile-card small {
-    color: var(--color-text-muted);
-    font-size: 0.8rem;
-    line-height: 1.45;
-  }
-
-  /* Vysvetleni, proc je seznam NPU profilu tak kratky -- bez nej lidi hledaji
-     modely (Gemma), ktere pro NPU proste neexistuji. */
-  .npu-list-note {
-    margin-top: 0.5rem;
-  }
 
   .runtime-card {
     align-items: center;
@@ -2002,27 +1605,6 @@
   .compact-log {
     margin: 0;
     max-height: 150px;
-  }
-  .npu-info div {
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-    min-width: 0;
-  }
-  .npu-info strong {
-    font-size: 0.75rem;
-    color: var(--color-text-muted);
-    text-transform: uppercase;
-  }
-  .npu-info span {
-    font-size: 0.84rem;
-    font-weight: 600;
-  }
-  .npu-info small {
-    color: var(--color-text-muted);
-    font-size: 0.74rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .sub-heading {
@@ -2363,21 +1945,7 @@
     color: var(--color-text-muted);
   }
 
-  .npu-warning {
-    background: color-mix(in srgb, var(--color-warning, #d97706) 12%, transparent);
-    border: 1px solid color-mix(in srgb, var(--color-warning, #d97706) 35%, var(--color-border));
-    border-radius: 8px;
-    font-size: 0.82rem;
-    line-height: 1.6;
-    margin-top: 0.75rem;
-    padding: 0.6rem 0.75rem;
-  }
 
-  .npu-warning span {
-    color: var(--color-text-muted);
-    display: block;
-    margin-top: 0.25rem;
-  }
 
   .gpu-info {
     display: flex;

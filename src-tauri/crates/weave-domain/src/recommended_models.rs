@@ -26,7 +26,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "qwen2.5-1.5b-instruct".into(),
             name: "Qwen2.5 1.5B Instruct".into(),
-            description: "Nejrychlejší start — malý, ale schopný model. Vhodný i na slabší GPU."
+            description: "Nejrychlejsi start — maly, ale schopny model. Rozumi cesky jen zakladne."
                 .into(),
             size_bytes: 1_117_320_736,
             download_url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf".into(),
@@ -35,7 +35,8 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "qwen2.5-3b-instruct".into(),
             name: "Qwen2.5 3B Instruct".into(),
-            description: "Vyvážený poměr rychlosti a kvality pro běžný chat.".into(),
+            description: "Vyvazeny pomer rychlosti a kvality pro bezny chat."
+                .into(),
             size_bytes: 2_104_932_768,
             download_url: "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf".into(),
             recommended_gpu_layers: 999,
@@ -43,7 +44,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "mistral-7b-instruct-v0.3".into(),
             name: "Mistral 7B Instruct v0.3".into(),
-            description: "Nejkvalitnější odpovědi z nabídky — potřebuje víc VRAM (~6 GB)."
+            description: "Solidni vseobecny model, svizny i na slabsich sestavach."
                 .into(),
             size_bytes: 4_372_812_000,
             download_url: "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf".into(),
@@ -52,8 +53,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "gemma-3-4b-it".into(),
             name: "Gemma 3 4B Instruct".into(),
-            description: "Lehká Gemma pro notebooky — dobrá čeština, dlouhý kontext a rychlý chat. \
-                Vhodné pro mobilní RTX 4070 s 8 GB VRAM (cca 2.6 GB model)."
+            description: "Lehka Gemma — dobra cestina a dlouhy kontext za malo pameti."
                 .into(),
             size_bytes: 2_560_000_000,
             download_url: "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf".into(),
@@ -62,8 +62,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "gemma-4-e4b-it".into(),
             name: "Gemma 4 E4B Instruct".into(),
-            description: "Nová Gemma 4 pro svižný lokální chat — velmi dobrý poměr kvality a rychlosti. \
-                Bezpečná volba pro mobilní RTX 4070 s 8 GB VRAM (cca 5 GB model)."
+            description: "Gemma 4 v male velikosti — velmi dobry pomer kvality a rychlosti."
                 .into(),
             size_bytes: 4_980_000_000,
             download_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf".into(),
@@ -72,8 +71,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "gemma-3-12b-it".into(),
             name: "Gemma 3 12B Instruct".into(),
-            description: "Středně velká Gemma 3 — kvalitnější psaní a vícejazyčnost než 4B. \
-                Na 8GB mobilní RTX 4070 jen podle volné VRAM; pro RTX 3090 bez problému."
+            description: "Stredne velka Gemma 3 — kvalitnejsi psani a vicejazycnost nez 4B."
                 .into(),
             size_bytes: 7_300_000_000,
             download_url: "https://huggingface.co/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf".into(),
@@ -82,8 +80,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "tiger-gemma-12b-v3".into(),
             name: "Tiger Gemma 12B v3".into(),
-            description: "Doladěný Gemma 3 12B — silná vícejazyčnost (i čeština), otevřenější \
-                i k citlivějším a dospělým tématům. Potřebuje ~9 GB VRAM."
+            description: "Doladena Gemma 3 12B — silna vicejazycnost vcetne cestiny, otevrenejsi i k dospelym tematum."
                 .into(),
             size_bytes: 7_867_145_696,
             download_url: "https://huggingface.co/TheDrummer/Tiger-Gemma-12B-v3-GGUF/resolve/main/Tiger-Gemma-12B-v3b-Q4_K_M.gguf".into(),
@@ -92,8 +89,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "magnum-v4-22b".into(),
             name: "Magnum v4 22B".into(),
-            description: "Cílí na kvalitu prózy srovnatelnou s velkými cloudovými modely — \
-                tvůrčí psaní a delší příběhy včetně dospělého obsahu. Potřebuje ~14 GB VRAM."
+            description: "Cili na kvalitu prozy srovnatelnou s velkymi cloudovymi modely — tvurci psani a delsi pribehy vcetne dospeleho obsahu."
                 .into(),
             size_bytes: 13_341_241_824,
             download_url: "https://huggingface.co/anthracite-org/magnum-v4-22b-gguf/resolve/main/magnum-v4-22b-Q4_K_M.gguf".into(),
@@ -102,9 +98,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "cydonia-24b-v4.1".into(),
             name: "Cydonia 24B v4.1".into(),
-            description: "Založeno na Mistral Small 24B — nejlepší kvalita a vícejazyčnost \
-                (i čeština) z nabídky, laděné na roleplay a tvůrčí psaní bez cenzurních \
-                omezení. Potřebuje ~16 GB VRAM."
+            description: "Zalozeno na Mistral Small 24B — vyborna kvalita a vicejazycnost, ladene na roleplay a tvurci psani bez cenzurnich omezeni."
                 .into(),
             size_bytes: 14_333_910_048,
             download_url: "https://huggingface.co/TheDrummer/Cydonia-24B-v4.1-GGUF/resolve/main/Cydonia-24B-v4j-Q4_K_M.gguf".into(),
@@ -113,9 +107,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "dolphin3.0-mistral-24b".into(),
             name: "Dolphin 3.0 Mistral 24B".into(),
-            description: "Založeno na Mistral Small 24B — všestranný model bez vestavěných \
-                odmítání, vhodný i pro dospělý obsah. Silná vícejazyčnost (i čeština). \
-                Potřebuje ~16 GB VRAM."
+            description: "Zalozeno na Mistral Small 24B — vsestranny model bez vestavenych odmitani. Silna vicejazycnost vcetne cestiny."
                 .into(),
             size_bytes: 14_333_925_664,
             download_url: "https://huggingface.co/bartowski/cognitivecomputations_Dolphin3.0-Mistral-24B-GGUF/resolve/main/cognitivecomputations_Dolphin3.0-Mistral-24B-Q4_K_M.gguf".into(),
@@ -124,8 +116,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "gemma-2-27b-it".into(),
             name: "Gemma 2 27B Instruct".into(),
-            description: "Googlí model se špičkovou vícejazyčností (výborná čeština) a \
-                kultivovaným stylem. Vhodný na chat i psaní. Potřebuje ~18 GB VRAM."
+            description: "Googli model se spickovou vicejazycnosti (vyborna cestina) a kultivovanym stylem."
                 .into(),
             size_bytes: 16_645_381_632,
             download_url: "https://huggingface.co/bartowski/gemma-2-27b-it-GGUF/resolve/main/gemma-2-27b-it-Q4_K_M.gguf".into(),
@@ -134,8 +125,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "gemma-3-27b-it".into(),
             name: "Gemma 3 27B Instruct".into(),
-            description: "Nejnovější Gemma od Googlu — 128K kontext, špičková vícejazyčnost \
-                (výborná čeština) a silné uvažování. Potřebuje ~18 GB VRAM."
+            description: "Gemma 3 v nejvetsi velikosti — 128K kontext, spickova cestina a silne uvazovani."
                 .into(),
             size_bytes: 16_546_688_736,
             download_url: "https://huggingface.co/unsloth/gemma-3-27b-it-GGUF/resolve/main/gemma-3-27b-it-Q4_K_M.gguf".into(),
@@ -144,18 +134,25 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "gemma-4-26b-a4b-it".into(),
             name: "Gemma 4 26B-A4B Instruct".into(),
-            description: "Gemma 4 MoE pro RTX 3090 — velmi silný model s aktivními ~4B parametry \
-                na token, ale s kvalitou větší rodiny. Potřebuje cca 17 GB VRAM."
+            description: "Gemma 4 MoE — na token pracuje jen zlomek parametru, takze bezi svizne i pres svoji velikost, ale ma kvalitu vetsi rodiny. Vyborna cestina."
                 .into(),
-            size_bytes: 16_900_000_000,
+            size_bytes: 16_947_541_728,
             download_url: "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf".into(),
+            recommended_gpu_layers: 999,
+        },
+        RecommendedModel {
+            id: "gemma-4-26b-a4b-it-uncensored".into(),
+            name: "Gemma 4 26B-A4B Instruct (necenzurovana)".into(),
+            description: "Tataz Gemma 4 26B MoE, jen bez vestavenych odmitani. Abliterace nechala puvodni vahy vcetne cestiny prakticky nedotcene, takze kvalita i rychlost odpovidaji zakladni verzi."
+                .into(),
+            size_bytes: 16_796_011_072,
+            download_url: "https://huggingface.co/TrevorJS/gemma-4-26B-A4B-it-uncensored-GGUF/resolve/main/gemma-4-26B-A4B-it-uncensored-Q4_K_M.gguf".into(),
             recommended_gpu_layers: 999,
         },
         RecommendedModel {
             id: "gemma-4-31b-it".into(),
             name: "Gemma 4 31B Instruct".into(),
-            description: "Nejsilnější Gemma 4 z nabídky pro RTX 3090 — výborný chat, psaní a \
-                vícejazyčnost. Q4_K_M se vejde na 24GB kartu s rezervou (cca 18.3 GB)."
+            description: "Nejsilnejsi Gemma 4 — vyborny chat, psani i vicejazycnost. Husty model, takze narocnejsi na pamet nez 26B MoE."
                 .into(),
             size_bytes: 18_300_000_000,
             download_url: "https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/resolve/main/gemma-4-31B-it-Q4_K_M.gguf".into(),
@@ -164,9 +161,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "qwen2.5-32b-instruct".into(),
             name: "Qwen2.5 32B Instruct".into(),
-            description: "Vlajkový všestranný model — nejchytřejší z nabídky, skvělý na \
-                znalosti, kód i vícejazyčný chat (i čeština). Potřebuje ~22 GB VRAM \
-                (sedne na 24GB kartu)."
+            description: "Vlajkovy vseobecny model — skvely na znalosti, kod i vicejazycny chat vcetne cestiny."
                 .into(),
             size_bytes: 19_851_336_576,
             download_url: "https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF/resolve/main/Qwen2.5-32B-Instruct-Q4_K_M.gguf".into(),
@@ -175,9 +170,7 @@ pub fn recommended_models() -> Vec<RecommendedModel> {
         RecommendedModel {
             id: "qwq-32b".into(),
             name: "QwQ 32B (reasoning)".into(),
-            description: "Přemýšlivý model — před odpovědí si nahlas rozmyslí postup, takže \
-                exceluje v logice, matematice a složitějších úlohách. Odpovídá pomaleji. \
-                Potřebuje ~22 GB VRAM."
+            description: "Premyslivy model — pred odpovedi si nahlas rozmysli postup, takze exceluje v logice a matematice. Odpovida pomaleji."
                 .into(),
             size_bytes: 19_851_336_512,
             download_url: "https://huggingface.co/bartowski/Qwen_QwQ-32B-GGUF/resolve/main/Qwen_QwQ-32B-Q4_K_M.gguf".into(),
@@ -213,19 +206,38 @@ mod tests {
     }
 
     #[test]
-    fn includes_gemma_targets_for_mobile_and_rtx3090() {
+    fn catalog_offers_gemma4_26b_in_both_variants() {
+        // Uživatel chce mít po ruce obojí: základní i abliterovanou verzi
+        // téhož modelu. Bez tohoto testu by jedna z nich mohla tiše vypadnout
+        // při dalším přerovnání katalogu.
         let models = recommended_models();
         let ids: std::collections::HashSet<&str> = models.iter().map(|m| m.id.as_str()).collect();
         for expected in [
-            "gemma-3-4b-it",
-            "gemma-4-e4b-it",
-            "gemma-3-27b-it",
+            "gemma-4-26b-a4b-it",
+            "gemma-4-26b-a4b-it-uncensored",
             "gemma-4-31b-it",
+            "gemma-3-4b-it",
         ] {
             assert!(
                 ids.contains(expected),
                 "missing recommended model {expected}"
             );
+        }
+    }
+
+    #[test]
+    fn descriptions_do_not_target_specific_cards() {
+        // Popisy dřív radily podle konkrétní karty ("pro RTX 3090"), což je
+        // matoucí kdekoli jinde — rozložení modelu si appka spočítá sama
+        // podle skutečně volné VRAM (viz llm::offload_plan).
+        for m in recommended_models() {
+            for banned in ["3090", "4070", "RTX"] {
+                assert!(
+                    !m.description.contains(banned),
+                    "popis {} zminuje konkretni kartu: {banned}",
+                    m.id
+                );
+            }
         }
     }
 }

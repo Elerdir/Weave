@@ -129,7 +129,7 @@ klíč z GitHub Secrets; oficiální podepsané instalátory (NSIS + MSI) staví
 workflow při tagu `v*`.
 
 MSI se instaluje pro celý počítač (vyžaduje práva správce). Instalátor obsahuje
-jen aplikaci — modely, ComfyUI ani OpenVINO runtime se stahují až z aplikace
+jen aplikaci — modely i ComfyUI se stahují až z aplikace
 podle toho, co uživatel zapne. Build je bez GPU featur (`llm-vulkan`/`llm-metal`),
 aby aplikace běžela i na stroji bez Vulkan SDK; vestavěnou
 inferenci si sestav lokálně přes `run-dev.bat`.

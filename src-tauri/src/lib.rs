@@ -85,7 +85,7 @@ fn cleanup_runtime(app: &tauri::AppHandle) {
         return;
     }
 
-    tracing::info!("Ukoncuji Weave: uvolnuji lokalni model, zastavuji ComfyUI a OpenVINO server");
+    tracing::info!("Ukoncuji Weave: uvolnuji lokalni model a zastavuji ComfyUI");
     let state = app.state::<weave_shell::state::AppState>();
     let embedded = {
         state
@@ -106,11 +106,6 @@ fn cleanup_runtime(app: &tauri::AppHandle) {
             tracing::warn!("Zastaveni ComfyUI pri ukonceni selhalo: {e}");
         } else {
             tracing::info!("ComfyUI zastaveno pri ukonceni aplikace");
-        }
-        if let Err(e) = commands::openvino_installer::stop_managed_server().await {
-            tracing::warn!("Zastaveni OpenVINO serveru pri ukonceni selhalo: {e}");
-        } else {
-            tracing::info!("OpenVINO server zastaven pri ukonceni aplikace");
         }
     });
 }
@@ -174,17 +169,7 @@ pub fn run() {
             commands::settings::get_app_setting,
             commands::settings::set_app_setting,
             commands::settings::test_comfyui_connection,
-            commands::settings::test_openvino_npu_connection,
-            commands::settings::detect_npu,
             commands::settings::restart_runtime,
-            commands::openvino_installer::get_openvino_runtime_status,
-            commands::openvino_installer::list_openvino_model_profiles,
-            commands::openvino_installer::install_openvino_runtime,
-            commands::openvino_installer::uninstall_openvino_runtime,
-            commands::openvino_installer::start_openvino_runtime_server,
-            commands::openvino_installer::stop_openvino_runtime_server,
-            commands::openvino_installer::download_openvino_recommended_model,
-            commands::openvino_installer::download_openvino_model_profile,
             commands::comfy_installer::get_comfyui_status,
             commands::comfy_installer::diagnose_comfyui,
             commands::comfy_installer::install_comfyui,

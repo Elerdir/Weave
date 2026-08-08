@@ -15,7 +15,6 @@ function status(overrides: Partial<VramStatus> = {}): VramStatus {
     embeddedLoaded: false,
     embeddedModel: null,
     comfyuiRunning: false,
-    openvinoRunning: false,
     ...overrides,
   };
 }

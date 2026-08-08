@@ -12,7 +12,7 @@ export interface GenerationSettings {
   image_lora: string | null;
 }
 
-export type RuntimeBackend = "default" | "embedded" | "openvino_npu";
+export type RuntimeBackend = "default" | "embedded";
 
 export const DEFAULT_CONTEXT = 8192;
 export const DEFAULT_TEMPERATURE = 0.7;

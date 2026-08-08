@@ -64,7 +64,6 @@
   const runtimeOptions: { value: RuntimeBackend; label: () => string }[] = [
     { value: "default", label: () => i18n.m.chat.runtime.default },
     { value: "embedded", label: () => i18n.m.chat.runtime.gpu },
-    { value: "openvino_npu", label: () => i18n.m.chat.runtime.npu },
   ];
 
   const CONTEXT_MIN = 2048;

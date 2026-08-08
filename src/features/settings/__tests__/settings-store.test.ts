@@ -54,7 +54,9 @@ describe("settingsStore", () => {
     expect(settingsStore.comfyuiStatus).toBe("disconnected");
   });
 
-  it("load() načte LLM backend", async () => {
+  it("load() přemapuje starý NPU backend na vestavěnou inferenci", async () => {
+    // Uživatelé, kteří měli nastavené openvino_npu, nesmí po odstranění NPU
+    // zůstat bez backendu — hodnota se tiše přepíše na embedded.
     mockInvoke.mockImplementation(async (cmd: string, args?: any) => {
       if (cmd === "get_api_key_status") return false;
       if (cmd === "get_app_setting") {
@@ -65,16 +67,16 @@ describe("settingsStore", () => {
     });
 
     await settingsStore.load();
-    expect(settingsStore.llmBackend).toBe("openvino_npu");
+    expect(settingsStore.llmBackend).toBe("embedded");
   });
 
   it("setBackend() uloží volbu backendu", async () => {
     mockInvoke.mockResolvedValueOnce(undefined);
-    await settingsStore.setBackend("openvino_npu");
-    expect(settingsStore.llmBackend).toBe("openvino_npu");
+    await settingsStore.setBackend("embedded");
+    expect(settingsStore.llmBackend).toBe("embedded");
     expect(mockInvoke).toHaveBeenCalledWith("set_app_setting", {
       key: "llm.backend",
-      value: "openvino_npu",
+      value: "embedded",
     });
   });
 

@@ -327,7 +327,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = LocalLlmClient::with_backend(server.uri(), ModelBackend::OpenvinoNpu);
+        let client = LocalLlmClient::with_backend(server.uri(), ModelBackend::LocalVulkan);
         let (tx, mut rx) = mpsc::channel(16);
         client.chat_stream(chat_request(), tx).await.unwrap();
 
@@ -339,6 +339,6 @@ mod tests {
         }
 
         let stats = done_stats.expect("chybí Done se statistikami");
-        assert!(matches!(stats.backend, ModelBackend::OpenvinoNpu));
+        assert!(matches!(stats.backend, ModelBackend::LocalVulkan));
     }
 }

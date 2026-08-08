@@ -145,7 +145,7 @@ mod tests {
             max_tokens: Some(2048),
             pulid_weight: Some(0.8),
             face_detailer: Some(true),
-            runtime_backend: Some("openvino_npu".to_string()),
+            runtime_backend: Some("embedded".to_string()),
             image_checkpoint: Some("realvis_ultra.safetensors".to_string()),
             image_lora: Some("nikol_v1.safetensors".to_string()),
         };
