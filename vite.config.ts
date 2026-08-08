@@ -9,7 +9,11 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      // `target/` je v kořeni workspace (ne v src-tauri), takže ho
+      // `**/src-tauri/**` nepokryje. Bez toho Vite sleduje i .dll, které právě
+      // zapisuje linker, watcher spadne na „EBUSY: resource busy or locked"
+      // a shodí celý dev server.
+      ignored: ["**/src-tauri/**", "**/target/**", "**/.git/**"],
     },
   },
   envPrefix: ["VITE_", "TAURI_"],

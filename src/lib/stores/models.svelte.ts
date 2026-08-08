@@ -128,6 +128,12 @@ function createModelsStore() {
     get error() {
       return error;
     },
+    /** Nechá UI ohlásit chybu, která nevznikla ve storu — typicky pád
+     * systémového dialogu. Bez toho takové selhání skončí jako neodchycené
+     * odmítnutí promise a tlačítko navenek „nic nedělá". */
+    setError(message: string | null) {
+      error = message;
+    },
     get modelsDir() {
       return modelsDir;
     },
@@ -199,6 +205,9 @@ function createModelsStore() {
     // listen selže (okno bez Tauri capability), výjimka by jinak utekla ven a
     // `download` zůstal viset na 0 % bez jakékoli chyby.
     let unlisten = () => {};
+    // Přišel terminální event? Rozhoduje o tom, jestli po doběhnutí invoke
+    // ještě dotahovat seznam modelů.
+    let finished = false;
     try {
       unlisten = await listen<DownloadEvent>("model-download-progress", (e) => {
         const ev = e.payload;
@@ -223,21 +232,26 @@ function createModelsStore() {
         } else if (ev.type === "verifying") {
           if (download) download = { ...download, phase: "verifying", speedBytesPerSec: 0 };
         } else if (ev.type === "done") {
-          download = null;
-          unlisten();
+          finished = true;
           void modelsStore.load();
           void notify("Model stažen", `${modelId} je připraven k použití.`);
         } else if (ev.type === "error") {
+          finished = true;
           error = ev.message ?? "Stahování selhalo";
-          download = null;
-          unlisten();
         }
       });
       await invokeDownload();
+      // Backend doběhl bez terminálního eventu (done/error) — bez tohohle by
+      // `download` zůstal viset a VŠECHNA tlačítka Stáhnout by zůstala navždy
+      // disabled (`disabled={!!modelsStore.download}`), takže by to vypadalo,
+      // že appka na kliknutí nereaguje.
+      if (!finished) void modelsStore.load();
     } catch (err) {
       error = String(err);
-      download = null;
+    } finally {
+      // Uvolnit stav vždy — i když listen/invoke skončí výjimkou nebo bez eventu.
       unlisten();
+      download = null;
     }
   }
 }

@@ -61,9 +61,17 @@
   }
 
   async function pickModelsDir() {
-    const dir = await openFilePicker({ directory: true, multiple: false });
-    if (typeof dir === "string") {
-      await modelsStore.setModelsDir(dir);
+    // Bez try/catch skončí pád dialogu jako neodchycené odmítnutí promise
+    // a tlačítko navenek „nic nedělá" — přesně tak se projevovalo chybějící
+    // oprávnění okna v capabilities.
+    try {
+      modelsStore.setError(null);
+      const dir = await openFilePicker({ directory: true, multiple: false });
+      if (typeof dir === "string") {
+        await modelsStore.setModelsDir(dir);
+      }
+    } catch (e) {
+      modelsStore.setError(String(e));
     }
   }
 
