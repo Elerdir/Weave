@@ -341,10 +341,7 @@ impl ImageGenPort for ComfyUiClient {
                 // by se polling točil donekonečna a v UI se „nic nedělo".
                 if let Some(err) = extract_execution_error(entry) {
                     ws_task.abort();
-                    return Err(AppError::ComfyUi(format!(
-                        "Generování v ComfyUI selhalo: {err}. Bývá to nedostatkem VRAM — \
-                         pokud máš načtený velký lokální model, uvolni ho a zkus znovu."
-                    )));
+                    return Err(AppError::ComfyUi(humanize_comfy_error(&err)));
                 }
                 if let Some(outputs) = entry.get("outputs") {
                     if let Some(filename) = extract_output_filename(outputs) {
@@ -969,6 +966,36 @@ fn extract_execution_error(entry: &serde_json::Value) -> Option<String> {
     Some(detail)
 }
 
+/// Převede syrovou chybu z ComfyUI na hlášku, se kterou uživatel něco zmůže.
+///
+/// Zvlášť zrádná je neshoda architektury GPU: torch ji ohlásí až v okamžiku
+/// generování, a formulací, která nikam nevede („no kernel image is available
+/// for execution on the device"). Znamená přitom jedinou věc — nainstalovaný
+/// PyTorch nemá kernely pro tuhle kartu. Typicky RTX 50xx (Blackwell, sm_120)
+/// s runtimem, který stáhla starší verze Weave z indexu cu126; ten umí jen
+/// sm_50–sm_90. Instalátor od té doby bere torch z cu128, ale **už
+/// nainstalované** prostředí zůstane pozadu, dokud ho uživatel nepřeinstaluje.
+fn humanize_comfy_error(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+
+    let hint = if lower.contains("no kernel image is available") {
+        "Nainstalovaný PyTorch nemá kernely pro tvoji grafickou kartu (typicky RTX 50xx \
+         s prostředím staženým starší verzí Weave). Otevři Nastavení → ComfyUI a spusť \
+         instalaci znovu — stáhne se torch, který kartu podporuje."
+    } else if lower.contains("out of memory") || lower.contains("oom") {
+        "Došla grafická paměť. Zkus menší rozlišení, nebo uvolni lokální model z VRAM \
+         (v hlavičce chatu)."
+    } else if lower.contains("not compatible") && lower.contains("torch") {
+        "PyTorch v prostředí pro obrázky neodpovídá tvojí kartě — přeinstaluj ho \
+         v Nastavení → ComfyUI."
+    } else {
+        "Bývá to nedostatkem VRAM — pokud máš načtený velký lokální model, uvolni ho \
+         a zkus znovu."
+    };
+
+    format!("Generování v ComfyUI selhalo: {raw}. {hint}")
+}
+
 fn is_execution_finished(entry: &serde_json::Value) -> bool {
     matches!(
         entry
@@ -1006,6 +1033,27 @@ mod tests {
             face_detailer: false,
             checkpoint_override: None,
         }
+    }
+
+    #[test]
+    fn blackwell_kernel_error_points_at_reinstall_not_vram() {
+        // Skutečná hláška z torche na RTX 50xx. Původní text vinil VRAM, což
+        // uživatele posílalo úplně jinam — karta má paměti dost, chybí kernely.
+        let msg = humanize_comfy_error(
+            "CUDA error: no kernel image is available for execution on the device",
+        );
+        assert!(msg.contains("Nastavení → ComfyUI"), "{msg}");
+        assert!(msg.contains("RTX 50xx"), "{msg}");
+        assert!(!msg.contains("nedostatkem VRAM"), "{msg}");
+
+        // VRAM zůstává vlastní větví.
+        let oom = humanize_comfy_error("CUDA out of memory. Tried to allocate 2.00 GiB");
+        assert!(oom.contains("grafická paměť"), "{oom}");
+
+        // Neznámá chyba si nechá původní obecnou radu.
+        let other = humanize_comfy_error("KSampler: something odd");
+        assert!(other.contains("nedostatkem VRAM"), "{other}");
+        assert!(other.contains("something odd"), "{other}");
     }
 
     #[test]

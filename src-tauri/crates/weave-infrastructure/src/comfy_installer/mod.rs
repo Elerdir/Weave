@@ -498,9 +498,17 @@ impl ComfyInstallerPort for LocalComfyInstaller {
         let venv_python = venv_python_path(&venv_dir).to_string_lossy().into_owned();
 
         // 4. PyTorch — CUDA build pokud je NVIDIA GPU, jinak CPU/výchozí.
+        //
+        // cu128, ne cu126: wheely pro starší CUDA NEMAJÍ kernely pro Blackwell
+        // (RTX 50xx, sm_120) a na těch kartách skončí každé generování na
+        // „no kernel image is available for execution on the device" — ComfyUI
+        // se přitom nastartuje a tváří se zdravě, takže je to nesrozumitelné.
+        // cu128 pokrývá Blackwell i starší generace (Turing+).
+        //
         // Index se čas od času posouvá dál (PyTorch přestává pro starší CUDA
-        // verze stavět wheely pro nové verze Pythonu) — cu124 přestal mít
-        // wheely pro Python 3.14, cu126 v době psaní funguje pro 3.9-3.14.
+        // verze stavět wheely pro nové verze Pythonu). Ověřeno: cu128 má
+        // wheely pro cp310-cp314. Kdyby měl uživatel Python 3.15+, pip tu
+        // spadne na „no matching distribution" — pak je potřeba zvednout index.
         Self::step(&tx, "Instaluji PyTorch (může trvat několik minut)").await;
         if has_nvidia_gpu() {
             run_streamed(
@@ -513,7 +521,7 @@ impl ComfyInstallerPort for LocalComfyInstaller {
                     "torchvision",
                     "torchaudio",
                     "--index-url",
-                    "https://download.pytorch.org/whl/cu126",
+                    "https://download.pytorch.org/whl/cu128",
                 ],
                 None,
                 &tx,
