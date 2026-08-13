@@ -527,9 +527,20 @@ impl ComfyInstallerPort for LocalComfyInstaller {
         if self.server.lock().await.is_some() {
             return Ok(ComfyStatus::Running);
         }
-        if self.missing_install_piece().is_none() {
-            Ok(ComfyStatus::Installed)
-        } else if self.install_dir.exists() {
+        let Some(missing) = self.missing_install_piece() else {
+            return Ok(ComfyStatus::Installed);
+        };
+        if self.install_dir.exists() {
+            // Bez tohohle řádku se z logu pozná jen to, že je něco rozbité —
+            // ne co. Přesně na tom uvázla diagnostika u kolegy: prostředí
+            // hlásilo „nainstalováno" a jediným vodítkem byla zmínka
+            // o chybějícím uzlu FaceDetailer kdesi uprostřed generování.
+            tracing::warn!(
+                target: "comfyui",
+                missing,
+                dir = %self.install_dir.display(),
+                "Instalace ComfyUI není dokončená"
+            );
             Ok(ComfyStatus::Broken)
         } else {
             Ok(ComfyStatus::NotInstalled)
