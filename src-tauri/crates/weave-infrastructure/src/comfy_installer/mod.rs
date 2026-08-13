@@ -33,6 +33,31 @@ pub const COMFYUI_DEFAULT_PORT: u16 = 8199;
 /// nejsou (obě vrací 401 bez auth tokenu) — jednoklikový no-auth download
 /// stylem `recommended_models.rs` by u FLUX nešel udělat.
 pub const SDXL_CHECKPOINT_FILENAME: &str = "sd_xl_base_1.0.safetensors";
+
+/// Soubor v adresáři ComfyUI, který si pamatuje, z jakého indexu se
+/// instaloval PyTorch. Bez něj nejde poznat prostředí od starší verze Weave,
+/// kde torch nemá kernely pro novější karty (RTX 50xx / Blackwell).
+const TORCH_INDEX_MARKER: &str = ".weave-torch-index";
+
+/// Indexy, které umí nainstalovat současná verze. Marker s jinou hodnotou
+/// (nebo žádný marker) znamená prostředí od starší verze Weave.
+///
+/// Kontroluje se příslušnost do téhle množiny, ne shoda s tím, co by se
+/// nainstalovalo teď. Kdyby se stav odvozoval z `has_nvidia_gpu()`, stačilo
+/// by jedno selhání `nvidia-smi` a hotová instalace by se rázem tvářila jako
+/// nedokončená — uživatel by dostal nabídku přeinstalace úplně bezdůvodně.
+const CURRENT_TORCH_INDEXES: &[&str] = &["cu128", "cpu"];
+
+/// Index, ze kterého se torch instaluje. Musí odpovídat `--index-url`
+/// v `install()`; při jeho změně se starší prostředí samo označí za
+/// nedokončené a nabídne přeinstalaci.
+fn expected_torch_index() -> &'static str {
+    if has_nvidia_gpu() {
+        "cu128"
+    } else {
+        "cpu"
+    }
+}
 const SDXL_CHECKPOINT_URL: &str = "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors";
 
 /// Realistický checkpoint — RealVisXL V5.0, jeden z nejlepších SDXL modelů
@@ -166,6 +191,67 @@ impl LocalComfyInstaller {
 
     fn has_valid_checkout(&self) -> bool {
         self.main_py_path().exists() && self.install_dir.join("requirements.txt").exists()
+    }
+
+    /// Co z instalace chybí — `None` znamená hotovo.
+    ///
+    /// Dřív stačilo `main.py` + `requirements.txt` + venv, tedy artefakty
+    /// **prvních tří** kroků z deseti. Instalace, které spadlo stahování
+    /// checkpointu nebo custom nodů, se tím pádem tvářila jako hotová: appka
+    /// se ji nikdy sama nepokusila dodělat, uživatel musel pouštět instalaci
+    /// ručně znovu a po restartu byl zase tam, kde začal. Přesně tak se to
+    /// projevilo u kolegy — v logu chyběl uzel FaceDetailer, ale stav hlásil
+    /// „nainstalováno".
+    ///
+    /// Kontrolují se proto koncové artefakty všech kroků. Instalace je
+    /// idempotentní (každý krok má `if !exists`), takže opakované spuštění
+    /// dodělá jen to, co chybí.
+    fn missing_install_piece(&self) -> Option<&'static str> {
+        if !self.has_valid_checkout() {
+            return Some("zdrojové soubory ComfyUI");
+        }
+        if !venv_python_path(&self.venv_dir()).exists() {
+            return Some("Python virtuální prostředí");
+        }
+        if !self.torch_marker_matches() {
+            // Marker drží index, ze kterého se torch instaloval. Když nesedí
+            // (nebo chybí, tj. instalovala ho starší verze Weave), je torch
+            // potenciálně bez kernelů pro novější karty — viz RTX 50xx
+            // a index cu126 níž.
+            return Some("PyTorch pro tuto grafickou kartu");
+        }
+        if !self.pulid_dir().exists() {
+            return Some("custom node PuLID");
+        }
+        if !self
+            .checkpoints_dir()
+            .join(SDXL_CHECKPOINT_FILENAME)
+            .exists()
+        {
+            return Some("SDXL checkpoint");
+        }
+        if !self
+            .pulid_weights_dir()
+            .join(PULID_WEIGHTS_FILENAME)
+            .exists()
+        {
+            return Some("PuLID váhy");
+        }
+        if !self.insightface_models_dir().join("antelopev2").exists() {
+            return Some("InsightFace AntelopeV2");
+        }
+        None
+    }
+
+    fn torch_marker_path(&self) -> PathBuf {
+        self.install_dir.join(TORCH_INDEX_MARKER)
+    }
+
+    /// Byl torch nainstalovaný některou ze současných verzí Weave?
+    fn torch_marker_matches(&self) -> bool {
+        std::fs::read_to_string(self.torch_marker_path())
+            .map(|s| CURRENT_TORCH_INDEXES.contains(&s.trim()))
+            .unwrap_or(false)
     }
 
     fn remove_install_dir(&self) -> AppResult<()> {
@@ -441,7 +527,7 @@ impl ComfyInstallerPort for LocalComfyInstaller {
         if self.server.lock().await.is_some() {
             return Ok(ComfyStatus::Running);
         }
-        if self.has_valid_checkout() && venv_python_path(&self.venv_dir()).exists() {
+        if self.missing_install_piece().is_none() {
             Ok(ComfyStatus::Installed)
         } else if self.install_dir.exists() {
             Ok(ComfyStatus::Broken)
@@ -510,6 +596,9 @@ impl ComfyInstallerPort for LocalComfyInstaller {
         // wheely pro cp310-cp314. Kdyby měl uživatel Python 3.15+, pip tu
         // spadne na „no matching distribution" — pak je potřeba zvednout index.
         Self::step(&tx, "Instaluji PyTorch (může trvat několik minut)").await;
+        // Marker se maže PŘED instalací: kdyby pip spadl, nesmí v adresáři
+        // zůstat tvrzení, že torch pro tuhle kartu už je hotový.
+        let _ = std::fs::remove_file(self.torch_marker_path());
         if has_nvidia_gpu() {
             run_streamed(
                 &venv_python,
@@ -536,6 +625,10 @@ impl ComfyInstallerPort for LocalComfyInstaller {
             )
             .await?;
         }
+        // Až tady — po úspěšném pipu. Podle markeru se pozná, že prostředí má
+        // torch ze současného indexu; starší instalace ho nemají a příště se
+        // rozpoznají jako nedokončené.
+        let _ = std::fs::write(self.torch_marker_path(), expected_torch_index());
 
         // 5. Zbytek závislostí ComfyUI
         Self::step(&tx, "Instaluji závislosti ComfyUI").await;
@@ -824,6 +917,80 @@ mod tests {
     async fn list_checkpoints_empty_without_directory() {
         let installer = temp_installer();
         assert!(installer.list_checkpoints().await.unwrap().is_empty());
+    }
+
+    /// Nachystá instalaci tak, jak vypadá po VŠECH krocích.
+    fn complete_install(installer: &LocalComfyInstaller) {
+        let d = &installer.install_dir;
+        std::fs::create_dir_all(d).unwrap();
+        std::fs::write(installer.main_py_path(), "").unwrap();
+        std::fs::write(d.join("requirements.txt"), "").unwrap();
+        std::fs::create_dir_all(venv_python_path(&installer.venv_dir()).parent().unwrap()).unwrap();
+        std::fs::write(venv_python_path(&installer.venv_dir()), "").unwrap();
+        std::fs::write(installer.torch_marker_path(), expected_torch_index()).unwrap();
+        std::fs::create_dir_all(installer.pulid_dir()).unwrap();
+        std::fs::create_dir_all(installer.checkpoints_dir()).unwrap();
+        std::fs::write(
+            installer.checkpoints_dir().join(SDXL_CHECKPOINT_FILENAME),
+            "",
+        )
+        .unwrap();
+        std::fs::create_dir_all(installer.pulid_weights_dir()).unwrap();
+        std::fs::write(
+            installer.pulid_weights_dir().join(PULID_WEIGHTS_FILENAME),
+            "",
+        )
+        .unwrap();
+        std::fs::create_dir_all(installer.insightface_models_dir().join("antelopev2")).unwrap();
+    }
+
+    #[tokio::test]
+    async fn nedokoncena_instalace_se_nehlasi_jako_hotova() {
+        // Reálný případ z logu kolegy: git clone i venv prošly, ale stahování
+        // dál selhávalo. Stav přesto hlásil „nainstalováno", takže se appka
+        // nikdy nepokusila instalaci dodělat — uživatel ji musel spouštět
+        // ručně znovu a po restartu byl zase na začátku.
+        let installer = temp_installer();
+        complete_install(&installer);
+        assert_eq!(installer.status().await.unwrap(), ComfyStatus::Installed);
+
+        // Odebrání kteréhokoli koncového artefaktu musí shodit stav na Broken.
+        for missing in [
+            installer.checkpoints_dir().join(SDXL_CHECKPOINT_FILENAME),
+            installer.pulid_weights_dir().join(PULID_WEIGHTS_FILENAME),
+        ] {
+            std::fs::remove_file(&missing).unwrap();
+            assert_eq!(
+                installer.status().await.unwrap(),
+                ComfyStatus::Broken,
+                "chybí {missing:?}, ale stav tvrdí opak"
+            );
+            std::fs::write(&missing, "").unwrap();
+        }
+
+        std::fs::remove_dir_all(installer.pulid_dir()).unwrap();
+        assert_eq!(installer.status().await.unwrap(), ComfyStatus::Broken);
+        let _ = std::fs::remove_dir_all(&installer.install_dir);
+    }
+
+    #[tokio::test]
+    async fn torch_z_jineho_indexu_znamena_nedokoncenou_instalaci() {
+        // Prostředí od starší verze Weave nemá marker vůbec, nebo v něm má
+        // starý index (cu126) — na RTX 50xx takový torch nemá kernely a
+        // generování skončí na „no kernel image is available".
+        let installer = temp_installer();
+        complete_install(&installer);
+
+        std::fs::write(installer.torch_marker_path(), "cu126").unwrap();
+        assert_eq!(installer.status().await.unwrap(), ComfyStatus::Broken);
+
+        std::fs::remove_file(installer.torch_marker_path()).unwrap();
+        assert_eq!(
+            installer.status().await.unwrap(),
+            ComfyStatus::Broken,
+            "chybějící marker = instalace od starší verze"
+        );
+        let _ = std::fs::remove_dir_all(&installer.install_dir);
     }
 
     #[tokio::test]
