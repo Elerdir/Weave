@@ -65,9 +65,17 @@
       Goto weave_apply
     weave_ask:
     IntOp $0 $1 / 1024
-    MessageBox MB_YESNO|MB_ICONQUESTION \
-      "Nalezena NVIDIA s $0 GB VRAM.$\n$\nPoužít akceleraci CUDA? Je na NVIDII rychlejší, ale zabere o 485 MB víc místa.$\nNe = Vulkan (menší, funguje všude).$\n$\nFound an NVIDIA GPU with $0 GB VRAM. Use CUDA (faster, 485 MB larger)? No = Vulkan." \
-      IDYES weave_pick_cuda
+    ; Hláška se řídí jazykem instalátoru (1029 = čeština); LangString sem
+    ; dát nejde, hook se vkládá dřív, než se jazyky načtou.
+    ${If} $LANGUAGE == 1029
+      MessageBox MB_YESNO|MB_ICONQUESTION \
+        "Nalezena karta NVIDIA s $0 GB VRAM.$\n$\nPoužít akceleraci CUDA? Na NVIDII je rychlejší, ale zabere o 485 MB víc místa na disku.$\nVolba Ne nainstaluje Vulkan, který funguje všude." \
+        IDYES weave_pick_cuda
+    ${Else}
+      MessageBox MB_YESNO|MB_ICONQUESTION \
+        "Found an NVIDIA GPU with $0 GB VRAM.$\n$\nUse CUDA acceleration? It is faster on NVIDIA but takes 485 MB more disk space.$\nChoosing No installs Vulkan, which works everywhere." \
+        IDYES weave_pick_cuda
+    ${EndIf}
       StrCpy $2 "vulkan"
       Goto weave_apply
     weave_pick_cuda:
@@ -83,9 +91,9 @@ weave_apply:
     Rename "$INSTDIR\cuda\weave-app.exe" "$INSTDIR\weave-app.exe"
     ; Wildcard, aby změna verze CUDA (cublas64_13 -> _14) nevyžadovala zásah.
     CopyFiles /SILENT "$INSTDIR\cuda\*.dll" "$INSTDIR"
-    DetailPrint "Weave: nainstalována CUDA verze (NVIDIA)"
+    DetailPrint "Weave: GPU backend = CUDA (NVIDIA)"
   ${Else}
-    DetailPrint "Weave: nainstalována Vulkan verze"
+    DetailPrint "Weave: GPU backend = Vulkan"
   ${EndIf}
   RMDir /r "$INSTDIR\cuda"
   WriteRegStr HKCU "${WEAVE_REGKEY}" "GpuBackend" "$2"
