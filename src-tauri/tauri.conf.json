@@ -50,6 +50,7 @@
         "installMode": "currentUser",
         "languages": ["Czech", "English"],
         "displayLanguageSelector": true,
+        "customLanguageFiles": { "Czech": "nsis/Czech.nsh" },
         "installerHooks": "nsis/gpu-backend.nsh"
       },
       "wix": {
