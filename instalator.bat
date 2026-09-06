@@ -146,6 +146,21 @@ call pnpm tauri build --bundles nsis --features llm-vulkan --config "%OVERRIDE%"
 if errorlevel 1 goto :buildfail
 
 REM --- 3/3 Hotovo -------------------------------------------------------
+REM --- Pojistka: hlavni binarka MUSI byt ta Vulkan ---
+REM Kroky 1 a 2 sdileji target\release\weave-app.exe. Kdyz krok 2 selze nebo
+REM se mezitim spusti rucni CUDA build, zustane tam CUDA verze a instalator by
+REM ji zabalil jako hlavni (Vulkan) vetev. Na stroji bez NVIDIE by aplikace
+REM neslo spustit vubec - cuBLAS DLL se u Vulkan vetve mazou.
+findstr /m /c:"cublas64_" "target\release\weave-app.exe" >nul 2>&1
+if not errorlevel 1 (
+    echo.
+    echo CHYBA: hlavni binarka target\release\weave-app.exe odkazuje na cuBLAS,
+    echo tedy je to CUDA build, ne Vulkan. Instalator by ji zabalil jako Vulkan
+    echo vetev a na strojich bez NVIDIE by aplikace nenabehla.
+    echo Spust build znovu, at se krok 2 dokonci.
+    goto :fail
+)
+
 echo.
 echo [3/3] Hotovo. Instalator najdes zde:
 for %%f in (target\release\bundle\nsis\*-setup.exe) do echo   %%f  (%%~zf bajtu)
