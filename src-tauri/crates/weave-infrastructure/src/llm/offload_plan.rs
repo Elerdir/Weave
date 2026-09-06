@@ -175,6 +175,44 @@ fn context_advice(info: &GgufInfo, kv_budget: u64) -> String {
     }
 }
 
+/// Hláška pro plán `PartialLayers`. Rozlišuje dvě dost odlišné situace, které
+/// dřív obě hlásily „model je větší než VRAM" — u modelu, který se do karty
+/// pohodlně vejde, to znělo jako nesmysl (Qwen3.8 27B má 16 GB vah a karta
+/// 24 GB; přes rozpočet ho poslala až KV cache pro 64k kontext).
+#[allow(clippy::too_many_arguments)]
+fn partial_layers_reason(
+    model_bytes: u64,
+    vram: u64,
+    weights_budget: u64,
+    kv_bytes: u64,
+    info: &GgufInfo,
+    context_tokens: u32,
+    gpu_layers: u32,
+    blocks: u32,
+) -> String {
+    const MB: u64 = 1024 * 1024;
+    if model_bytes <= weights_budget {
+        // Váhy se vejdou, přes rozpočet je poslala až KV cache — pak má smysl
+        // poradit menší kontext, protože ten problém odstraní úplně.
+        let advice = context_advice(info, weights_budget.saturating_sub(model_bytes));
+        format!(
+            "Model ({} MB) by se do VRAM ({} MB) vešel, ale s KV cache pro \
+             {context_tokens} tokenů ({} MB) už ne — na GPU jde {gpu_layers} z \
+             {blocks} vrstev.{advice}",
+            model_bytes / MB,
+            vram / MB,
+            kv_bytes / MB
+        )
+    } else {
+        format!(
+            "Hustý model ({} MB) je větší než VRAM ({} MB) — na GPU jde {gpu_layers} z \
+             {blocks} vrstev, zbytek počítá CPU.",
+            model_bytes / MB,
+            vram / MB
+        )
+    }
+}
+
 /// Odhad velikosti KV cache pro dané okno kontextu.
 fn estimate_kv_bytes(info: &GgufInfo, context_tokens: u32, quantized: bool) -> u64 {
     let bytes_per_element: u64 = if quantized { 1 } else { 2 };
@@ -332,11 +370,15 @@ pub fn plan_offload(
         threads,
         quantized_kv: true,
         device_index: machine.device_index,
-        reason: format!(
-            "Hustý model ({} MB) je větší než VRAM ({} MB) — na GPU jde {gpu_layers} z \
-             {blocks} vrstev, zbytek počítá CPU.",
-            model_bytes / (1024 * 1024),
-            vram / (1024 * 1024)
+        reason: partial_layers_reason(
+            model_bytes,
+            vram,
+            weights_budget,
+            kv_q8,
+            info,
+            context_tokens,
+            gpu_layers,
+            blocks,
         ),
     }
 }
@@ -415,6 +457,56 @@ mod tests {
             key_length: None,
             value_length: None,
         }
+    }
+
+    /// Skutečná geometrie z `D:\models\studio\Qwen3.8-27B-Uncensored-Q4_K_M.gguf`
+    /// (architektura `qwen35`): hustý model, 65 vrstev, 4 KV hlavy, ale
+    /// **256dimenzionální** K i V — dvakrát víc než u běžných Qwenů, takže
+    /// KV cache roste o 130 kB na token a při velkém kontextu rozhoduje víc
+    /// než samotné váhy.
+    fn qwen35_27b_info() -> GgufInfo {
+        GgufInfo {
+            architecture: "qwen35".into(),
+            expert_count: None,
+            block_count: Some(65),
+            embedding_length: Some(5120),
+            head_count: Some(24),
+            head_count_kv: Some(4),
+            key_length: Some(256),
+            value_length: Some(256),
+        }
+    }
+
+    #[test]
+    fn qwen35_27b_needs_smaller_context_than_64k_on_a_24gb_card() {
+        // 15,7 GB vah se do 24GB karty pohodlně vejde, ale 64k kontext si
+        // řekne o dalších ~8 GB KV cache — dohromady je to přes rozpočet,
+        // takže plán spadne z „celý model na GPU".
+        let info = qwen35_27b_info();
+        let machine = MachineProfile {
+            vram_bytes: Some(23_600 * 1024 * 1024),
+            device_index: Some(0),
+            cpu_cores: 12,
+        };
+
+        let at_64k = plan_offload(16_810_714_528, &info, &machine, 64_000, true);
+        assert_ne!(
+            at_64k.plan,
+            OffloadPlan::FullGpu,
+            "při 64k kontextu se model do VRAM vejít nemůže: {}",
+            at_64k.reason
+        );
+        assert!(
+            at_64k.reason.contains("kontext"),
+            "hláška má poradit snížení kontextu: {}",
+            at_64k.reason
+        );
+
+        // S rozumnějším kontextem už jde celý na GPU — tohle je odpověď na
+        // „model nejde rozjet na 3090". Strop je nižší, než by se zdálo:
+        // plán FullGpu počítá KV cache v F16, ne v Q8.
+        let at_24k = plan_offload(16_810_714_528, &info, &machine, 24_000, true);
+        assert_eq!(at_24k.plan, OffloadPlan::FullGpu, "{}", at_24k.reason);
     }
 
     fn machine(vram_gb: u64) -> MachineProfile {

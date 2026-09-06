@@ -17,7 +17,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # llm-embedded = jen CPU, bez GPU akcelerace (viz run-dev-local.bat) -- build
 # nepotrebuje CUDA ani Vulkan SDK, jen CMake + MSVC.
 llm-embedded = ["weave-shell/llm-embedded"]
-# CUDA tu není záměrně — viz komentář ve weave-infrastructure/Cargo.toml.
+llm-cuda = ["weave-shell/llm-cuda"]
 llm-metal = ["weave-shell/llm-metal"]
 llm-vulkan = ["weave-shell/llm-vulkan"]
 

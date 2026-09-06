@@ -55,11 +55,15 @@ jobs:
       # Bez --all-features: GPU inference featury vyžadují GPU toolchain, který
       # tenhle runner nemá. Metal se kompiluje v jobu rust-macos, Vulkan
       # (hlavní cesta) v rust-vulkan.
+      # --locked: bez něj si cargo tiše vytáhne novější verzi, když Cargo.toml
+      # a Cargo.lock nesedí. Takhle se do buildu dostalo llama-cpp-2 0.1.156
+      # s jiným API než 0.1.150 v zámku — a protože CI llama.cpp nekompiluje,
+      # rozbitý build se ukázal až při stavbě instalátoru.
       - name: Clippy
-        run: cargo clippy --all-targets --workspace -- -D warnings
+        run: cargo clippy --all-targets --workspace --locked -- -D warnings
 
       - name: Tests
-        run: cargo test --all
+        run: cargo test --all --locked
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov

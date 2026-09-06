@@ -83,6 +83,35 @@ pub fn read_gguf_architecture(path: &Path) -> Result<String, String> {
 /// Přečte architekturu + číselné parametry modelu z GGUF hlavičky.
 /// Chybějící číselné klíče nejsou chyba (starší/exotické konvertory je
 /// nemusí uvádět) — volající si poradí odhadem.
+/// Ověří, že cesta vede na použitelný soubor modelu, a vrátí jeho velikost.
+///
+/// Volá se dřív, než se začne plánovat offload. Bez téhle kontroly se
+/// chybějící soubor (cesta v nastavení přežije přesun i smazání `.gguf`)
+/// projeví až jako „model má 0 MB, vejde se do VRAM" a pak nesrozumitelným
+/// `null result from llama cpp` z enginu.
+pub fn check_model_file(path: &Path) -> Result<u64, String> {
+    let meta = std::fs::metadata(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "Soubor modelu neexistuje: {}. Vyber model znovu v Nastavení → AI model.",
+                path.display()
+            )
+        } else {
+            format!("Soubor modelu {} nejde přečíst: {e}", path.display())
+        }
+    })?;
+    if !meta.is_file() {
+        return Err(format!("Cesta k modelu není soubor: {}", path.display()));
+    }
+    if meta.len() == 0 {
+        return Err(format!(
+            "Soubor modelu je prázdný: {}. Nejspíš nedokončené stahování.",
+            path.display()
+        ));
+    }
+    Ok(meta.len())
+}
+
 pub fn read_gguf_info(path: &Path) -> Result<GgufInfo, String> {
     let file =
         File::open(path).map_err(|e| format!("Soubor {} nejde otevřít: {e}", path.display()))?;
@@ -495,6 +524,50 @@ mod tests {
         let full = synthetic_gguf(Some("llama"));
         let path = write_temp(&full[..40]);
         assert!(read_gguf_architecture(&path).is_err());
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn check_model_file_reports_missing_path() {
+        // Regrese: chybějící soubor se dřív tvářil jako model o velikosti 0,
+        // plán ho „umístil do VRAM" a engine spadl na `null result from llama cpp`.
+        let missing =
+            std::env::temp_dir().join(format!("weave-chybi-{}.gguf", uuid::Uuid::new_v4()));
+        let err = check_model_file(&missing).expect_err("chybějící soubor musí být chyba");
+        assert!(
+            err.contains("neexistuje"),
+            "hláška má říct, že soubor chybí: {err}"
+        );
+        assert!(
+            err.contains(&missing.display().to_string()),
+            "hláška má obsahovat cestu: {err}"
+        );
+    }
+
+    #[test]
+    fn check_model_file_rejects_empty_file() {
+        let path = write_temp(&[]);
+        let err = check_model_file(&path).expect_err("prázdný soubor musí být chyba");
+        assert!(err.contains("prázdný"), "{err}");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn check_model_file_rejects_directory() {
+        let dir = std::env::temp_dir().join(format!("weave-dir-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        assert!(check_model_file(&dir).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn check_model_file_accepts_real_model_and_returns_size() {
+        let bytes = synthetic_gguf(Some("llama"));
+        let path = write_temp(&bytes);
+        assert_eq!(
+            check_model_file(&path).expect("platný soubor"),
+            bytes.len() as u64
+        );
         std::fs::remove_file(path).ok();
     }
 }

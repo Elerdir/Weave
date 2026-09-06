@@ -1,6 +1,10 @@
 # Rust
 target/
-Cargo.lock
+# Cargo.lock se ZÁMĚRNĚ verzuje: Weave je aplikace, ne knihovna. Bez zámku si
+# CI pokaždé rozhodne o verzích znovu — a llama-cpp-2 vydala v „patch" verzi
+# 0.1.156 rozbíjející změnu API (LlamaSampler::penalties), takže se build
+# rozpadl bez jediného commitu. S commitnutým zámkem a `cargo --locked` v CI
+# se verze mění jen vědomě.
 
 # Node
 node_modules/
@@ -39,3 +43,7 @@ run-dev-local.bat
 # Lokální referenční obrázky (nepatří do repa)
 obr/
 spisovatel/
+
+# Binarky pro instalator (CUDA build + cuBLAS DLL, ~700 MB)
+src-tauri/payload/
+target-check/
