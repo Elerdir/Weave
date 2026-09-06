@@ -30,9 +30,14 @@ use super::offload_plan::{plan_offload, MachineProfile, OffloadDecision};
 
 #[cfg(feature = "llm-metal")]
 const ACTIVE_BACKEND: ModelBackend = ModelBackend::LocalMetal;
-#[cfg(all(feature = "llm-vulkan", not(feature = "llm-metal")))]
+#[cfg(all(feature = "llm-cuda", not(feature = "llm-metal")))]
+const ACTIVE_BACKEND: ModelBackend = ModelBackend::LocalCuda;
+#[cfg(all(
+    feature = "llm-vulkan",
+    not(any(feature = "llm-metal", feature = "llm-cuda"))
+))]
 const ACTIVE_BACKEND: ModelBackend = ModelBackend::LocalVulkan;
-#[cfg(not(any(feature = "llm-metal", feature = "llm-vulkan")))]
+#[cfg(not(any(feature = "llm-metal", feature = "llm-cuda", feature = "llm-vulkan")))]
 const ACTIVE_BACKEND: ModelBackend = ModelBackend::LocalCpu;
 
 struct WorkerRequest {
@@ -142,8 +147,15 @@ fn detect_machine() -> MachineProfile {
 
 /// Spočítá, jak model rozložit. `force_cpu` odpovídá tomu, že uživatel
 /// v nastavení nechal 0 vrstev na GPU.
-fn decide_offload(model_path: &std::path::Path, n_ctx: u32, force_cpu: bool) -> OffloadDecision {
-    let model_bytes = std::fs::metadata(model_path).map(|m| m.len()).unwrap_or(0);
+fn decide_offload(
+    model_path: &std::path::Path,
+    n_ctx: u32,
+    force_cpu: bool,
+) -> Result<OffloadDecision, String> {
+    // Chybějící soubor je tvrdá chyba, ne nulová velikost: s nulou by plán
+    // rozhodl „vejde se celý do VRAM" a engine pak spadl na hlášce, ze které
+    // příčinu nikdo nepozná.
+    let model_bytes = super::gguf_meta::check_model_file(model_path)?;
     let info = super::gguf_meta::read_gguf_info(model_path).unwrap_or_else(|e| {
         // Bez metadat plán degraduje na hrubší odhad, ale pořád je lepší
         // než naivní „všechny vrstvy na GPU".
@@ -159,7 +171,13 @@ fn decide_offload(model_path: &std::path::Path, n_ctx: u32, force_cpu: bool) -> 
     } else {
         detect_machine()
     };
-    plan_offload(model_bytes, &info, &machine, n_ctx, !force_cpu)
+    Ok(plan_offload(
+        model_bytes,
+        &info,
+        &machine,
+        n_ctx,
+        !force_cpu,
+    ))
 }
 
 /// Načte model do (V)RAM podle plánu. Oddělené, aby šlo znovu-načíst po
@@ -268,7 +286,14 @@ fn worker_loop(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32, rx: Receiver<
 
     // Plán se počítá jednou — výčet zařízení i čtení GGUF hlavičky stojí čas
     // a mezi načteními se nic z toho nemění.
-    let decision = decide_offload(&model_path, n_ctx, n_gpu_layers == 0);
+    let decision = match decide_offload(&model_path, n_ctx, n_gpu_layers == 0) {
+        Ok(decision) => decision,
+        Err(e) => {
+            tracing::error!("{e}");
+            drain_with_error(rx, &e);
+            return;
+        }
+    };
     tracing::info!(
         ?model_path,
         plan = decision.plan.label(),
@@ -422,7 +447,8 @@ fn run_inference(
         .map(|d| d.subsec_nanos())
         .unwrap_or(1234);
     let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::penalties(64, 1.15, 0.0, 0.0),
+        // n_vocab přibyl jako první parametr v llama-cpp-2 0.1.152.
+        LlamaSampler::penalties(model.n_vocab(), 64, 1.15, 0.0, 0.0),
         LlamaSampler::top_k(40),
         LlamaSampler::top_p(0.95, 1),
         LlamaSampler::temp(req.request.temperature.max(0.1)),

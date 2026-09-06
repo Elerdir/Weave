@@ -35,10 +35,18 @@ pnpm tauri dev --features llm-metal
 pnpm tauri dev --features llm-embedded
 ```
 
-**CUDA se pro text nestaví.** Vulkan pokrývá NVIDII stejně jako AMD a Intel,
-SDK je o řád menší a u modelů větších než VRAM stejně nerozhoduje backend, ale
-rozložení modelu (viz níž). CUDA v projektu zůstává jen pro ComfyUI, které si
-ji instaluje samo do vlastního Python prostředí.
+```bash
+# NVIDIA přes CUDA — rychlejší tam, kde se model vejde do VRAM
+pnpm tauri dev --features llm-cuda
+```
+
+**Vulkan je výchozí cesta**, protože běží na NVIDII, AMD i Intelu a runtime má
+každý stroj v ovladači grafiky. CUDA je navíc pro NVIDII: u modelu, který se
+vejde celý do VRAM, znatelně zrychlí zpracování promptu. U modelu většího než
+VRAM na backendu nezáleží — tam rozhoduje rozložení modelu (viz níž), takže se
+CUDA nevyplatí ani stavět. Backend je v llama.cpp zakompilovaný napevno, takže
+jedna binárka mezi nimi za běhu přepnout neumí; instalátor to řeší tím, že nese
+obě (viz [Instalátor pro Windows](#instalátor-pro-windows)).
 
 Na Windows jsou na to připravené dávky v kořeni repozitáře — obě si samy
 přepnou do svého adresáře, takže je můžeš spustit odkudkoli (dvojklikem
@@ -48,6 +56,7 @@ i z terminálu):
 | --- | --- | --- |
 | `run-dev.bat` | Vulkan (NVIDIA/AMD/Intel) | Vulkan SDK |
 | `run-dev-cpu.bat` | jen CPU | nic (stačí CMake + MSVC) |
+| `instalator.bat` | CUDA i Vulkan (instalátor) | Vulkan SDK + CUDA Toolkit |
 
 Název `run-dev-local.bat` je vyhrazený pro tvůj vlastní launcher na míru stroji —
 je v `.gitignore`, takže ho commit nesebere.
@@ -122,22 +131,43 @@ pnpm playwright test
 instalator.bat
 ```
 
-Sestaví release build a z něj MSI balíčky do `target/release/bundle/msi/`
-— jeden pro češtinu, jeden pro angličtinu (`bundle.windows.wix.language`). Skript
-vypíná updater artefakty přes `--config` override, protože ty vyžadují podpisový
-klíč z GitHub Secrets; oficiální podepsané instalátory (NSIS + MSI) staví release
-workflow při tagu `v*`.
+Vyrobí **jeden instalátor, který si GPU backend vybere sám při instalaci**
+(`target/release/bundle/nsis/*-setup.exe`):
 
-MSI se instaluje pro celý počítač (vyžaduje práva správce). Instalátor obsahuje
-jen aplikaci — modely i ComfyUI se stahují až z aplikace podle toho, co uživatel
-zapne.
+| co je ve stroji | co se nainstaluje |
+| --- | --- |
+| NVIDIA s 20 GB VRAM a víc | CUDA (3090, 4090, 5090 — model se vejde do VRAM) |
+| NVIDIA s 12–19 GB VRAM | instalátor se zeptá |
+| cokoli jiného | Vulkan (AMD, Intel, slabší NVIDIA) |
 
-Staví se **s `--features llm-vulkan`**, a to nutně: vestavěná inference je jediný
-backend, který appka má, takže build bez ní vyrobí aplikaci, která se nainstaluje
-a spustí, ale na první zprávu odpoví, že není nastavený žádný AI model. Vulkan SDK
-přitom potřebuje jen stroj, který instalátor staví — uživatel ne, runtime
-`vulkan-1.dll` je součástí ovladače grafiky. Totéž platí pro `release.yml`
-(Windows staví s Vulkanem, macOS s Metalem).
+Rozhoduje `src-tauri/nsis/gpu-backend.nsh`. Kartu pozná přes `nvidia-smi`
+(je součástí ovladače NVIDIE, takže jeho úspěšné spuštění je zároveň důkaz, že
+NVIDIA ve stroji je). Volba se ukládá do registru, protože updater instaluje
+tiše — bez toho by první aktualizace CUDA verzi potichu přepsala Vulkanem.
+
+Cenou je velikost: backend je v llama.cpp zakompilovaný napevno, takže
+instalátor nese **obě** binárky a k tomu cuBLAS + cudart (485 MB, jsou součástí
+CUDA Toolkitu, ne ovladače, takže na cizím stroji nejsou). Nepotřebná větev se
+při instalaci smaže, na disku tedy zůstane jen jedna. Build trvá přes hodinu —
+llama.cpp se kompiluje dvakrát, pro CUDA navíc s kernely pro tři architektury
+(`86;89;120` = RTX 30xx/40xx/50xx; slabší karty mají pod 12 GB VRAM, takže jim
+instalátor CUDA větev stejně nenabídne).
+
+Stroj, který instalátor **staví**, potřebuje Vulkan SDK i CUDA Toolkit. Stroj,
+který ho spouští, nepotřebuje nic.
+
+MSI tuhle detekci neumí (WiX nemá jednoduchý ekvivalent instalačních hooků),
+takže se staví zvlášť a jen s Vulkanem:
+
+```bat
+pnpm tauri build --bundles msi --features llm-vulkan
+```
+
+Oficiální podepsané instalátory staví `release.yml` při tagu `v*` — ale zatím
+**jen s Vulkanem**, protože CUDA Toolkit se na GitHub runner musí doinstalovat
+a llama.cpp by se v jednom jobu kompilovala dvakrát. Kdo chce CUDA větev, musí
+si instalátor postavit lokálně přes `instalator.bat`; aktualizace přes updater
+takovou instalaci vrátí zpět na Vulkan (appka běží dál, jen bez CUDY).
 
 ## Architektura
 
