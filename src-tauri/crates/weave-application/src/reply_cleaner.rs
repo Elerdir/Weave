@@ -56,6 +56,8 @@ const PREFIX_LOOKAHEAD: usize = 24;
 pub struct ReplyCleaner {
     buffer: String,
     emitted: bool,
+    /// Jsme uvnitř bloku `<think>`? Jeho obsah se zahazuje.
+    in_think: bool,
 }
 
 impl ReplyCleaner {
@@ -75,8 +77,68 @@ impl ReplyCleaner {
         self.take(true)
     }
 
+    /// Zahodí úvodní blok `<think>…</think>` (uvažování modelu). Vrací
+    /// `false`, když blok ještě neskončil a je potřeba počkat na jeho konec.
+    ///
+    /// Řeší se **jen začátek odpovědi**, protože přesně tam ho reasoning
+    /// modely dávají — díky tomu nemůže dojít k přeházení textu před blokem
+    /// a za ním. Uvažování se navíc potlačuje už v promptu, tohle je jen
+    /// pojistka pro modely, které si ho spustí i tak. Bez ní uživatel čte
+    /// odstavce úvah, protože samotné značky `<think>` v UI nevidí —
+    /// sanitizace markdownu je zahodí jako neznámou HTML značku.
+    fn strip_leading_think(&mut self, final_flush: bool) -> bool {
+        const OPEN: &str = "<think>";
+        const CLOSE: &str = "</think>";
+
+        if self.emitted {
+            return true;
+        }
+        if !self.in_think {
+            let trimmed = self.buffer.trim_start();
+            if !trimmed.starts_with(OPEN) {
+                // Dokud nemáme dost znaků, nejde poznat, jestli blok začíná —
+                // počkáme, ať se do UI nedostane „<thi".
+                if !final_flush && OPEN.starts_with(trimmed) && !trimmed.is_empty() {
+                    return false;
+                }
+                return true;
+            }
+            let start = self.buffer.len() - trimmed.len();
+            self.buffer.drain(..start + OPEN.len());
+            self.in_think = true;
+        }
+
+        match self.buffer.find(CLOSE) {
+            Some(end) => {
+                self.buffer.drain(..end + CLOSE.len());
+                self.in_think = false;
+                true
+            }
+            None => {
+                // Nedokončený blok na konci streamu = celá odpověď byla jen
+                // uvažování; pouštět ho ven nemá smysl.
+                if final_flush {
+                    self.buffer.clear();
+                    self.in_think = false;
+                    return true;
+                }
+                // Obsah úvahy zahodíme, ale konec bufferu může být rozdělaná
+                // uzavírací značka (`</thi`) — tu si musíme nechat, jinak se
+                // blok nikdy neuzavře a spolkne celou odpověď.
+                let keep = partial_suffix_len(&self.buffer, CLOSE);
+                let cut = self.buffer.len() - keep;
+                self.buffer.drain(..cut);
+                false
+            }
+        }
+    }
+
     fn take(&mut self, final_flush: bool) -> String {
         self.buffer = remove_control_tokens(&self.buffer);
+        if !self.strip_leading_think(final_flush) {
+            // Čekáme na `</think>` — dokud nepřijde, ven nejde nic.
+            return String::new();
+        }
 
         // Rozdělaný token na konci si necháme na příště — jinak by se
         // `<|cha` odeslalo jako text a druhá půlka by dorazila zvlášť.
@@ -103,6 +165,19 @@ impl ReplyCleaner {
         let rest = self.buffer.split_off(split);
         std::mem::replace(&mut self.buffer, rest)
     }
+}
+
+/// Délka nejdelšího konce `text`, který je zároveň začátkem `needle`.
+/// Slouží k podržení rozdělané značky mezi chunky streamu.
+fn partial_suffix_len(text: &str, needle: &str) -> usize {
+    let max = needle.len().saturating_sub(1).min(text.len());
+    (1..=max)
+        .rev()
+        .find(|n| {
+            let at = text.len() - n;
+            text.is_char_boundary(at) && needle.starts_with(&text[at..])
+        })
+        .unwrap_or(0)
 }
 
 /// Vyhodí všechny kompletní řídicí tokeny z textu.
@@ -309,6 +384,51 @@ mod tests {
         let first = cleaner.push("Tohle je dostatečně dlouhý začátek odpovědi, ");
         assert!(!first.is_empty(), "první chunk se měl rovnou odeslat");
         assert_eq!(cleaner.push("pokračování."), "pokračování.");
+    }
+
+    #[test]
+    fn drops_leading_think_block_reported_by_user() {
+        // Přesně to, co lezlo do chatu u Qwen3.8: odstavce úvah před odpovědí.
+        let raw = "<think>
+The user wants me to write a chapter about Nikol.
+                   Let me write it in Czech.
+</think>
+
+Kapitolka první: Jezero";
+        assert_eq!(clean_at_once(raw), "Kapitolka první: Jezero");
+        assert_eq!(clean_char_by_char(raw), "Kapitolka první: Jezero");
+    }
+
+    #[test]
+    fn think_block_split_across_chunks_is_dropped_whole() {
+        let mut cleaner = ReplyCleaner::new();
+        let mut out = cleaner.push("<thi");
+        out.push_str(&cleaner.push("nk>úvaha, kterou nikdo nechce "));
+        out.push_str(&cleaner.push("číst</thi"));
+        out.push_str(&cleaner.push(
+            "nk>
+
+Vlastní odpověď.",
+        ));
+        out.push_str(&cleaner.finish());
+        assert_eq!(out, "Vlastní odpověď.");
+    }
+
+    #[test]
+    fn unfinished_think_block_yields_empty_answer() {
+        // Generování se seklo uprostřed uvažování — ven nemá jít nic.
+        let mut cleaner = ReplyCleaner::new();
+        let mut out = cleaner.push("<think>rozmýšlím a rozmýšlím");
+        out.push_str(&cleaner.finish());
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn think_word_in_normal_text_is_left_alone() {
+        // Bez ostrých závorek to není blok uvažování, ale běžné slovo.
+        let raw = "Napiš think tank do textu a <thinking> ať zůstane.";
+        let cleaned = clean_at_once(raw);
+        assert!(cleaned.starts_with("Napiš think tank"), "{cleaned}");
     }
 
     #[test]
