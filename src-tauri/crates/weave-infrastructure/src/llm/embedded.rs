@@ -220,7 +220,12 @@ fn load_model(
 }
 
 /// Sestaví jednoduchý chat prompt z historie (obecný ChatML-like formát).
-fn build_prompt(messages: &[&Message]) -> String {
+///
+/// `suppress_thinking` doplní na konec prázdný blok `<think></think>` — přesně
+/// to, co dělá oficiální šablona Qwenu při `enable_thinking=false`. Model pak
+/// jde rovnou na odpověď, místo aby vysypal odstavce úvah, které stejně nikdo
+/// nečte, ale platí se za ně tokeny i čas.
+fn build_prompt(messages: &[&Message], suppress_thinking: bool) -> String {
     let mut out = String::new();
     for msg in messages {
         let role = match msg.role {
@@ -234,6 +239,9 @@ fn build_prompt(messages: &[&Message]) -> String {
         ));
     }
     out.push_str("<|im_start|>assistant\n");
+    if suppress_thinking {
+        out.push_str("<think>\n\n</think>\n\n");
+    }
     out
 }
 
@@ -294,6 +302,15 @@ fn worker_loop(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32, rx: Receiver<
             return;
         }
     };
+
+    // Qwen3 a spol. mají v chat šabloně blok `<think>` a ve výchozím stavu
+    // uvažování zapnuté (Qwen3.8 dokonce na `xhigh`). Weave si prompt skládá
+    // sám, takže by model úvahy vysypal do odpovědi — potlačíme je prázdným
+    // blokem, přesně jak to dělá oficiální šablona při enable_thinking=false.
+    let suppress_thinking = super::gguf_meta::model_uses_thinking(&model_path);
+    if suppress_thinking {
+        tracing::info!("Model umí uvažování — potlačuji ho, ať se za úvahy neplatí tokeny");
+    }
     tracing::info!(
         ?model_path,
         plan = decision.plan.label(),
@@ -342,7 +359,9 @@ fn worker_loop(model_path: PathBuf, n_gpu_layers: u32, n_ctx: u32, rx: Receiver<
                     }
                 }
                 let loaded = model.as_ref().expect("model je načtený");
-                if let Err(e) = run_inference(&backend, loaded, n_ctx, &decision, &req) {
+                if let Err(e) =
+                    run_inference(&backend, loaded, n_ctx, &decision, &req, suppress_thinking)
+                {
                     let _ = req.tx.blocking_send(StreamChunk::Error(e.to_string()));
                 }
             }
@@ -375,6 +394,7 @@ fn run_inference(
     n_ctx: u32,
     decision: &OffloadDecision,
     req: &WorkerRequest,
+    suppress_thinking: bool,
 ) -> AppResult<()> {
     // Per-konverzační kontext má přednost před globálním nastavením;
     // obojí držíme v mezích toho, na co byl model trénovaný.
@@ -406,7 +426,7 @@ fn run_inference(
     let reserve = (n_ctx_eff / 4).max(256);
     let mut messages: Vec<&Message> = req.request.messages.iter().collect();
     let tokens = loop {
-        let prompt = build_prompt(&messages);
+        let prompt = build_prompt(&messages, suppress_thinking);
         let tokens = model
             .str_to_token(&prompt, AddBos::Always)
             .map_err(|e| AppError::Llm(format!("Tokenizace: {e}")))?;

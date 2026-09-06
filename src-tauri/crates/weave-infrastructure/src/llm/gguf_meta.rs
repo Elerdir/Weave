@@ -89,6 +89,51 @@ pub fn read_gguf_architecture(path: &Path) -> Result<String, String> {
 /// chybějící soubor (cesta v nastavení přežije přesun i smazání `.gguf`)
 /// projeví až jako „model má 0 MB, vejde se do VRAM" a pak nesrozumitelným
 /// `null result from llama cpp` z enginu.
+/// Používá model „uvažování" (reasoning)? Pozná se z chat šablony uložené
+/// v GGUF hlavičce: Qwen3 a spol. v ní mají blok `<think>`.
+///
+/// Weave si prompt skládá sám, takže se šablona jinak nepoužije — tahle
+/// jediná informace z ní ale rozhoduje, jestli model před odpovědí vysype
+/// několik odstavců úvah (u Qwen3.8 je `reasoning_effort` ve výchozím stavu
+/// `xhigh`). Chyba při čtení = bereme, že neuvažuje; horší, než neušetřit
+/// tokeny, by bylo modelu podsunout blok, kterému nerozumí.
+pub fn model_uses_thinking(path: &Path) -> bool {
+    read_chat_template(path)
+        .map(|t| template_uses_thinking(&t))
+        .unwrap_or(false)
+}
+
+/// Čistá část detekce — oddělená kvůli testům, které nepotřebují GGUF soubor.
+fn template_uses_thinking(template: &str) -> bool {
+    template.contains("<think>")
+}
+
+/// Vytáhne `tokenizer.chat_template` z hlavičky. `None`, když tam není
+/// nebo soubor nejde přečíst.
+fn read_chat_template(path: &Path) -> Option<String> {
+    let file = File::open(path).ok()?;
+    let mut r = BufReader::new(file);
+
+    let mut magic = [0u8; 4];
+    read_exact(&mut r, &mut magic).ok()?;
+    if &magic != b"GGUF" {
+        return None;
+    }
+    let _version = read_u32(&mut r).ok()?;
+    let _tensor_count = read_u64(&mut r).ok()?;
+    let kv_count = read_u64(&mut r).ok()?;
+
+    for _ in 0..kv_count {
+        let key = read_string(&mut r).ok()?;
+        let value_type = read_u32(&mut r).ok()?;
+        if key == "tokenizer.chat_template" && value_type == T_STRING {
+            return read_string(&mut r).ok();
+        }
+        skip_value(&mut r, value_type).ok()?;
+    }
+    None
+}
+
 pub fn check_model_file(path: &Path) -> Result<u64, String> {
     let meta = std::fs::metadata(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -525,6 +570,25 @@ mod tests {
         let path = write_temp(&full[..40]);
         assert!(read_gguf_architecture(&path).is_err());
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn thinking_is_detected_from_chat_template() {
+        // Qwen3.8 (skutečná šablona): blok <think> a enable_thinking.
+        assert!(template_uses_thinking(
+            "{%- if add_generation_prompt %}{{- '<|im_start|>assistant
+' }}             {%- if enable_thinking is defined and enable_thinking is false %}             {{- '<think>
+
+</think>
+
+' }}{%- endif %}{%- endif %}"
+        ));
+        // Gemma a spol. žádné uvažování nemají — nesmíme jim podsouvat blok,
+        // kterému nerozumí.
+        assert!(!template_uses_thinking(
+            "{{ bos_token }}{% for message in messages %}<start_of_turn>{{ message.role }}"
+        ));
+        assert!(!template_uses_thinking(""));
     }
 
     #[test]
