@@ -15,7 +15,7 @@ use llama_cpp_2::{
     context::params::{KvCacheType, LlamaContextParams},
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
-    model::{params::LlamaModelParams, AddBos, LlamaModel},
+    model::{params::LlamaModelParams, AddBos, LlamaChatMessage, LlamaChatTemplate, LlamaModel},
     sampling::LlamaSampler,
 };
 use tokio::sync::mpsc;
@@ -219,29 +219,82 @@ fn load_model(
         .map_err(|e| format!("Načtení modelu selhalo: {e}"))
 }
 
-/// Sestaví jednoduchý chat prompt z historie (obecný ChatML-like formát).
+/// Sestaví prompt pro model.
 ///
-/// `suppress_thinking` doplní na konec prázdný blok `<think></think>` — přesně
-/// to, co dělá oficiální šablona Qwenu při `enable_thinking=false`. Model pak
-/// jde rovnou na odpověď, místo aby vysypal odstavce úvah, které stejně nikdo
-/// nečte, ale platí se za ně tokeny i čas.
-fn build_prompt(messages: &[&Message], suppress_thinking: bool) -> String {
+/// Přednost má **chat šablona zapečená v modelu** — Gemma čeká
+/// `<start_of_turn>`, Qwen ChatML a podsunout jednomu formát druhého vede
+/// k tomu, že model přestane rozumět, kde končí zadání a má začít odpovídat
+/// (u Gemmy 4 z toho lezl jen shluk slabik a svislítek z `<|im_start|>`).
+/// Ruční ChatML zůstává jako záloha pro modely bez šablony.
+///
+/// `suppress_thinking` doplní na konec prázdný blok `<think></think>` —
+/// přesně to, co dělá oficiální šablona Qwenu při `enable_thinking=false`.
+/// Model pak jde rovnou na odpověď, místo aby vysypal odstavce úvah, které
+/// stejně nikdo nečte, ale platí se za ně tokeny i čas.
+fn build_prompt(
+    model: &LlamaModel,
+    template: Option<&LlamaChatTemplate>,
+    messages: &[&Message],
+    suppress_thinking: bool,
+) -> String {
+    let mut out = template
+        .and_then(|tmpl| apply_model_template(model, tmpl, messages))
+        .unwrap_or_else(|| build_chatml_prompt(messages));
+    if suppress_thinking {
+        out.push_str("<think>\n\n</think>\n\n");
+    }
+    out
+}
+
+/// Prožene zprávy šablonou z GGUF. `None` = šablonu nejde použít
+/// (llama.cpp umí jen známé formáty, ne libovolný Jinja).
+fn apply_model_template(
+    model: &LlamaModel,
+    template: &LlamaChatTemplate,
+    messages: &[&Message],
+) -> Option<String> {
+    let chat: Vec<LlamaChatMessage> = messages
+        .iter()
+        .filter_map(|msg| {
+            LlamaChatMessage::new(
+                role_name(&msg.role).to_string(),
+                msg.content.trim().to_string(),
+            )
+            .ok()
+        })
+        .collect();
+    if chat.len() != messages.len() {
+        tracing::warn!("Zprávu nejde předat šabloně, skládám prompt ručně");
+        return None;
+    }
+    match model.apply_chat_template(template, &chat, true) {
+        Ok(prompt) => Some(prompt),
+        Err(e) => {
+            tracing::warn!(error = %e, "Chat šablonu modelu nejde použít, skládám prompt ručně");
+            None
+        }
+    }
+}
+
+fn role_name(role: &Role) -> &'static str {
+    match role {
+        Role::System => "system",
+        Role::User => "user",
+        Role::Assistant => "assistant",
+    }
+}
+
+/// Záloha pro modely bez použitelné šablony — obecný ChatML.
+fn build_chatml_prompt(messages: &[&Message]) -> String {
     let mut out = String::new();
     for msg in messages {
-        let role = match msg.role {
-            Role::System => "system",
-            Role::User => "user",
-            Role::Assistant => "assistant",
-        };
         out.push_str(&format!(
-            "<|im_start|>{role}\n{}<|im_end|>\n",
+            "<|im_start|>{}\n{}<|im_end|>\n",
+            role_name(&msg.role),
             msg.content.trim()
         ));
     }
     out.push_str("<|im_start|>assistant\n");
-    if suppress_thinking {
-        out.push_str("<think>\n\n</think>\n\n");
-    }
     out
 }
 
@@ -420,13 +473,23 @@ fn run_inference(
         .new_context(backend, ctx_params)
         .map_err(|e| AppError::Llm(format!("Kontext: {e}")))?;
 
+    // Šablona zapečená v modelu; None u modelů, které ji nemají nebo ji
+    // llama.cpp neumí (pak se skládá ChatML ručně).
+    let chat_template = match model.chat_template(None) {
+        Ok(tmpl) => Some(tmpl),
+        Err(e) => {
+            tracing::warn!(error = %e, "Model neuvádí chat šablonu, použiji ChatML");
+            None
+        }
+    };
+
     // Historie musí nechat v okně rezervu pro odpověď — jinak decode spadne
     // na „failed to find a memory slot" a generování nejde vůbec spustit.
     // Vypouštíme nejstarší zprávy, dokud se prompt nevejde.
     let reserve = (n_ctx_eff / 4).max(256);
     let mut messages: Vec<&Message> = req.request.messages.iter().collect();
     let tokens = loop {
-        let prompt = build_prompt(&messages, suppress_thinking);
+        let prompt = build_prompt(model, chat_template.as_ref(), &messages, suppress_thinking);
         let tokens = model
             .str_to_token(&prompt, AddBos::Always)
             .map_err(|e| AppError::Llm(format!("Tokenizace: {e}")))?;
