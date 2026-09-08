@@ -75,6 +75,15 @@ zjištěné přes ggml (vidí i AMD a Intel, ne jen NVIDII):
 | `PartialLayers` | hustý model větší než VRAM | na GPU jde tolik vrstev, kolik se vejde |
 | `Cpu` | není použitelná GPU | vše na CPU |
 
+**CUDA větev se nedělí.** Na NVIDII je karta typicky dost velká na celý model,
+takže se místo dělení zkrátí kontext na to, co se do VRAM vejde vedle vah — a
+když se nevejdou ani ty samotné, jde všechno na CPU. Rozdíl je vidět u modelů
+s velkými hlavami: Gemma 4 má K/V hlavu 512 dimenzí, tedy 480 kB KV cache na
+token, takže na 24GB kartě vyjde celý model na GPU do ~13 tisíc tokenů (Qwen3.8
+s poloviční hlavou do ~25 tisíc). Zkrácení se zapíše do logu. Dělení vrstev
+i hybridní MoE režim zůstávají Vulkanu, kde bývá karta menší a kompromis
+dává smysl.
+
 Naivní `-ngl 99` u modelu, který se nevejde, končí OOM nebo (na Windows/WDDM)
 přetečením do RAM přes PCIe — a to je pomalejší než čistý CPU. Naivní „offloadni
 N vrstev" je u MoE špatně taky: do VRAM se dostanou i experti, kteří se pro

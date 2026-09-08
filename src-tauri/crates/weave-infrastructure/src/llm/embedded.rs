@@ -40,6 +40,12 @@ const ACTIVE_BACKEND: ModelBackend = ModelBackend::LocalVulkan;
 #[cfg(not(any(feature = "llm-metal", feature = "llm-cuda", feature = "llm-vulkan")))]
 const ACTIVE_BACKEND: ModelBackend = ModelBackend::LocalCpu;
 
+/// CUDA běží jen na NVIDII, kde je karta typicky dost velká na celý model —
+/// dělení mezi VRAM a RAM se tam nevyplatí a raději se zkrátí kontext
+/// (viz `offload_plan::plan_whole_model`). Vulkan cílí i na malé karty
+/// integrovaných GPU, tam kompromis smysl dává.
+const WHOLE_MODEL_ONLY: bool = cfg!(feature = "llm-cuda");
+
 struct WorkerRequest {
     request: ChatRequest,
     tx: mpsc::Sender<StreamChunk>,
@@ -132,6 +138,7 @@ fn detect_machine() -> MachineProfile {
                 }),
                 device_index: Some(device.index),
                 cpu_cores,
+                whole_model_only: WHOLE_MODEL_ONLY,
             }
         }
         None => {
@@ -140,6 +147,7 @@ fn detect_machine() -> MachineProfile {
                 vram_bytes: None,
                 device_index: None,
                 cpu_cores,
+                whole_model_only: WHOLE_MODEL_ONLY,
             }
         }
     }
@@ -167,6 +175,7 @@ fn decide_offload(
             vram_bytes: None,
             device_index: None,
             cpu_cores: super::device_catalog::physical_cores(),
+            whole_model_only: WHOLE_MODEL_ONLY,
         }
     } else {
         detect_machine()
@@ -451,7 +460,12 @@ fn run_inference(
 ) -> AppResult<()> {
     // Per-konverzační kontext má přednost před globálním nastavením;
     // obojí držíme v mezích toho, na co byl model trénovaný.
-    let n_ctx_requested = req.request.context_length.unwrap_or(n_ctx);
+    // Plán může kontext zkrátit, aby se model vešel celý do VRAM (CUDA).
+    let n_ctx_requested = req
+        .request
+        .context_length
+        .unwrap_or(n_ctx)
+        .min(decision.context_tokens);
     let n_ctx_eff = n_ctx_requested.max(512).min(model.n_ctx_train());
 
     let mut ctx_params = LlamaContextParams::default()
