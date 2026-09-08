@@ -64,6 +64,13 @@ pub struct MachineProfile {
     pub device_index: Option<usize>,
     /// Počet fyzických jader CPU.
     pub cpu_cores: usize,
+    /// Nedělit model mezi VRAM a RAM: buď se vejde celý na GPU (klidně za
+    /// cenu kratšího kontextu), nebo se počítá celý na CPU.
+    ///
+    /// Zapíná se u CUDA větve instalátoru. Dělení vrstev i hybridní MoE
+    /// režim zůstávají Vulkanu, kde je karta typicky menší a kompromis
+    /// dává smysl.
+    pub whole_model_only: bool,
 }
 
 /// Zvolená strategie. Slouží hlavně k logování a testům — konkrétní
@@ -107,6 +114,11 @@ pub struct OffloadDecision {
     pub quantized_kv: bool,
     /// Na kterém zařízení běžet (`None` = nechat volbu na llama.cpp).
     pub device_index: Option<usize>,
+    /// Kontext, se kterým se má model načíst. Menší než požadovaný jen
+    /// tehdy, když se model jinak nevejde celý do VRAM (viz
+    /// `whole_model_only`) — KV cache u modelů s velkými hlavami roste
+    /// rychleji než samotné váhy.
+    pub context_tokens: u32,
     /// Vysvětlení pro log a UI.
     pub reason: String,
 }
@@ -173,6 +185,91 @@ fn context_advice(info: &GgufInfo, kv_budget: u64) -> String {
         ),
         None => String::new(),
     }
+}
+
+/// Nejmenší kontext, se kterým má smysl model na GPU tlačit. Pod ním je
+/// lepší mít celý kontext na CPU než rychlé generování, do kterého se
+/// nevejde ani zadání.
+const MIN_WHOLE_MODEL_CONTEXT: u32 = 4096;
+
+/// Plán pro CUDA: model buď celý na GPU, nebo celý na CPU.
+///
+/// Když se váhy do VRAM vejdou a překáží jen KV cache, zkrátí se kontext na
+/// to, co zbylo — u modelů s velkými hlavami (Gemma 4 má 512dimenzionální,
+/// tedy 480 kB na token) roste KV cache rychleji než samotné váhy, takže
+/// tudy vede cesta k plné rychlosti. Dělení vrstev ani hybridní MoE se tu
+/// zámerně nepoužívá, viz `MachineProfile::whole_model_only`.
+#[allow(clippy::too_many_arguments)]
+fn plan_whole_model(
+    model_bytes: u64,
+    info: &GgufInfo,
+    machine: &MachineProfile,
+    context_tokens: u32,
+    weights_budget: u64,
+    vram: u64,
+    threads: i32,
+    cpu_only: &dyn Fn(String) -> OffloadDecision,
+) -> OffloadDecision {
+    const MB: u64 = 1024 * 1024;
+
+    if model_bytes > weights_budget {
+        return cpu_only(format!(
+            "Model ({} MB) se do VRAM ({} MB) nevejde ani bez KV cache — počítám na CPU.",
+            model_bytes / MB,
+            vram / MB
+        ));
+    }
+
+    // KV cache se u plného běhu nekvantuje, počítá se tedy s F16.
+    let kv_budget = weights_budget - model_bytes;
+    let fits_now = estimate_kv_bytes(info, context_tokens, false) <= kv_budget;
+    let effective = if fits_now {
+        context_tokens
+    } else {
+        match max_context_for_kv_budget_f16(info, kv_budget) {
+            Some(tokens) if tokens >= MIN_WHOLE_MODEL_CONTEXT => tokens.min(context_tokens),
+            _ => {
+                return cpu_only(format!(
+                    "Model ({} MB) by se do VRAM ({} MB) vešel, ale nezbylo by v ní na použitelný kontext — počítám na CPU.",
+                    model_bytes / MB,
+                    vram / MB
+                ))
+            }
+        }
+    };
+
+    let reason = if effective == context_tokens {
+        format!(
+            "Model ({} MB) se vejde do VRAM ({} MB) — všechny vrstvy na GPU.",
+            model_bytes / MB,
+            vram / MB
+        )
+    } else {
+        format!(
+            "Model ({} MB) jede celý na GPU; kontext zkrácen z {context_tokens} na {effective} tokenů, aby se do VRAM ({} MB) vešla i KV cache.",
+            model_bytes / MB,
+            vram / MB
+        )
+    };
+
+    OffloadDecision {
+        plan: OffloadPlan::FullGpu,
+        gpu_layers: ALL_GPU_LAYERS,
+        cpu_moe: false,
+        op_offload: true,
+        threads,
+        quantized_kv: false,
+        device_index: machine.device_index,
+        context_tokens: effective,
+        reason,
+    }
+}
+
+/// Jako `max_context_for_kv_budget`, ale pro nekvantovanou (F16) KV cache.
+fn max_context_for_kv_budget_f16(info: &GgufInfo, kv_budget: u64) -> Option<u32> {
+    let per_token = kv_bytes_per_token(info)?.checked_mul(2)?;
+    let tokens = kv_budget / per_token;
+    (tokens >= 512).then(|| u32::try_from(tokens).unwrap_or(u32::MAX))
 }
 
 /// Hláška pro plán `PartialLayers`. Rozlišuje dvě dost odlišné situace, které
@@ -266,6 +363,7 @@ pub fn plan_offload(
         threads,
         quantized_kv: false,
         device_index: None,
+        context_tokens,
         reason,
     };
 
@@ -285,6 +383,19 @@ pub fn plan_offload(
     }
     let weights_budget = budget - COMPUTE_BUFFER_BYTES;
 
+    if machine.whole_model_only {
+        return plan_whole_model(
+            model_bytes,
+            info,
+            machine,
+            context_tokens,
+            weights_budget,
+            vram,
+            threads,
+            &cpu_only,
+        );
+    }
+
     // 1) Vejde se celý model i s KV cache? Pak žádná kouzla nepotřebujeme.
     let kv_f16 = estimate_kv_bytes(info, context_tokens, false);
     if model_bytes + kv_f16 <= weights_budget {
@@ -296,6 +407,7 @@ pub fn plan_offload(
             threads,
             quantized_kv: false,
             device_index: machine.device_index,
+            context_tokens,
             reason: format!(
                 "Model ({} MB) se vejde do VRAM ({} MB) — všechny vrstvy na GPU.",
                 model_bytes / (1024 * 1024),
@@ -324,6 +436,7 @@ pub fn plan_offload(
                 threads,
                 quantized_kv: true,
                 device_index: machine.device_index,
+                context_tokens,
                 reason: format!(
                     "MoE model ({} MB) je větší než VRAM ({} MB) — experti zůstávají \
                      v RAM, attention a KV cache jedou na GPU.",
@@ -370,6 +483,7 @@ pub fn plan_offload(
         threads,
         quantized_kv: true,
         device_index: machine.device_index,
+        context_tokens,
         reason: partial_layers_reason(
             model_bytes,
             vram,
@@ -431,6 +545,7 @@ mod tests {
             vram_bytes: Some(7180 * 1024 * 1024),
             device_index: Some(0),
             cpu_cores: 16,
+            whole_model_only: false,
         };
         let decision = plan_offload(16_200_000_000, &info, &machine, 64_000, true);
         assert_eq!(decision.plan, OffloadPlan::Cpu);
@@ -487,6 +602,7 @@ mod tests {
             vram_bytes: Some(23_600 * 1024 * 1024),
             device_index: Some(0),
             cpu_cores: 12,
+            whole_model_only: false,
         };
 
         let at_64k = plan_offload(16_810_714_528, &info, &machine, 64_000, true);
@@ -509,11 +625,98 @@ mod tests {
         assert_eq!(at_24k.plan, OffloadPlan::FullGpu, "{}", at_24k.reason);
     }
 
+    /// Profil 3090 s CUDA větví: model buď celý na GPU, nebo celý na CPU.
+    fn cuda_3090() -> MachineProfile {
+        MachineProfile {
+            vram_bytes: Some(23_728 * 1024 * 1024),
+            device_index: Some(0),
+            cpu_cores: 12,
+            whole_model_only: true,
+        }
+    }
+
+    #[test]
+    fn cuda_shortens_context_instead_of_splitting_the_model() {
+        // Gemma 4 26B: váhy 15,6 GiB se do 24GB karty vejdou, ale KV cache
+        // pro 64k tokenů by byla 29 GiB. Na Vulkanu z toho vyjde hybrid,
+        // na CUDA se má místo dělení zkrátit kontext.
+        let info = gemma4_26b_info();
+        let size = 16_017 * 1024 * 1024;
+
+        let cuda = plan_offload(size, &info, &cuda_3090(), 64_000, true);
+        assert_eq!(cuda.plan, OffloadPlan::FullGpu, "{}", cuda.reason);
+        assert!(
+            cuda.context_tokens < 64_000,
+            "kontext se měl zkrátit: {}",
+            cuda.reason
+        );
+        assert!(
+            cuda.context_tokens >= MIN_WHOLE_MODEL_CONTEXT,
+            "zkrácený kontext musí zůstat použitelný: {}",
+            cuda.context_tokens
+        );
+        assert!(!cuda.cpu_moe, "na CUDA se experti do RAM nevyhazují");
+        assert!(cuda.reason.contains("zkrácen"), "{}", cuda.reason);
+
+        let mut vulkan = cuda_3090();
+        vulkan.whole_model_only = false;
+        let vulkan = plan_offload(size, &info, &vulkan, 64_000, true);
+        assert_eq!(vulkan.plan, OffloadPlan::HybridMoe, "{}", vulkan.reason);
+        assert_eq!(vulkan.context_tokens, 64_000, "Vulkan kontext nezkracuje");
+    }
+
+    #[test]
+    fn cuda_keeps_requested_context_when_it_already_fits() {
+        let info = gemma4_26b_info();
+        let decision = plan_offload(16_017 * 1024 * 1024, &info, &cuda_3090(), 8_000, true);
+        assert_eq!(decision.plan, OffloadPlan::FullGpu, "{}", decision.reason);
+        assert_eq!(decision.context_tokens, 8_000);
+        assert!(!decision.reason.contains("zkrácen"), "{}", decision.reason);
+    }
+
+    #[test]
+    fn cuda_falls_back_to_cpu_when_weights_alone_do_not_fit() {
+        // 40GB model se do 24GB karty nevejde ani bez KV cache — na CUDA
+        // se nedělí, jde celý do RAM.
+        let info = gemma4_26b_info();
+        let decision = plan_offload(40 * GB, &info, &cuda_3090(), 8_000, true);
+        assert_eq!(decision.plan, OffloadPlan::Cpu, "{}", decision.reason);
+        assert_eq!(decision.gpu_layers, 0);
+        assert!(decision.reason.contains("nevejde"), "{}", decision.reason);
+    }
+
+    #[test]
+    fn cuda_qwen35_gets_bigger_context_than_gemma() {
+        // Qwen má poloviční KV cache na token (256 místo 512 dimenzí hlavy),
+        // takže se do stejné karty vejde s výrazně delším kontextem.
+        let gemma = plan_offload(
+            16_017 * 1024 * 1024,
+            &gemma4_26b_info(),
+            &cuda_3090(),
+            64_000,
+            true,
+        );
+        let qwen = plan_offload(
+            16_031 * 1024 * 1024,
+            &qwen35_27b_info(),
+            &cuda_3090(),
+            64_000,
+            true,
+        );
+        assert!(
+            qwen.context_tokens > gemma.context_tokens,
+            "Qwen {} vs Gemma {}",
+            qwen.context_tokens,
+            gemma.context_tokens
+        );
+    }
+
     fn machine(vram_gb: u64) -> MachineProfile {
         MachineProfile {
             vram_bytes: Some(vram_gb * GB),
             device_index: Some(1),
             cpu_cores: 16,
+            whole_model_only: false,
         }
     }
 
@@ -568,6 +771,7 @@ mod tests {
             vram_bytes: None,
             device_index: None,
             cpu_cores: 8,
+            whole_model_only: false,
         };
         let d = plan_offload(16 * GB, &moe_info(), &machine, 4096, true);
         assert_eq!(d.plan, OffloadPlan::Cpu);

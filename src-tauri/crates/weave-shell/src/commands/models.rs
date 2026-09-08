@@ -279,6 +279,9 @@ fn plan_gpu_layers(path: &str, size_bytes: u64, free_vram_mb: u64) -> u32 {
         cpu_cores: std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4),
+        // Tenhle odhad slouží jen k doporučení počtu vrstev při výběru
+        // modelu; o zkrácení kontextu rozhoduje až plán při načítání.
+        whole_model_only: false,
     };
     plan_offload(size_bytes, &info, &machine, DEFAULT_PLAN_CONTEXT, true).gpu_layers
 }
