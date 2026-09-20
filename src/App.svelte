@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { themeStore } from "$lib/theme/index.svelte";
   import { conversationStore } from "$lib/stores/conversations.svelte";
   import Wizard from "$features/wizard/Wizard.svelte";
@@ -31,8 +32,7 @@
       return;
     }
 
-    // Zkontroluj zda je to první spuštění
-    const firstRun = !localStorage.getItem("weave.setup-complete");
+    const firstRun = await isFirstRun();
     showWizard = firstRun;
 
     if (!firstRun) {
@@ -48,8 +48,27 @@
     ready = true;
   });
 
+  /**
+   * Má se ukázat úvodní průvodce? Rozhoduje backend podle databáze — dřív to
+   * bylo v `localStorage`, jenže ten žije v datové složce WebView2 a při
+   * poškození její leveldb se zápisy tiše zahazují, takže průvodce naskakoval
+   * po každém spuštění. Fallback na `localStorage` zůstává pro běh mimo Tauri
+   * (webové e2e testy), kde `invoke` neexistuje.
+   */
+  async function isFirstRun(): Promise<boolean> {
+    try {
+      return await invoke<boolean>("needs_setup");
+    } catch (err) {
+      console.warn("needs_setup selhal, používám localStorage:", err);
+      return !localStorage.getItem("weave.setup-complete");
+    }
+  }
+
   function onWizardComplete() {
     localStorage.setItem("weave.setup-complete", "1");
+    invoke("mark_setup_complete").catch((err) =>
+      console.warn("mark_setup_complete selhal:", err)
+    );
     showWizard = false;
     conversationStore.loadAll().catch((err) => console.warn("loadAll selhal:", err));
   }
