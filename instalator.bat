@@ -151,7 +151,12 @@ if errorlevel 1 goto :buildfail
 cargo build --release -p weave-app --features llm-cuda
 if errorlevel 1 goto :buildfail
 
-if not exist "%PAYLOAD%" mkdir "%PAYLOAD%"
+REM Payload se plni znovu pri kazdem buildu. Stare DLL se musi smazat:
+REM po prechodu na jinou verzi CUDY by tu jinak zustaly obe sady (12.x
+REM i 13.x) a instalator by narostl o pul giga mrtveho kodu, ktery navic
+REM hook nakopiruje uzivateli na disk.
+if exist "%PAYLOAD%" rmdir /s /q "%PAYLOAD%"
+mkdir "%PAYLOAD%"
 copy /y "target\release\weave-app.exe" "%PAYLOAD%\weave-app.exe" >nul
 if errorlevel 1 goto :buildfail
 
