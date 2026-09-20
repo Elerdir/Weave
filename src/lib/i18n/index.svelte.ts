@@ -1,11 +1,20 @@
+import { invoke } from "@tauri-apps/api/core";
+
 import type { Messages } from "./locales/cs";
 import cs from "./locales/cs";
 import en from "./locales/en";
 
 export type Locale = "cs" | "en";
 
+/** Rychlá keš pro start bez probliknutí. Zdrojem pravdy je databáze. */
 const STORAGE_KEY = "weave.locale";
+/** Klíč v `app_config` (SQLite) — přežije i poškozená data WebView2. */
+const SETTING_KEY = "app.locale";
 const BUNDLES: Record<Locale, Messages> = { cs, en };
+
+function isLocale(value: unknown): value is Locale {
+  return typeof value === "string" && value in BUNDLES;
+}
 
 function detectLocale(): Locale {
   const stored = localStorage.getItem(STORAGE_KEY) as Locale | null;
@@ -40,14 +49,46 @@ function createI18nStore() {
   let locale = $state<Locale>(detectLocale());
 
   $effect.root(() => {
-    document.documentElement.lang = locale;
+    // Vnořený $effect: kořen se spustí jen jednou, takže bez něj by se `lang`
+    // po přepnutí jazyka neaktualizoval.
+    $effect(() => {
+      document.documentElement.lang = locale;
+    });
   });
 
   return {
     get locale() { return locale; },
     setLocale(l: Locale) {
       locale = l;
-      localStorage.setItem(STORAGE_KEY, l);
+      // Databáze je zdroj pravdy, localStorage jen keš pro rychlý start.
+      try {
+        localStorage.setItem(STORAGE_KEY, l);
+      } catch (err) {
+        console.warn("Jazyk nejde uložit do localStorage:", err);
+      }
+      invoke("set_app_setting", { key: SETTING_KEY, value: l }).catch((err) =>
+        console.warn("Uložení jazyka selhalo:", err)
+      );
+    },
+
+    /**
+     * Načte jazyk z databáze. Volá se při startu — `localStorage` se drží
+     * v datové složce WebView2 a při jejím poškození se z něj nic nepřečte.
+     *
+     * Když v databázi nic není, přenese se tam dosavadní volba (z keše nebo
+     * z jazyka systému), ať uživatel o nastavení nepřijde.
+     */
+    async hydrate() {
+      try {
+        const stored = await invoke<string | null>("get_app_setting", { key: SETTING_KEY });
+        if (isLocale(stored)) {
+          locale = stored;
+          return;
+        }
+        await invoke("set_app_setting", { key: SETTING_KEY, value: locale });
+      } catch (err) {
+        console.warn("Načtení jazyka z databáze selhalo:", err);
+      }
     },
     t(key: string, params?: Record<string, string | number>): string {
       return format(resolve(BUNDLES[locale], key), params);

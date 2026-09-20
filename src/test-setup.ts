@@ -30,3 +30,19 @@ vi.mock("@tauri-apps/plugin-updater", () => ({
 vi.mock("@tauri-apps/plugin-process", () => ({
   relaunch: vi.fn(() => Promise.resolve()),
 }));
+
+// jsdom nemá matchMedia; themeStore se na něj ptá hned při importu (režim
+// „podle systému"), takže bez téhle náhrady spadne každý test, který ho
+// zatáhne — i nepřímo přes komponentu.
+if (!window.matchMedia) {
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(() => false),
+  })) as unknown as typeof window.matchMedia;
+}
