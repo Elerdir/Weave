@@ -168,6 +168,8 @@ pub fn run() {
             commands::settings::get_masked_api_key,
             commands::settings::get_app_setting,
             commands::settings::set_app_setting,
+            commands::settings::needs_setup,
+            commands::settings::mark_setup_complete,
             commands::settings::test_comfyui_connection,
             commands::settings::restart_runtime,
             commands::comfy_installer::get_comfyui_status,

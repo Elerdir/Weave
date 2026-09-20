@@ -119,6 +119,49 @@ pub async fn set_app_setting(
         .map_err(|e| e.to_string())
 }
 
+/// Příznak, že uživatel prošel úvodním průvodcem.
+///
+/// Záměrně v databázi, ne v `localStorage` prohlížeče: ten se drží v datové
+/// složce WebView2, a když se jeho leveldb poškodí (stačí tvrdé ukončení
+/// procesu), WebView2 zápisy při dalším startu tiše zahodí — průvodce pak
+/// naskakuje po každém spuštění, i když ho uživatel prošel.
+pub const SETUP_COMPLETED_KEY: &str = "app.setup_completed";
+
+/// Má se při startu ukázat úvodní průvodce?
+#[tauri::command]
+pub async fn needs_setup(state: State<'_, AppState>) -> Result<bool, String> {
+    use weave_infrastructure::db::app_config;
+
+    let completed = app_config::get(&state.pool, SETUP_COMPLETED_KEY)
+        .await
+        .map_err(|e| e.to_string())?;
+    let model_path = app_config::get(&state.pool, LLM_MODEL_PATH_KEY)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(wizard_needed(completed.as_deref(), model_path.as_deref()))
+}
+
+/// Zapamatuje si, že průvodce proběhl.
+#[tauri::command]
+pub async fn mark_setup_complete(state: State<'_, AppState>) -> Result<(), String> {
+    weave_infrastructure::db::app_config::set(&state.pool, SETUP_COMPLETED_KEY, "1")
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Rozhodnutí oddělené od databáze, ať jde otestovat.
+///
+/// Druhá podmínka je pojistka: když se příznak ztratí (přenos konfigurace,
+/// ruční zásah do DB), ale model je nastavený, nemá průvodce co ukázat —
+/// proklikávat ho dokola je jen otrava.
+fn wizard_needed(completed: Option<&str>, model_path: Option<&str>) -> bool {
+    if completed.map(str::trim) == Some("1") {
+        return false;
+    }
+    model_path.is_none_or(|path| path.trim().is_empty())
+}
+
 /// Ověří dostupnost ComfyUI serveru na dané URL.
 #[tauri::command]
 pub async fn test_comfyui_connection(url: String) -> Result<bool, String> {
@@ -322,4 +365,36 @@ pub async fn resolve_llm_with_backend(
     // Žádný backend nešel sestavit (embedded bez modelu, neznámá hodnota…) —
     // jasná chyba místo tichého pádu na cloud API bez klíče.
     Arc::new(UnconfiguredLlmClient)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wizard_needed;
+
+    #[test]
+    fn wizard_shows_on_a_fresh_install() {
+        assert!(wizard_needed(None, None));
+    }
+
+    #[test]
+    fn wizard_stays_hidden_once_completed() {
+        assert!(!wizard_needed(Some("1"), None));
+        assert!(!wizard_needed(
+            Some("1"),
+            Some("D:/models/weave/model.gguf")
+        ));
+    }
+
+    #[test]
+    fn configured_app_skips_wizard_even_without_the_flag() {
+        // Regrese: příznak se dřív držel v localStorage a poškozená leveldb
+        // ho při každém startu zahodila — průvodce pak naskakoval pořád.
+        assert!(!wizard_needed(None, Some("D:/models/weave/model.gguf")));
+    }
+
+    #[test]
+    fn empty_model_path_counts_as_unconfigured() {
+        assert!(wizard_needed(None, Some("")));
+        assert!(wizard_needed(None, Some("   ")));
+    }
 }
