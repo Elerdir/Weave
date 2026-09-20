@@ -51,7 +51,10 @@
   let searchTimer: ReturnType<typeof setTimeout>;
 
   // Referenční obrázky pro generování (náhled hned po výběru)
-  const MAX_REFERENCE_IMAGES = 4;
+  // Musí sedět s MAX_IMAGE_GENERATION_REFERENCES v send_message.rs — backend
+  // přebytečné reference zahodí, takže nižší číslo tady by jen tiše bránilo
+  // uživateli přidat fotky, které by jinak prošly.
+  const MAX_REFERENCE_IMAGES = 40;
   let refImages = $state<RefImage[]>([]);
   let referencePreservation = $state("");
   let translateImagePrompt = $state(true);

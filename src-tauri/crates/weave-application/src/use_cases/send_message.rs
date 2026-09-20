@@ -55,7 +55,14 @@ const DEFAULT_NEGATIVE_PROMPT: &str = "blurry, low quality, deformed, disfigured
 /// Tagy pro věrné oči — přidávají se k pozitivnímu promptu u generování
 /// podle referenční fotky (PuLID = portrét osoby, kde oči nejvíc „táhnou").
 const EYE_QUALITY_TAGS: &str = "detailed symmetric eyes, natural eyes, sharp focus";
-const MAX_IMAGE_GENERATION_REFERENCES: usize = 4;
+/// Strop počtu referenčních fotek pro PuLID.
+///
+/// Workflow jich zvládne libovolně (každá má vlastní `LoadImage` a řetězí se
+/// přes `ImageBatch`), takže je to jen pojistka proti nechtěnému výběru celé
+/// složky: každá fotka se nahrává do ComfyUI zvlášť a PuLID z nich průměruje
+/// identity embeddingy, takže po několika desítkách už další nic nepřidají,
+/// jen prodlužují přípravu.
+const MAX_IMAGE_GENERATION_REFERENCES: usize = 40;
 
 /// Klíčová slova (cz+en) značící požadavek na celou postavu. Když je prompt
 /// obsahuje, generuje se na výšku (SDXL jinak do čtverce postavu ořízne

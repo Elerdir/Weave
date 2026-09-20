@@ -717,6 +717,14 @@ fn build_txt2img_workflow(req: &ImageRequest) -> serde_json::Value {
     workflow
 }
 
+/// Odkud začínají dynamické uzly referenčních obrázků.
+///
+/// Musí být nad všemi pevnými ID workflow — nejvyšší je 41 (FaceDetailer).
+/// Dřív se začínalo na 20 a řetěz `ImageBatch` u 12 referencí sahal až na 42,
+/// takže si s zapnutým doladěním obličeje uzly navzájem přepisovaly. Při
+/// tehdejším stropu čtyř referencí se na to nedalo narazit.
+const REFERENCE_NODE_BASE: usize = 100;
+
 /// PuLID workflow s podporou VÍCE referenčních obrázků: každý má vlastní
 /// LoadImage uzel (id 20, 21, …) a dohromady se řetězí core uzly `ImageBatch`
 /// (id 30, 31, …) do jedné dávky — PuLID pak identity embeddingy z dávky
@@ -799,11 +807,11 @@ fn build_pulid_workflow(req: &ImageRequest, uploaded_images: &[String]) -> serde
         }
     });
 
-    // LoadImage uzel pro každou referenci (id 20, 21, …)
+    // LoadImage uzel pro každou referenci (id 100, 101, …)
     let map = workflow.as_object_mut().expect("workflow je JSON objekt");
     for (i, image) in uploaded_images.iter().enumerate() {
         map.insert(
-            format!("{}", 20 + i),
+            format!("{}", REFERENCE_NODE_BASE + i),
             serde_json::json!({
                 "class_type": "LoadImage",
                 "inputs": { "image": image }
@@ -811,10 +819,12 @@ fn build_pulid_workflow(req: &ImageRequest, uploaded_images: &[String]) -> serde
         );
     }
 
-    // Řetěz ImageBatch uzlů: (20+21)→30, (30+22)→31, … Poslední článek
-    // (nebo přímo LoadImage u jediné fotky) jde do ApplyPulid jako uzel "8".
-    let load_start = 20usize;
-    let batch_start = load_start + uploaded_images.len().max(10);
+    // Řetěz ImageBatch uzlů: (100+101)→(100+n), … Poslední článek
+    // (nebo přímo LoadImage u jediné fotky) jde do ApplyPulid jako uzel "12".
+    // Batch uzly navazují hned za posledním LoadImage, takže celý dynamický
+    // blok zůstává souvislý a nad pevnými ID.
+    let load_start = REFERENCE_NODE_BASE;
+    let batch_start = load_start + uploaded_images.len();
     let mut last_ref: serde_json::Value = serde_json::json!([load_start.to_string(), 0]);
     for i in 1..uploaded_images.len() {
         let batch_id = format!("{}", batch_start + i - 1);
@@ -1428,14 +1438,14 @@ mod tests {
             workflow["1"]["inputs"]["ckpt_name"],
             crate::comfy_installer::REALVIS_CHECKPOINT_FILENAME
         );
-        assert_eq!(workflow["20"]["class_type"], "LoadImage");
-        assert_eq!(workflow["20"]["inputs"]["image"], "uploaded-ref.png");
+        assert_eq!(workflow["100"]["class_type"], "LoadImage");
+        assert_eq!(workflow["100"]["inputs"]["image"], "uploaded-ref.png");
         // Jediná fotka → žádný ImageBatch, LoadImage jde do ApplyPulid přímo
         assert_eq!(
             workflow["12"]["inputs"]["image"],
-            serde_json::json!(["20", 0])
+            serde_json::json!(["100", 0])
         );
-        assert!(workflow.get("30").is_none());
+        assert!(workflow.get("101").is_none());
     }
 
     #[test]
@@ -1445,33 +1455,67 @@ mod tests {
         let workflow = build_basic_workflow(&req, &refs, None);
 
         // Tři LoadImage uzly
-        assert_eq!(workflow["20"]["inputs"]["image"], "a.png");
-        assert_eq!(workflow["21"]["inputs"]["image"], "b.png");
-        assert_eq!(workflow["22"]["inputs"]["image"], "c.png");
+        assert_eq!(workflow["100"]["inputs"]["image"], "a.png");
+        assert_eq!(workflow["101"]["inputs"]["image"], "b.png");
+        assert_eq!(workflow["102"]["inputs"]["image"], "c.png");
 
-        // Řetěz: 30 = batch(20, 21), 31 = batch(30, 22)
-        assert_eq!(workflow["30"]["class_type"], "ImageBatch");
+        // Řetěz: 103 = batch(100, 101), 104 = batch(103, 102)
+        assert_eq!(workflow["103"]["class_type"], "ImageBatch");
         assert_eq!(
-            workflow["30"]["inputs"]["image1"],
-            serde_json::json!(["20", 0])
+            workflow["103"]["inputs"]["image1"],
+            serde_json::json!(["100", 0])
         );
         assert_eq!(
-            workflow["30"]["inputs"]["image2"],
-            serde_json::json!(["21", 0])
+            workflow["103"]["inputs"]["image2"],
+            serde_json::json!(["101", 0])
         );
         assert_eq!(
-            workflow["31"]["inputs"]["image1"],
-            serde_json::json!(["30", 0])
+            workflow["104"]["inputs"]["image1"],
+            serde_json::json!(["103", 0])
         );
         assert_eq!(
-            workflow["31"]["inputs"]["image2"],
-            serde_json::json!(["22", 0])
+            workflow["104"]["inputs"]["image2"],
+            serde_json::json!(["102", 0])
         );
 
         // Konec řetězu jde do ApplyPulid
         assert_eq!(
             workflow["12"]["inputs"]["image"],
-            serde_json::json!(["31", 0])
+            serde_json::json!(["104", 0])
+        );
+    }
+
+    #[test]
+    fn mnoho_referenci_neprepise_uzly_doladeni_obliceje() {
+        // Regrese: dynamické uzly referencí začínaly na 20, takže řetěz
+        // ImageBatch u 12 fotek sahal na 42 a přepsal si FaceDetailer (41)
+        // i jeho detektor (40) — obrázek se pak generoval bez doladění, nebo
+        // workflow rovnou spadlo. Při tehdejším stropu 4 referencí to nešlo
+        // trefit, teď je strop 40.
+        let mut req = sample_request();
+        req.face_detailer = true;
+        let refs: Vec<String> = (0..40).map(|i| format!("ref-{i}.png")).collect();
+        let workflow = build_basic_workflow(&req, &refs, None);
+
+        assert_eq!(
+            workflow["40"]["class_type"], "UltralyticsDetectorProvider",
+            "detektor obličeje přepsán referenčním uzlem"
+        );
+        assert_eq!(
+            workflow["41"]["class_type"], "FaceDetailer",
+            "FaceDetailer přepsán referenčním uzlem"
+        );
+
+        // Všech 40 referencí má vlastní LoadImage a řetěz končí v ApplyPulid.
+        for i in 0..40 {
+            let id = format!("{}", REFERENCE_NODE_BASE + i);
+            assert_eq!(workflow[&id]["class_type"], "LoadImage", "node {id}");
+        }
+        let last_batch = format!("{}", REFERENCE_NODE_BASE + 40 + 38);
+        assert_eq!(workflow[&last_batch]["class_type"], "ImageBatch");
+        assert_eq!(
+            workflow["12"]["inputs"]["image"],
+            serde_json::json!([last_batch, 0])
         );
     }
 
@@ -1482,7 +1526,7 @@ mod tests {
         let workflow = build_basic_workflow(&req, &refs, None);
 
         for i in 0..12 {
-            let id = format!("{}", 20 + i);
+            let id = format!("{}", REFERENCE_NODE_BASE + i);
             assert_eq!(workflow[&id]["class_type"], "LoadImage", "node {id}");
             assert_eq!(
                 workflow[&id]["inputs"]["image"],
@@ -1490,11 +1534,11 @@ mod tests {
             );
         }
 
-        assert_eq!(workflow["31"]["class_type"], "LoadImage");
-        assert_eq!(workflow["32"]["class_type"], "ImageBatch");
+        assert_eq!(workflow["111"]["class_type"], "LoadImage");
+        assert_eq!(workflow["112"]["class_type"], "ImageBatch");
         assert_eq!(
             workflow["12"]["inputs"]["image"],
-            serde_json::json!(["42", 0])
+            serde_json::json!(["122", 0])
         );
     }
 
@@ -1523,7 +1567,10 @@ mod tests {
             apply_pulid["inputs"]["face_analysis"],
             serde_json::json!(["10", 0])
         );
-        assert_eq!(apply_pulid["inputs"]["image"], serde_json::json!(["20", 0]));
+        assert_eq!(
+            apply_pulid["inputs"]["image"],
+            serde_json::json!(["100", 0])
+        );
 
         // KSampler musí čerpat z PuLID-patchnutého modelu (uzel 12), ne přímo
         // z checkpointu (uzel 1) — jinak by referenční obrázek nemělo na co vliv.
