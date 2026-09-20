@@ -14,12 +14,30 @@ REM Predpoklady: Vulkan SDK, CUDA Toolkit, Visual Studio s C++ workloadem,
 REM CMake, pnpm. Uzivatel instalatoru nepotrebuje nic - Vulkan runtime je
 REM v ovladaci grafiky a CUDA runtime (cuBLAS) je primo v balicku.
 REM
+REM Prepinac /nopause preskoci cekani na klavesu na konci. Bez nej nejde
+REM skript spustit neinteraktivne: `pause` cte stdin, a kdyz se presmeruje
+REM (treba z NUL nebo z CI), spadne na tom Ninja pri kompilaci llama.cpp
+REM -- "ninja: fatal: ReadFile: The handle is invalid".
+REM
 REM Vysledek: target\release\bundle\nsis\*-setup.exe
 REM (MSI tuhle detekci neumi - staveji se pres:
 REM   pnpm tauri build --bundles msi --features llm-vulkan)
 
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
+
+REM /nopause = neceka na klavesu (pro CI a automatizaci).
+REM Prochazi se pres shift, ne pres `for %%A in (%*)` -- ten tokeny
+REM zacinajici lomitkem bere jako prepinace sebe sama a argument se
+REM do promenne nikdy nedostane.
+set "NOPAUSE="
+:parse_args
+if "%~1"=="" goto args_done
+if /i "%~1"=="/nopause" set "NOPAUSE=1"
+if /i "%~1"=="--nopause" set "NOPAUSE=1"
+shift
+goto parse_args
+:args_done
 
 if not exist "package.json" (
     echo CHYBA: v "%CD%" neni package.json.
@@ -167,7 +185,7 @@ for %%f in (target\release\bundle\nsis\*-setup.exe) do echo   %%f  (%%~zf bajtu)
 echo.
 echo Pri instalaci se podle nalezene karty vybere CUDA nebo Vulkan.
 echo.
-pause
+call :pauza
 endlocal
 exit /b 0
 
@@ -175,10 +193,16 @@ exit /b 0
 set "EXITCODE=%errorlevel%"
 echo.
 echo === Build selhal ^(kod %EXITCODE%^) - viz vypis vyse ===
-pause
+call :pauza
 endlocal & exit /b %EXITCODE%
 
 :fail
-pause
+call :pauza
 endlocal
 exit /b 1
+
+
+REM Ceka na klavesu, pokud nebyl zadan /nopause.
+:pauza
+if not defined NOPAUSE pause
+goto :eof
