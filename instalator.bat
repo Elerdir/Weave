@@ -51,18 +51,33 @@ if not defined VULKAN_SDK (
     goto :fail
 )
 
-REM --- CUDA Toolkit: bere se nejvyssi nainstalovana verze ---
-if not defined CUDA_PATH (
-    for /f "delims=" %%D in ('dir /b /ad /o-n "%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA" 2^>nul') do (
-        if not defined CUDA_PATH set "CUDA_PATH=%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\%%D"
+REM --- CUDA Toolkit: vzdy nejnovejsi nainstalovana verze --------------
+REM Zdedena promenna CUDA_PATH se ZAMERNE ignoruje. Instalator CUDY ji
+REM nastavuje na verzi, kterou zrovna instaloval, takze klidne ukazuje na
+REM starsi rady - a ta pak odmitne novejsi MSVC hlaskou "unsupported
+REM Visual Studio version" a build spadne uprostred kompilace llama.cpp.
+REM Konkretni toolkit jde vynutit pres WEAVE_CUDA_PATH.
+set "CUDA_ROOT=%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA"
+set "CUDA_PICKED="
+if defined WEAVE_CUDA_PATH (
+    set "CUDA_PICKED=%WEAVE_CUDA_PATH%"
+) else (
+    REM /o-n = razeni podle jmena sestupne, takze v13.2 predbehne v12.6
+    for /f "delims=" %%D in ('dir /b /ad /o-n "%CUDA_ROOT%" 2^>nul') do (
+        if not defined CUDA_PICKED set "CUDA_PICKED=%CUDA_ROOT%\%%D"
     )
 )
-if not defined CUDA_PATH (
-    echo CHYBA: CUDA Toolkit nenalezen.
+if not defined CUDA_PICKED (
+    echo CHYBA: CUDA Toolkit nenalezen v "%CUDA_ROOT%".
     echo Stahni ho z https://developer.nvidia.com/cuda-downloads,
-    echo nebo nastav CUDA_PATH rucne.
+    echo nebo nastav WEAVE_CUDA_PATH na konkretni toolkit.
     goto :fail
 )
+if defined CUDA_PATH if /i not "%CUDA_PATH%"=="%CUDA_PICKED%" (
+    echo POZNAMKA: systemova CUDA_PATH ukazuje na "%CUDA_PATH%",
+    echo           ale stavi se s "%CUDA_PICKED%".
+)
+set "CUDA_PATH=%CUDA_PICKED%"
 set "CUDACXX=%CUDA_PATH%\bin\nvcc.exe"
 if not exist "%CUDACXX%" (
     echo CHYBA: nvcc.exe nenalezen v "%CUDA_PATH%\bin".
