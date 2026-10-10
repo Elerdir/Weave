@@ -1,0 +1,104 @@
+name: Dispatch release
+
+# Spousti Dispatch konzole (https://github.com/Elerdir/dispatch) pres
+# workflow_dispatch API. Kontrakt se vsemi aplikacemi v Dispatchi:
+#   - vstupy version, platforms, dispatch_id
+#   - dispatch_id v run-name (podle nej Dispatch dohleda tenhle beh)
+#
+# main je chranena (PR + povinne kontroly), takze bump verze NEMUZE pushnout
+# commit do main. Misto toho vznikne commit s novou verzi jen pod tagem
+# (odpojeny od vetve): tag v<verze> ukazuje na main + bump verze, vetev main
+# se nemeni. release.yml pak checkoutuje tag a verze v souborech sedi s tagem.
+# Soubory v main se verzi dorovnaji, az kdyz je nekdo v PR slouci.
+# Tag pushnuty pres GITHUB_TOKEN release.yml znovu NESPUSTI, build nebezi dvakrat.
+#
+# Lze spustit i rucne (Actions -> Dispatch release -> Run workflow).
+
+run-name: Release ${{ inputs.version }} [${{ inputs.dispatch_id || 'manual' }}]
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Nova verze bez v (napr. 0.3.0)"
+        type: string
+        required: true
+      platforms:
+        description: "Carkou oddelene: windows,macos"
+        type: string
+        default: "windows,macos"
+      dispatch_id:
+        description: "Korelacni ID z Dispatche (rucne nech prazdne)"
+        type: string
+        default: ""
+
+concurrency:
+  group: dispatch-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Bump version and tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Validate inputs
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$VERSION' neni platna semver verze"; exit 1
+          fi
+          if ! [[ "$PLATFORMS" =~ ^(windows|macos)(,(windows|macos))*$ ]]; then
+            echo "::error::Neplatne platformy '$PLATFORMS' (Weave: windows, macos)"; exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Tag must not exist yet
+        shell: bash
+        env:
+          TAG: v${{ inputs.version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag $TAG uz existuje - zvol vyssi verzi"; exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Bump version in a tag-only commit
+        id: tag
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          TAG: v${{ inputs.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --detach
+          node scripts/bump-version.mjs "$VERSION"
+          git add package.json src-tauri/tauri.conf.json Cargo.toml Cargo.lock
+          git commit -m "chore(release): $TAG"
+          git tag "$TAG"
+          git push origin "refs/tags/$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Release
+    needs: tag
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
+      platforms: ${{ inputs.platforms }}
+    secrets: inherit
+    permissions:
+      contents: read

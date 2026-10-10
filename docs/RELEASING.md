@@ -101,6 +101,23 @@ Tohle je jediná cesta, po které CUDA instalace zůstanou na CUDA: updater
 spustí instalátor potichu, hook přečte dřívější volbu z registru a nechá
 CUDA větev — ale jen když ji balíček nese.
 
+### Přes Dispatch (https://dispatch.niderle.cz) — Windows (Vulkan) + macOS
+
+Dispatch spustí `.github/workflows/dispatch.yml` s verzí a vybranými platformami. Ten:
+
+1. ověří vstupy a že tag ještě neexistuje,
+2. spustí `scripts/bump-version.mjs` (package.json, tauri.conf.json, Cargo.toml, Cargo.lock),
+3. commit s novou verzí vytvoří **jen pod tagem `v<verze>`** (odpojený od větve). `main` je chráněná,
+   takže se do ní nepushuje; soubory v `main` se dorovnají, až verzi zvedneš v PR,
+4. zavolá `release.yml`, který tag postaví, podepíše a nahraje do UpdateHubu jako **Draft**.
+
+Poznámky k vydání se skládají z git logu od předchozího tagu (`scripts/release-notes.sh`):
+bez merge commitů a bez `chore:`/`ci:`/`docs:`/`test:`, prefixy `feat:`/`fix:` a čísla PR se odstraní.
+Piš proto předměty commitů srozumitelně pro uživatele.
+
+macOS vznikne jako Apple Silicon: `.app.tar.gz` (+ podpis) pro updater a `.dmg` ke stažení na webu.
+Windows z CI je jen Vulkan — viz níž, CUDA instalace se přepnou na Vulkan.
+
 ### Windows: jen Vulkan (CI)
 
 `git tag v0.2.0 && git push origin v0.2.0` spustí `.github/workflows/release.yml`:

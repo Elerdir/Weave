@@ -11,16 +11,106 @@ on:
       version:
         description: "Verze bez 'v' (např. 0.1.0)"
         required: true
+  # Volá dispatch.yml (Dispatch konzole): tag už existuje, platformy vybírá uživatel.
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag k vydání, např. v0.3.0"
+        type: string
+        required: true
+      platforms:
+        description: "Čárkou oddělené: windows,macos"
+        type: string
+        default: "windows,macos"
 
 env:
   SQLX_OFFLINE: "true"
 
 jobs:
+  # Společně pro oba buildy: z čeho se staví, jaká je verze, které platformy a poznámky k vydání.
+  prepare:
+    name: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.meta.outputs.ref }}
+      version: ${{ steps.meta.outputs.version }}
+      windows: ${{ steps.meta.outputs.windows }}
+      macos: ${{ steps.meta.outputs.macos }}
+      notes: ${{ steps.notes.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve ref, version and platforms
+        id: meta
+        shell: bash
+        env:
+          CALL_TAG: ${{ inputs.tag }}
+          PLATFORMS: ${{ inputs.platforms || 'windows,macos' }}
+          MANUAL_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CALL_TAG" ]; then                 # z dispatch.yml
+            tag="$CALL_TAG"
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then   # push tagu
+            tag="$GITHUB_REF_NAME"
+          else                                        # ruční spuštění bez tagu: staví se větev
+            tag=""
+          fi
+
+          if [ -n "$tag" ]; then
+            version="${tag#v}"
+            # Tag musí sedět se soubory, jinak by se vydala aplikace s jinou verzí, než hlásí UpdateHub.
+            pkg=$(node -p "require('./package.json').version")
+            conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+            cargo=$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+            if [ "$version" != "$pkg" ] || [ "$version" != "$conf" ] || [ "$version" != "$cargo" ]; then
+              echo "::error::Verze neodpovídá tagu $tag: package.json=$pkg, tauri.conf.json=$conf, Cargo.toml=$cargo. Spusť 'node scripts/bump-version.mjs $version'."
+              exit 1
+            fi
+          else
+            version="$MANUAL_VERSION"
+          fi
+
+          has() { [[ ",$PLATFORMS," == *",$1,"* ]] && echo true || echo false; }
+          {
+            echo "ref=${tag:-$GITHUB_REF}"
+            echo "version=$version"
+            echo "windows=$(has windows)"
+            echo "macos=$(has macos)"
+          } >> "$GITHUB_OUTPUT"
+          echo "ref=${tag:-$GITHUB_REF} version=$version platforms=$PLATFORMS"
+
+      - name: Release notes from git log
+        id: notes
+        shell: bash
+        env:
+          TAG: ${{ steps.meta.outputs.ref }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            notes=$(bash scripts/release-notes.sh "$TAG")
+          else
+            notes="Weave $VERSION"
+          fi
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            echo "$notes"
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "$notes"
+
   build-windows:
     name: build-windows
+    needs: prepare
+    if: needs.prepare.outputs.windows == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - uses: pnpm/action-setup@v4
 
@@ -86,10 +176,10 @@ jobs:
         env:
           UPDATEHUB_URL: ${{ secrets.UPDATEHUB_URL }}
           UPDATEHUB_CI_TOKEN: ${{ secrets.UPDATEHUB_CI_TOKEN }}
+          RELEASE_NOTES: ${{ needs.prepare.outputs.notes }}
         run: |
           set -euo pipefail
-          VERSION="${{ github.event.inputs.version }}"
-          if [ -z "$VERSION" ]; then VERSION="${GITHUB_REF_NAME#v}"; fi
+          VERSION="${{ needs.prepare.outputs.version }}"
 
           INSTALLER=$(ls target/release/bundle/nsis/*-setup.exe | head -n1)
           SIGNATURE=$(cat "${INSTALLER}.sig")
@@ -103,7 +193,7 @@ jobs:
             -F "platform=windows" \
             -F "arch=x64" \
             -F "channel=stable" \
-            -F "release_notes=Release ${VERSION}"
+            -F "release_notes=${RELEASE_NOTES}"
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
@@ -121,9 +211,13 @@ jobs:
   # podpis (Ed25519) je na tom nezávislý a funguje.
   build-macos:
     name: build-macos
+    needs: prepare
+    if: needs.prepare.outputs.macos == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - uses: pnpm/action-setup@v4
 
@@ -156,10 +250,10 @@ jobs:
         env:
           UPDATEHUB_URL: ${{ secrets.UPDATEHUB_URL }}
           UPDATEHUB_CI_TOKEN: ${{ secrets.UPDATEHUB_CI_TOKEN }}
+          RELEASE_NOTES: ${{ needs.prepare.outputs.notes }}
         run: |
           set -euo pipefail
-          VERSION="${{ github.event.inputs.version }}"
-          if [ -z "$VERSION" ]; then VERSION="${GITHUB_REF_NAME#v}"; fi
+          VERSION="${{ needs.prepare.outputs.version }}"
 
           BUNDLE=$(ls target/release/bundle/macos/*.app.tar.gz | head -n1)
           SIGNATURE=$(cat "${BUNDLE}.sig")
@@ -170,10 +264,34 @@ jobs:
             -F "file=@${BUNDLE}" \
             -F "signature=${SIGNATURE}" \
             -F "version=${VERSION}" \
-            -F "platform=darwin" \
-            -F "arch=aarch64" \
+            -F "platform=macos" \
+            -F "arch=arm64" \
             -F "channel=stable" \
-            -F "release_notes=Release ${VERSION}"
+            -F "release_notes=${RELEASE_NOTES}"
+
+      # .dmg je instalátor pro lidi (web ho nabízí ke stažení); updater ho nepoužívá,
+      # proto bez podpisu — Tauri manifest bere jen soubory s podpisem.
+      - name: Upload dmg to UpdateHub
+        shell: bash
+        env:
+          UPDATEHUB_URL: ${{ secrets.UPDATEHUB_URL }}
+          UPDATEHUB_CI_TOKEN: ${{ secrets.UPDATEHUB_CI_TOKEN }}
+          RELEASE_NOTES: ${{ needs.prepare.outputs.notes }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.prepare.outputs.version }}"
+
+          DMG=$(ls target/release/bundle/dmg/*.dmg | head -n1)
+          echo "Nahrávám $DMG (verze $VERSION)"
+
+          curl -f -X POST "${UPDATEHUB_URL}/api/ci/apps/weave/releases" \
+            -H "X-UpdateHub-Token: ${UPDATEHUB_CI_TOKEN}" \
+            -F "file=@${DMG}" \
+            -F "version=${VERSION}" \
+            -F "platform=macos" \
+            -F "arch=arm64" \
+            -F "channel=stable" \
+            -F "release_notes=${RELEASE_NOTES}"
 
       - name: Upload dmg artifact
         uses: actions/upload-artifact@v4
