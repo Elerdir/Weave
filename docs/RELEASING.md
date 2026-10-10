@@ -86,8 +86,16 @@ vyplň `weave`. Web si pak verzi i instalátory bere z
 
 `instalator.bat` staví kombinovaný instalátor, který si backend vybere podle
 grafiky (viz README). Když najde `weave-updater.key`, podepíše ho a vedle
-`*-setup.exe` vznikne i `*-setup.exe.sig`. Obojí se nahraje do UpdateHubu
-(admin UI, platforma `windows`, arch `x64`, podpis = obsah `.sig`).
+`*-setup.exe` vznikne i `*-setup.exe.sig`. Obojí nahraje do UpdateHubu
+skript (release vznikne jako Draft):
+
+```powershell
+.\scripts\publish-updatehub.ps1 -SaveToken          # poprvé: uloží CI token (DPAPI)
+.\scripts\publish-updatehub.ps1 -Notes "Co je nového…"
+```
+
+Token se ukládá do `%USERPROFILE%\.updatehub\weave-token.clixml`. Ručně to
+jde i přes admin UI (platforma `windows`, arch `x64`, podpis = obsah `.sig`).
 
 Tohle je jediná cesta, po které CUDA instalace zůstanou na CUDA: updater
 spustí instalátor potichu, hook přečte dřívější volbu z registru a nechá
