@@ -8,7 +8,7 @@
 
   CI token se uklada pres DPAPI (Export-Clixml) do
   %USERPROFILE%\.updatehub\weave-token.clixml - rozsifruje ho jen tenhle
-  uzivatel na tomhle stroji. Poprve spust se -SaveToken.
+  uzivatel na tomhle stroji. Poprve spust se -SaveToken (jen ulozi token a skonci).
 
   Release se v UpdateHubu zalozi jako Draft; zverejni se rucne v admin UI
   (Publish). Teprve pak ho klienti uvidi.
@@ -37,6 +37,8 @@ if ($SaveToken) {
     New-Item -ItemType Directory -Force (Split-Path $tokenFile) | Out-Null
     $secure | Export-Clixml $tokenFile
     Write-Host "Token ulozen do $tokenFile"
+    Write-Host "Nahrani pak spust bez -SaveToken."
+    return
 }
 
 if (-not (Test-Path $tokenFile)) {
