@@ -11,6 +11,8 @@
   import GalleryWindow from "$features/gallery/GalleryWindow.svelte";
   import GalleryDetailWindow from "$features/gallery/GalleryDetailWindow.svelte";
   import SubjectsWindow from "$features/subjects/SubjectsWindow.svelte";
+  import UpdateBanner from "$features/updates/UpdateBanner.svelte";
+  import { updaterStore } from "$lib/stores/updater.svelte";
 
   // Samostatná okna — stejný frontend, jiný „view" (viz open_*_window)
   const view = new URLSearchParams(window.location.search).get("view");
@@ -37,6 +39,11 @@
       ready = true;
       return;
     }
+
+    // Aktualizace hlídá jen hlavní okno (ostatní okna mají vlastní kopii
+    // storu). V dev režimu ne — tam by se nabízel instalátor místo kódu,
+    // na kterém se zrovna pracuje.
+    if (!import.meta.env.DEV) updaterStore.startAutoCheck();
 
     const firstRun = await isFirstRun();
     showWizard = firstRun;
@@ -95,6 +102,7 @@
     <Wizard onComplete={onWizardComplete} />
   {:else}
     <MainLayout />
+    <UpdateBanner />
   {/if}
 {:else}
   <div class="splash">
