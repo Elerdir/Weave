@@ -394,6 +394,16 @@ const cs = {
       manualUrlPlaceholder: "URL ke stažení (HuggingFace / CivitAI)",
     },
   },
+  updates: {
+    banner: {
+      available: "Je dostupná nová verze {version}",
+      showNotes: "Co je nového",
+      hideNotes: "Skrýt novinky",
+      later: "Později",
+      failed: "Aktualizace se nepovedla",
+      retry: "Zkusit znovu",
+    },
+  },
   common: {
     cancel: "Zrušit",
     save: "Uložit",

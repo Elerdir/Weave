@@ -176,9 +176,30 @@ REM --- 2/3 Vulkan binarka + zabaleni -----------------------------------
 echo.
 echo [2/3] Build Vulkan verze a baleni instalatoru...
 set "OVERRIDE=%TEMP%\weave-installer-override.json"
+
+REM Podpis pro updater: s nim jde instalator nahrat do UpdateHubu a CUDA
+REM instalace se pak aktualizuji zase na CUDA/Vulkan balicek (CI stavi jen
+REM Vulkan). Klic (obsah, ne cesta) se bere z TAURI_SIGNING_PRIVATE_KEY, jinak
+REM se nacte ze souboru ve vychozi ceste;
+REM heslo je ulozene pres DPAPI (Export-Clixml), takze ho rozsifruje jen
+REM tenhle uzivatel na tomhle stroji.
+set "SIGN=false"
+set "WEAVE_KEY=%USERPROFILE%\.tauri\weave-updater.key"
+set "WEAVE_KEY_PASS=%USERPROFILE%\.tauri\weave-updater-password.clixml"
+if not defined TAURI_SIGNING_PRIVATE_KEY if exist "%WEAVE_KEY%" set /p TAURI_SIGNING_PRIVATE_KEY=<"%WEAVE_KEY%"
+if defined TAURI_SIGNING_PRIVATE_KEY (
+    set "SIGN=true"
+    if not defined TAURI_SIGNING_PRIVATE_KEY_PASSWORD if exist "%WEAVE_KEY_PASS%" (
+        for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR((Import-Clixml '%WEAVE_KEY_PASS%')))"`) do set "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=%%P"
+    )
+    echo Podpis pro updater: ano ^(vznikne i .sig pro UpdateHub^)
+) else (
+    echo Podpis pro updater: ne ^(klic "%WEAVE_KEY%" nenalezen^)
+)
+
 REM installerHooks je uz v tauri.conf.json (hook si sam pozna, ze CUDA vetev
 REM v balicku neni, a nedela nic). Tady se pridavaji jen soubory payloadu.
-> "%OVERRIDE%" echo {"bundle":{"createUpdaterArtifacts":false,"resources":{"payload/cuda/*":"cuda/"}}}
+> "%OVERRIDE%" echo {"bundle":{"createUpdaterArtifacts":!SIGN!,"resources":{"payload/cuda/*":"cuda/"}}}
 
 call pnpm tauri build --bundles nsis --features llm-vulkan --config "%OVERRIDE%"
 if errorlevel 1 goto :buildfail
@@ -202,6 +223,7 @@ if not errorlevel 1 (
 echo.
 echo [3/3] Hotovo. Instalator najdes zde:
 for %%f in (target\release\bundle\nsis\*-setup.exe) do echo   %%f  (%%~zf bajtu)
+if "!SIGN!"=="true" for %%f in (target\release\bundle\nsis\*-setup.exe.sig) do echo   %%f  ^(podpis pro UpdateHub^)
 echo.
 echo Pri instalaci se podle nalezene karty vybere CUDA nebo Vulkan.
 echo.

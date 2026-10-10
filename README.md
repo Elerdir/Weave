@@ -175,8 +175,9 @@ pnpm tauri build --bundles msi --features llm-vulkan
 Oficiální podepsané instalátory staví `release.yml` při tagu `v*` — ale zatím
 **jen s Vulkanem**, protože CUDA Toolkit se na GitHub runner musí doinstalovat
 a llama.cpp by se v jednom jobu kompilovala dvakrát. Kdo chce CUDA větev, musí
-si instalátor postavit lokálně přes `instalator.bat`; aktualizace přes updater
-takovou instalaci vrátí zpět na Vulkan (appka běží dál, jen bez CUDY).
+si instalátor postavit lokálně přes `instalator.bat`. Ten ho zároveň podepíše
+pro updater, takže se dá nahrát do UpdateHubu a CUDA instalace se pak
+aktualizují zase na CUDA (postup v [docs/RELEASING.md](docs/RELEASING.md)).
 
 ## Architektura
 

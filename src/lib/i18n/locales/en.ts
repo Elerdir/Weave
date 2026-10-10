@@ -396,6 +396,16 @@ const en: Messages = {
       manualUrlPlaceholder: "Download URL (HuggingFace / CivitAI)",
     },
   },
+  updates: {
+    banner: {
+      available: "New version {version} is available",
+      showNotes: "What's new",
+      hideNotes: "Hide notes",
+      later: "Later",
+      failed: "Update failed",
+      retry: "Try again",
+    },
+  },
   common: {
     cancel: "Cancel",
     save: "Save",
