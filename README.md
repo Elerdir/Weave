@@ -172,12 +172,11 @@ takže se staví zvlášť a jen s Vulkanem:
 pnpm tauri build --bundles msi --features llm-vulkan
 ```
 
-Oficiální podepsané instalátory staví `release.yml` při tagu `v*` — ale zatím
-**jen s Vulkanem**, protože CUDA Toolkit se na GitHub runner musí doinstalovat
-a llama.cpp by se v jednom jobu kompilovala dvakrát. Kdo chce CUDA větev, musí
-si instalátor postavit lokálně přes `instalator.bat`. Ten ho zároveň podepíše
-pro updater, takže se dá nahrát do UpdateHubu a CUDA instalace se pak
-aktualizují zase na CUDA (postup v [docs/RELEASING.md](docs/RELEASING.md)).
+Oficiální podepsané instalátory staví `release.yml` při tagu `v*` (nebo z Dispatche):
+workflow na runneru doinstaluje CUDA Toolkit a spustí `instalator.bat /nopause`, takže
+vznikne stejný kombinovaný CUDA + Vulkan instalátor jako lokálně a updater CUDA
+instalace nepřepne na Vulkan. Build trvá zhruba hodinu a půl. Lokální `instalator.bat`
+zůstává jako záložní cesta (postup v [docs/RELEASING.md](docs/RELEASING.md)).
 
 ## Architektura
 
