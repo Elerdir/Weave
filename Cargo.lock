@@ -7267,7 +7267,7 @@ dependencies = [
 
 [[package]]
 name = "weave-app"
-version = "0.1.0"
+version = "0.2.3"
 dependencies = [
  "dirs 6.0.0",
  "serde_json",
@@ -7288,7 +7288,7 @@ dependencies = [
 
 [[package]]
 name = "weave-application"
-version = "0.1.0"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7304,7 +7304,7 @@ dependencies = [
 
 [[package]]
 name = "weave-domain"
-version = "0.1.0"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "serde",
@@ -7314,7 +7314,7 @@ dependencies = [
 
 [[package]]
 name = "weave-infrastructure"
-version = "0.1.0"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
@@ -7351,7 +7351,7 @@ dependencies = [
 
 [[package]]
 name = "weave-shell"
-version = "0.1.0"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "serde",
