@@ -240,6 +240,9 @@ jobs:
       - name: Build Tauri app (Metal)
         run: pnpm tauri build --features llm-metal
         env:
+          # llama.cpp používá std::filesystem (macOS 10.15+); výchozí cíl Tauri je 10.13
+          # a build padá na "'path' is unavailable". Apple Silicon stejně vyžaduje 11.0.
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
