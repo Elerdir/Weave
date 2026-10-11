@@ -82,7 +82,7 @@ vyplň `weave`. Web si pak verzi i instalátory bere z
 5. Běžící klienti nabídnou aktualizaci do 6 hodin, nově spuštění do pár
    sekund po startu.
 
-### Windows: CUDA + Vulkan (`instalator.bat`) — doporučeno
+### Windows: CUDA + Vulkan lokálně (`instalator.bat`)
 
 `instalator.bat` staví kombinovaný instalátor, který si backend vybere podle
 grafiky (viz README). Když najde `weave-updater.key`, podepíše ho a vedle
@@ -97,11 +97,12 @@ skript (release vznikne jako Draft):
 Token se ukládá do `%USERPROFILE%\.updatehub\weave-token.clixml`. Ručně to
 jde i přes admin UI (platforma `windows`, arch `x64`, podpis = obsah `.sig`).
 
-Tohle je jediná cesta, po které CUDA instalace zůstanou na CUDA: updater
-spustí instalátor potichu, hook přečte dřívější volbu z registru a nechá
-CUDA větev — ale jen když ji balíček nese.
+Aby CUDA instalace zůstaly na CUDA, musí aktualizační balíček nést CUDA větev:
+updater spustí instalátor potichu, hook přečte dřívější volbu z registru a
+CUDA větev nechá — ale jen když ji balíček obsahuje. Stejný kombinovaný
+instalátor teď staví i CI (viz níž), takže lokální build je jen záložní cesta.
 
-### Přes Dispatch (https://dispatch.niderle.cz) — Windows (Vulkan) + macOS
+### Přes Dispatch (https://dispatch.niderle.cz) — Windows (CUDA + Vulkan) + macOS — doporučeno
 
 Dispatch spustí `.github/workflows/dispatch.yml` s verzí a vybranými platformami. Ten:
 
@@ -116,15 +117,23 @@ bez merge commitů a bez `chore:`/`ci:`/`docs:`/`test:`, prefixy `feat:`/`fix:` 
 Piš proto předměty commitů srozumitelně pro uživatele.
 
 macOS vznikne jako Apple Silicon: `.app.tar.gz` (+ podpis) pro updater a `.dmg` ke stažení na webu.
-Windows z CI je jen Vulkan — viz níž, CUDA instalace se přepnou na Vulkan.
 
-### Windows: jen Vulkan (CI)
+Windows staví **tentýž kombinovaný instalátor jako lokální `instalator.bat`**: workflow doinstaluje
+CUDA Toolkit (`Jimver/cuda-toolkit`, verze 13.2.2) a spustí `instalator.bat /nopause`. Instalátor si při
+instalaci vybere GPU backend (NVIDIA s ≥ 20 GB VRAM → CUDA, 12–19 GB → zeptá se, jinak Vulkan), takže
+aktualizace nepřepne CUDA instalace na Vulkan. Počítej s **~1,5 hodiny buildu** (llama.cpp se kompiluje
+dvakrát) a ~1 GB instalátorem, který se nahrává do UpdateHubu s opakováním.
+
+Verze CUDA se mění v `release.yml` (krok *Install CUDA Toolkit*). Musí umět architektury 86, 89 a 120
+(RTX 30xx/40xx/50xx) a sedět s Visual Studiem na runneru; `NVCC_APPEND_FLAGS=-allow-unsupported-compiler`
+je pojistka pro případ, že image dostane novější Visual Studio, než CUDA zná.
+
+### Tag bez Dispatche (CI)
 
 `git tag v0.2.0 && git push origin v0.2.0` spustí `.github/workflows/release.yml`:
-Vulkan instalátor + macOS, podepíše a nahraje do UpdateHubu jako **Draft**.
-Pozor: CUDA instalace by se touhle verzí přepnuly na Vulkan (appka běží dál,
-jen pomaleji). Když vydáváš Windows přes `instalator.bat`, Windows build z CI
-do UpdateHubu nepublikuj.
+Windows (CUDA + Vulkan) + macOS, podepíše a nahraje do UpdateHubu jako **Draft**.
+Verze v `package.json`, `tauri.conf.json` a `Cargo.toml` se musí shodovat s tagem
+(jinak `prepare` job vydání zastaví); přes Dispatch to řeší `bump-version.mjs`.
 
 Workflow jde spustit i ručně (Actions → release → Run workflow) se zadanou
 verzí — užitečné pro test bez tagu.

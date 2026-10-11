@@ -107,6 +107,8 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.windows == 'true'
     runs-on: windows-latest
+    # llama.cpp se kompiluje dvakrát (CUDA se třemi architekturami + Vulkan), počítej s ~1,5 h.
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
@@ -149,22 +151,34 @@ jobs:
           "$sdk\Bin"               | Out-File -FilePath $env:GITHUB_PATH -Append
           Write-Host "VULKAN_SDK=$sdk"
 
-      # Sestaví frontend (vite) + Rust release + Windows bundly (NSIS + MSI).
-      # createUpdaterArtifacts v tauri.conf.json vygeneruje k instalátoru .sig.
+      # CUDA Toolkit je potřeba jen k BUILDU (nvcc, cuBLAS). Uživatel instalátoru ho
+      # nepotřebuje: cudart a cuBLAS jdou v balíčku, CUDA runtime je v ovladači NVIDIE.
+      # Verze 13.2 odpovídá vývojovému stroji; umí architektury 86, 89 a 120 (RTX 30xx/40xx/50xx)
+      # a Visual Studio 2026, které má image runneru.
+      - name: Install CUDA Toolkit
+        id: cuda
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: "13.2.2"
+
+      # Sestaví kombinovaný instalátor, který si při instalaci vybere GPU backend podle
+      # grafiky (src-tauri/nsis/gpu-backend.nsh): NVIDIA s >= 20 GB VRAM dostane CUDA,
+      # s 12-19 GB se instalátor zeptá, ostatní dostanou Vulkan. Proto instalator.bat
+      # staví DVĚ binárky (llama.cpp má backend zakompilovaný napevno) a vkládá je do
+      # jednoho NSIS balíčku. Stejný skript používá vývojář lokálně.
       #
-      # --features llm-vulkan NENÍ volitelný luxus: vestavěná inference je
-      # jediný backend, který appka má. Build bez ní vyrobí aplikaci, která
-      # se nainstaluje a spustí, ale na první zprávu odpoví, že není nastavený
-      # žádný AI model.
-      #
-      # Ninja potřebuje cl.exe v PATH, proto se napřed volá vcvars64. Cestu
-      # k Visual Studiu hledá vswhere, ať to nezávisí na verzi image runneru.
-      - name: Build Tauri app (Vulkan)
+      # /nopause: jinak by `pause` čekal na klávesu a Ninja by při přesměrovaném stdin
+      # spadla ("ReadFile: The handle is invalid").
+      # Podpis updateru skript vezme z proměnných prostředí (TAURI_SIGNING_*), vedle
+      # *-setup.exe vznikne *-setup.exe.sig.
+      # NVCC_APPEND_FLAGS: kdyby image runneru dostal Visual Studio, které CUDA ještě
+      # nezná, nvcc by padl na "unsupported Visual Studio version".
+      - name: Build installer (CUDA + Vulkan)
         shell: cmd
-        run: |
-          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
-          pnpm tauri build --features llm-vulkan
+        run: call instalator.bat /nopause
         env:
+          WEAVE_CUDA_PATH: ${{ steps.cuda.outputs.CUDA_PATH }}
+          NVCC_APPEND_FLAGS: -allow-unsupported-compiler
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
@@ -185,7 +199,8 @@ jobs:
           SIGNATURE=$(cat "${INSTALLER}.sig")
           echo "Nahrávám $INSTALLER (verze $VERSION)"
 
-          curl -f -X POST "${UPDATEHUB_URL}/api/ci/apps/weave/releases" \
+          # ~1 GB: NAS pod zátěží občas utne upload (408), proto pár pokusů s pauzou.
+          curl -f --retry 3 --retry-delay 60 --retry-all-errors -X POST "${UPDATEHUB_URL}/api/ci/apps/weave/releases" \
             -H "X-UpdateHub-Token: ${UPDATEHUB_CI_TOKEN}" \
             -F "file=@${INSTALLER}" \
             -F "signature=${SIGNATURE}" \
@@ -202,7 +217,7 @@ jobs:
           path: |
             target/release/bundle/nsis/*-setup.exe
             target/release/bundle/nsis/*-setup.exe.sig
-          retention-days: 14
+          retention-days: 3
 
   # macOS (Apple Silicon) build s vestavěnou Metal GPU inferencí. Runner
   # macos-latest je arm64 a má Xcode CLT + cmake, takže llama.cpp Metal build
