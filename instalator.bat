@@ -138,6 +138,11 @@ if defined NINJA_DIR (
 )
 
 set "SQLX_OFFLINE=true"
+REM Cilova slozka cargo: CARGO_TARGET_DIR, jinak target. CI ji dava kratkou -
+REM MSVC neumi cesty nad 260 znaku a llama.cpp (Vulkan shadery) je v target
+REM zanoreny hodne hluboko.
+set "TGT=target"
+if defined CARGO_TARGET_DIR set "TGT=%CARGO_TARGET_DIR%"
 set "PAYLOAD=src-tauri\payload\cuda"
 
 where pnpm >nul 2>&1
@@ -153,6 +158,7 @@ echo CUDA_PATH   = %CUDA_PATH%
 echo CUDA archs  = %CMAKE_CUDA_ARCHITECTURES%
 echo VULKAN_SDK  = %VULKAN_SDK%
 echo GENERATOR   = %CMAKE_GENERATOR%
+echo TARGET      = %TGT%
 echo.
 
 REM --- 1/3 CUDA binarka do payloadu -------------------------------------
@@ -168,7 +174,7 @@ REM i 13.x) a instalator by narostl o pul giga mrtveho kodu, ktery navic
 REM hook nakopiruje uzivateli na disk.
 if exist "%PAYLOAD%" rmdir /s /q "%PAYLOAD%"
 mkdir "%PAYLOAD%"
-copy /y "target\release\weave-app.exe" "%PAYLOAD%\weave-app.exe" >nul
+copy /y "%TGT%\release\weave-app.exe" "%PAYLOAD%\weave-app.exe" >nul
 if errorlevel 1 goto :buildfail
 
 REM cuBLAS a cudart musi jit s aplikaci - jsou soucasti Toolkitu, ne ovladace,
@@ -221,10 +227,10 @@ REM Kroky 1 a 2 sdileji target\release\weave-app.exe. Kdyz krok 2 selze nebo
 REM se mezitim spusti rucni CUDA build, zustane tam CUDA verze a instalator by
 REM ji zabalil jako hlavni (Vulkan) vetev. Na stroji bez NVIDIE by aplikace
 REM neslo spustit vubec - cuBLAS DLL se u Vulkan vetve mazou.
-findstr /m /c:"cublas64_" "target\release\weave-app.exe" >nul 2>&1
+findstr /m /c:"cublas64_" "%TGT%\release\weave-app.exe" >nul 2>&1
 if not errorlevel 1 (
     echo.
-    echo CHYBA: hlavni binarka target\release\weave-app.exe odkazuje na cuBLAS,
+    echo CHYBA: hlavni binarka %TGT%\release\weave-app.exe odkazuje na cuBLAS,
     echo tedy je to CUDA build, ne Vulkan. Instalator by ji zabalil jako Vulkan
     echo vetev a na strojich bez NVIDIE by aplikace nenabehla.
     echo Spust build znovu, at se krok 2 dokonci.
@@ -233,8 +239,8 @@ if not errorlevel 1 (
 
 echo.
 echo [3/3] Hotovo. Instalator najdes zde:
-for %%f in (target\release\bundle\nsis\*-setup.exe) do echo   %%f  (%%~zf bajtu)
-if "!SIGN!"=="true" for %%f in (target\release\bundle\nsis\*-setup.exe.sig) do echo   %%f  ^(podpis pro UpdateHub^)
+for %%f in ("%TGT%\release\bundle\nsis\*-setup.exe") do echo   %%~f  (%%~zf bajtu)
+if "!SIGN!"=="true" for %%f in ("%TGT%\release\bundle\nsis\*-setup.exe.sig") do echo   %%~f  ^(podpis pro UpdateHub^)
 echo.
 echo Pri instalaci se podle nalezene karty vybere CUDA nebo Vulkan.
 echo.
