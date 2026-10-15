@@ -102,41 +102,38 @@ updater spustí instalátor potichu, hook přečte dřívější volbu z registr
 CUDA větev nechá — ale jen když ji balíček obsahuje. Stejný kombinovaný
 instalátor teď staví i CI (viz níž), takže lokální build je jen záložní cesta.
 
-### Přes Dispatch (https://dispatch.niderle.cz) — Windows (CUDA + Vulkan) + macOS — doporučeno
+### Přes Dispatch (https://dispatch.niderle.cz) — Windows (CUDA + Vulkan) — doporučeno
 
-Dispatch spustí `.github/workflows/dispatch.yml` s verzí a vybranými platformami. Ten:
+Repo žije na Forgeju (`https://git.niderle.cz/elerdir/Weave`), GitHub je jen zrcadlo. Dispatch spustí
+`.forgejo/workflows/dispatch.yml` (Forgejo Actions) s verzí a platformami. Ten v jednom běhu:
 
 1. ověří vstupy a že tag ještě neexistuje,
 2. spustí `scripts/bump-version.mjs` (package.json, tauri.conf.json, Cargo.toml, Cargo.lock),
-3. commit s novou verzí vytvoří **jen pod tagem `v<verze>`** (odpojený od větve). `main` je chráněná,
-   takže se do ní nepushuje; soubory v `main` se dorovnají, až verzi zvedneš v PR,
-4. zavolá `release.yml`, který tag postaví, podepíše a nahraje do UpdateHubu jako **Draft**.
+3. commit s novou verzí vytvoří **jen pod tagem `v<verze>`** (odpojený od větve) a tag pushne účet
+   `release-bot` (secret organizace `RELEASE_TOKEN`). `main` je chráněná; soubory v ní se dorovnají v PR,
+4. job `windows` na Windows runneru (VM na NUC) tag postaví složenou akcí
+   `.forgejo/actions/windows-installer`, podepíše a nahraje do UpdateHubu jako **Draft**.
 
 Poznámky k vydání se skládají z git logu od předchozího tagu (`scripts/release-notes.sh`):
 bez merge commitů a bez `chore:`/`ci:`/`docs:`/`test:`, prefixy `feat:`/`fix:` a čísla PR se odstraní.
 Piš proto předměty commitů srozumitelně pro uživatele.
 
-macOS vznikne jako Apple Silicon: `.app.tar.gz` (+ podpis) pro updater a `.dmg` ke stažení na webu.
+Windows staví **tentýž kombinovaný instalátor jako lokální `instalator.bat`** (`instalator.bat /nopause`).
+CUDA Toolkit, Vulkan SDK, Ninja, CMake a LLVM jsou ve VM nainstalované natrvalo (instalace při každém
+buildu by trvala déle než build); akce je na začátku ověří. Instalátor si při instalaci vybere GPU backend
+(NVIDIA s ≥ 20 GB VRAM → CUDA, 12–19 GB → zeptá se, jinak Vulkan), takže aktualizace nepřepne CUDA
+instalace na Vulkan. Počítej s **1–2 hodinami buildu** (llama.cpp se kompiluje dvakrát, VM má 4 vCPU)
+a ~1 GB instalátorem, který se nahrává do UpdateHubu s opakováním. CUDA musí umět architektury 86, 89
+a 120 (RTX 30xx/40xx/50xx); `NVCC_APPEND_FLAGS=-allow-unsupported-compiler` je pojistka pro novější MSVC.
 
-Windows staví **tentýž kombinovaný instalátor jako lokální `instalator.bat`**: workflow doinstaluje
-CUDA Toolkit (`Jimver/cuda-toolkit`, verze 13.2.2) a spustí `instalator.bat /nopause`. Instalátor si při
-instalaci vybere GPU backend (NVIDIA s ≥ 20 GB VRAM → CUDA, 12–19 GB → zeptá se, jinak Vulkan), takže
-aktualizace nepřepne CUDA instalace na Vulkan. Počítej s **~1,5 hodiny buildu** (llama.cpp se kompiluje
-dvakrát) a ~1 GB instalátorem, který se nahrává do UpdateHubu s opakováním.
+**macOS** (Apple Silicon: `.app.tar.gz` pro updater + `.dmg`) se vrátí s Mac runnerem.
 
-Verze CUDA se mění v `release.yml` (krok *Install CUDA Toolkit*). Musí umět architektury 86, 89 a 120
-(RTX 30xx/40xx/50xx) a sedět s Visual Studiem na runneru; `NVCC_APPEND_FLAGS=-allow-unsupported-compiler`
-je pojistka pro případ, že image dostane novější Visual Studio, než CUDA zná.
+### Tag bez Dispatche / opakování
 
-### Tag bez Dispatche (CI)
-
-`git tag v0.2.0 && git push origin v0.2.0` spustí `.github/workflows/release.yml`:
-Windows (CUDA + Vulkan) + macOS, podepíše a nahraje do UpdateHubu jako **Draft**.
-Verze v `package.json`, `tauri.conf.json` a `Cargo.toml` se musí shodovat s tagem
-(jinak `prepare` job vydání zastaví); přes Dispatch to řeší `bump-version.mjs`.
-
-Workflow jde spustit i ručně (Actions → release → Run workflow) se zadanou
-verzí — užitečné pro test bez tagu.
+`git tag v0.3.0 && git push origin v0.3.0` (nebo Actions → release → Spustit se vstupem `tag`) spustí
+`.forgejo/workflows/release.yml`: Windows instalátor do UpdateHubu jako **Draft**. Verze v `package.json`,
+`tauri.conf.json` a `Cargo.toml` se musí shodovat s tagem. Tagy od `release-bot` (z Dispatche) release.yml
+přeskakuje — ty už staví dispatch.yml.
 
 ## Poznámky
 

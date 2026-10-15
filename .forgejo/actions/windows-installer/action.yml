@@ -1,0 +1,98 @@
+name: Weave - Windows instalator (CUDA + Vulkan)
+description: >
+  instalator.bat (dve binarky - CUDA a Vulkan - v jednom NSIS instalatoru, backend si vybere
+  instalator podle GPU) a nahrani do UpdateHubu jako DRAFT. Bezi na Windows runneru (VM na NUC).
+  CUDA Toolkit, Vulkan SDK, Ninja, CMake a LLVM musi byt ve VM nainstalovane predem (README VM);
+  instalace pri kazdem buildu by trvala dele nez build sam.
+
+inputs:
+  version:
+    description: Verze X.Y.Z (bez v)
+    required: true
+  tag:
+    description: Tag vX.Y.Z (poznamky k vydani z git logu od predchoziho tagu)
+    required: true
+  signing-key:
+    description: TAURI_SIGNING_PRIVATE_KEY (minisign klic updateru)
+    required: true
+  signing-key-password:
+    description: TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+    required: false
+    default: ""
+  updatehub-url:
+    description: https://updatehub.niderle.cz (prazdne = bez nahrani)
+    required: false
+    default: ""
+  updatehub-token:
+    description: Per-app CI token aplikace weave v UpdateHubu
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Build prerequisites on runner
+      shell: pwsh
+      run: |
+        $missing = @()
+        if (-not $env:VULKAN_SDK -or -not (Test-Path $env:VULKAN_SDK)) { $missing += "Vulkan SDK (promenna VULKAN_SDK)" }
+        if (-not (Test-Path "$env:ProgramFiles\NVIDIA GPU Computing Toolkit\CUDA\*\bin\nvcc.exe")) { $missing += "CUDA Toolkit" }
+        foreach ($tool in "ninja", "cmake") { if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { $missing += $tool } }
+        if (-not $env:LIBCLANG_PATH -and -not (Test-Path "$env:ProgramFiles\LLVM\bin\libclang.dll")) { $missing += "LLVM (libclang pro bindgen)" }
+        if ($missing) { Write-Error "Na runneru chybi: $($missing -join ', '). Viz nuc-server/windows-runner/README.md."; exit 1 }
+        if (-not $env:LIBCLANG_PATH) { "LIBCLANG_PATH=$env:ProgramFiles\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV }
+        Write-Host "VULKAN_SDK=$env:VULKAN_SDK"
+
+    - name: Install Rust (stable)
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ". -> target"
+        key: windows-installer
+        # Build trva i hodinu; at se cache ulozi, i kdyz spadne az bundle.
+        cache-on-failure: true
+
+    # Node je ve VM pro cely pocitac; pnpm podle packageManager v package.json.
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+
+    - name: Install frontend deps
+      shell: pwsh
+      run: pnpm install --frozen-lockfile
+
+    - name: Build installer (CUDA + Vulkan)
+      shell: cmd
+      env:
+        CMAKE_GENERATOR: Ninja
+        NVCC_APPEND_FLAGS: -allow-unsupported-compiler
+        TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.signing-key }}
+        TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.signing-key-password }}
+      run: call instalator.bat /nopause
+
+    - name: Release notes from git log
+      shell: bash
+      run: bash scripts/release-notes.sh "${{ inputs.tag }}" > release-notes.md
+
+    - name: Upload to UpdateHub
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        UPDATEHUB_URL: ${{ inputs.updatehub-url }}
+        UPDATEHUB_CI_TOKEN: ${{ inputs.updatehub-token }}
+      run: |
+        set -euo pipefail
+        if [ -z "$UPDATEHUB_URL" ] || [ -z "$UPDATEHUB_CI_TOKEN" ]; then
+          echo "::warning::UPDATEHUB_URL / UPDATEHUB_CI_TOKEN nejsou nastavene - instalator se nenahraje."; exit 0
+        fi
+        installer=$(ls target/release/bundle/nsis/*-setup.exe | head -n1)
+        [ -f "$installer.sig" ] || { echo "::error::Chybi podpis $installer.sig - zkontroluj TAURI_SIGNING_PRIVATE_KEY"; exit 1; }
+        echo "Nahravam $(basename "$installer") ($(du -h "$installer" | cut -f1))"
+        curl -f -sS --retry 3 --retry-delay 60 --retry-all-errors -X POST "$UPDATEHUB_URL/api/ci/apps/weave/releases" \
+          -H "X-UpdateHub-Token: $UPDATEHUB_CI_TOKEN" \
+          -F "file=@$installer" -F "signature=$(cat "$installer.sig")" \
+          -F "version=$VERSION" -F "platform=windows" -F "arch=x64" -F "channel=stable" \
+          -F "release_notes=<release-notes.md"
+        echo
+        echo "Nahrano do UpdateHubu jako DRAFT - publikuj v adminu."
