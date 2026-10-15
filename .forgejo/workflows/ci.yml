@@ -3,8 +3,10 @@ name: ci
 # Forgejo Actions na vlastnim runneru (NUC, Linux).
 
 on:
+  # Push jen do main: PR se testuje pres pull_request, jinak by kazdy commit v PR bezel
+  # dvakrat a blokoval jediny Linux runner ostatnim repum.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: [main]
 
