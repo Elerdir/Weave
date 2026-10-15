@@ -1,8 +1,12 @@
 name: ci
 
+# Forgejo Actions na vlastnim runneru (NUC, Linux).
+
 on:
+  # Push jen do main: PR se testuje pres pull_request, jinak by kazdy commit v PR bezel
+  # dvakrat a blokoval jediny Linux runner ostatnim repum.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -35,8 +39,8 @@ jobs:
 
       - name: Install system deps (Linux)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          $(command -v sudo || true) apt-get update
+          $(command -v sudo || true) apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
@@ -65,49 +69,8 @@ jobs:
       - name: Tests
         run: cargo test --all --locked
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Coverage
-        run: cargo llvm-cov --all --lcov --output-path lcov.info
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        with:
-          files: lcov.info
-          fail_ci_if_error: false
-
-  # Kompiluje a testuje macOS cestu (cfg(target_os = "macos")), kterou ubuntu
-  # job nikdy nevidí, + ověří, že se llama.cpp s Metal backendem zkompiluje.
-  # Repo je public → macOS runnery jsou zdarma.
-  rust-macos:
-    name: rust-macos
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-
-      - name: Placeholder frontend dist
-        run: mkdir -p dist && echo '<!doctype html><title>Weave</title>' > dist/index.html
-
-      - name: Clippy (macOS)
-        run: cargo clippy --all-targets --workspace -- -D warnings
-
-      - name: Tests (macOS)
-        run: cargo test --all
-
-      # Metal build llama.cpp (cmake + clang jsou na runneru předinstalované).
-      - name: Check Metal build
-        run: cargo check -p weave-infrastructure --features llm-metal
+  # rust-macos (Metal) se vrati s Mac runnerem (etapa F5); coverage na Codecov
+  # (sluzba GitHubu) odpadla s presunem na Forgejo.
 
   # Vulkan (AMD/Intel GPU) neměl dlouho v CI nic — na rozdíl od Metalu se nikde
   # nekompiloval, takže se mohl tiše rozbít a zjistilo by se to až u uživatele
@@ -135,8 +98,8 @@ jobs:
       # potřebuje keyring, libclang-dev bindgen v llama-cpp-sys-2.
       - name: Install Vulkan + build deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          $(command -v sudo || true) apt-get update
+          $(command -v sudo || true) apt-get install -y \
             libvulkan-dev \
             glslc \
             spirv-headers \

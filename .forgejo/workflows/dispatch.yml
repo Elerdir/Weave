@@ -1,7 +1,11 @@
 name: Dispatch release
 
-# Spousti Dispatch konzole (https://github.com/Elerdir/dispatch) pres
-# workflow_dispatch API. Kontrakt se vsemi aplikacemi v Dispatchi:
+# Forgejo Actions: bump ve commitu jen pod tagem (main se neposouva), tag pushne release-bot
+# (RELEASE_TOKEN); Windows instalator ve stejnem behu (slozena akce .forgejo/actions/windows-installer).
+# macOS se vrati s Mac runnerem (etapa F5).
+
+# Spousti Dispatch (https://dispatch.niderle.cz) pres Forgejo API
+# (workflow_dispatch). Kontrakt se vsemi aplikacemi v Dispatchi:
 #   - vstupy version, platforms, dispatch_id
 #   - dispatch_id v run-name (podle nej Dispatch dohleda tenhle beh)
 #
@@ -10,9 +14,9 @@ name: Dispatch release
 # (odpojeny od vetve): tag v<verze> ukazuje na main + bump verze, vetev main
 # se nemeni. release.yml pak checkoutuje tag a verze v souborech sedi s tagem.
 # Soubory v main se verzi dorovnaji, az kdyz je nekdo v PR slouci.
-# Tag pushnuty pres GITHUB_TOKEN release.yml znovu NESPUSTI, build nebezi dvakrat.
+# Tag od release-bot release.yml preskakuje, build nebezi dvakrat.
 #
-# Lze spustit i rucne (Actions -> Dispatch release -> Run workflow).
+# Lze spustit i rucne (Actions -> Dispatch release -> Spustit).
 
 run-name: Release ${{ inputs.version }} [${{ inputs.dispatch_id || 'manual' }}]
 
@@ -26,7 +30,7 @@ on:
       platforms:
         description: "Carkou oddelene: windows,macos"
         type: string
-        default: "windows,macos"
+        default: "windows"
       dispatch_id:
         description: "Korelacni ID z Dispatche (rucne nech prazdne)"
         type: string
@@ -36,12 +40,14 @@ concurrency:
   group: dispatch-release
   cancel-in-progress: false
 
+env:
+  # sqlx pouziva offline cache (.sqlx/) - build nepotrebuje zivou DB
+  SQLX_OFFLINE: "true"
+
 jobs:
   tag:
     name: Bump version and tag
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
@@ -57,10 +63,16 @@ jobs:
           if ! [[ "$PLATFORMS" =~ ^(windows|macos)(,(windows|macos))*$ ]]; then
             echo "::error::Neplatne platformy '$PLATFORMS' (Weave: windows, macos)"; exit 1
           fi
+          if ! [[ ",$PLATFORMS," == *",windows,"* ]]; then
+            echo "::error::macOS zatim nema runner - vydavej s platformou windows"; exit 1
+          fi
+          [[ ",$PLATFORMS," == *",macos,"* ]] && echo "::warning::macOS zatim nema runner - stavi se jen Windows."
+          true
 
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
+          token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Tag must not exist yet
         shell: bash
@@ -71,10 +83,7 @@ jobs:
             echo "::error::Tag $TAG uz existuje - zvol vyssi verzi"; exit 1
           fi
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
+      # Bump v odpojenem commitu, push jen tagu: main je chranena a verze v ni se dorovna v PR.
       - name: Bump version in a tag-only commit
         id: tag
         shell: bash
@@ -82,8 +91,8 @@ jobs:
           VERSION: ${{ inputs.version }}
           TAG: v${{ inputs.version }}
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name  "release-bot"
+          git config user.email "release-bot@git.niderle.cz"
           git switch --detach
           node scripts/bump-version.mjs "$VERSION"
           git add package.json src-tauri/tauri.conf.json Cargo.toml Cargo.lock
@@ -92,13 +101,23 @@ jobs:
           git push origin "refs/tags/$TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-  release:
-    name: Release
+  windows:
+    name: Windows installer
     needs: tag
-    uses: ./.github/workflows/release.yml
-    with:
-      tag: ${{ needs.tag.outputs.tag }}
-      platforms: ${{ inputs.platforms }}
-    secrets: inherit
-    permissions:
-      contents: read
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      # fetch-depth 0: poznamky k vydani se skladaji z git logu od predchoziho tagu.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: ./.forgejo/actions/windows-installer
+        with:
+          version: ${{ inputs.version }}
+          tag: ${{ needs.tag.outputs.tag }}
+          signing-key: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          signing-key-password: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          updatehub-url: ${{ secrets.UPDATEHUB_URL }}
+          updatehub-token: ${{ secrets.UPDATEHUB_CI_TOKEN }}
