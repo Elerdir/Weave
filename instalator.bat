@@ -90,7 +90,13 @@ REM takze jim instalator CUDA vetev stejne nenabidne a nemusi se stavet.
 if not defined CMAKE_CUDA_ARCHITECTURES set "CMAKE_CUDA_ARCHITECTURES=86;89;120"
 
 REM --- Visual Studio: kompilator do PATH pro Ninju ---
+REM vswhere najde i Build Tools v Program Files (x86)\...\2022 (CI runner ve VM);
+REM smycka pod nim je zaloha pro stroje bez vswhere.
 set "VCVARS="
+set "VSDIR="
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if exist "%VSWHERE%" for /f "usebackq delims=" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%I"
+if defined VSDIR if exist "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%VSDIR%\VC\Auxiliary\Build\vcvars64.bat"
 for %%V in (18 17 16) do (
     for %%E in (Community Professional Enterprise BuildTools) do (
         if exist "%ProgramFiles%\Microsoft Visual Studio\%%V\%%E\VC\Auxiliary\Build\vcvars64.bat" (
@@ -112,6 +118,7 @@ REM MSBuild pada pri kompilaci Vulkan shaderu ("cannot find the batch label
 REM VCEnd"): llama-cpp-sys-2 si pro Vulkan vypina TrackFileAccess a to rozbije
 REM paralelni custom build kroky. Ninja je soucasti VS.
 set "NINJA_DIR="
+if defined VSDIR if exist "%VSDIR%\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe" set "NINJA_DIR=%VSDIR%\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja"
 for %%V in (18 17 16) do (
     for %%E in (Community Professional Enterprise BuildTools) do (
         if exist "%ProgramFiles%\Microsoft Visual Studio\%%V\%%E\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe" (
@@ -119,9 +126,13 @@ for %%V in (18 17 16) do (
         )
     )
 )
+where ninja >nul 2>&1
+if not errorlevel 1 if not defined NINJA_DIR set "CMAKE_GENERATOR=Ninja"
 if defined NINJA_DIR (
     set "PATH=%NINJA_DIR%;%PATH%"
     set "CMAKE_GENERATOR=Ninja"
+) else if defined CMAKE_GENERATOR (
+    echo Ninja z PATH.
 ) else (
     echo VAROVANI: Ninja nenalezen - build Vulkan shaderu nejspis spadne na MSBuildu.
 )
