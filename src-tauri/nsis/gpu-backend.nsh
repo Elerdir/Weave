@@ -4,16 +4,22 @@
 ; přepnout CUDA/Vulkan za běhu. Instalátor proto nese obě verze a tenhle hook
 ; po rozbalení souborů nechá na disku jen tu, která na stroji dává smysl:
 ;
-;   NVIDIA >= 20 GB VRAM   -> CUDA (3090, 4090, 5090 - model se vejde celý do
-;                             VRAM a CUDA tam znatelně zrychlí prompt)
-;   NVIDIA 12-19 GB VRAM   -> zeptat se (u karet, kde se velký model do VRAM
-;                             nevejde, je přínos CUDY menší než 485 MB navíc)
-;   cokoli jiného          -> Vulkan (AMD, Intel, slabší NVIDIA)
+;   NVIDIA RTX >= 20 GB VRAM   -> CUDA (3090, 4090, 5090 - model se vejde celý
+;                                 do VRAM a CUDA tam znatelně zrychlí prompt)
+;   NVIDIA RTX 12-19 GB VRAM   -> zeptat se (u karet, kde se velký model do
+;                                 VRAM nevejde, je přínos CUDY menší než 485 MB
+;                                 navíc)
+;   cokoli jiného              -> Vulkan (AMD, Intel, slabší nebo starší NVIDIA)
+;
+; "RTX" = compute capability >= 8.6 (RTX 30xx a novější). Jen pro ty se CUDA
+; kernely staví (CMAKE_CUDA_ARCHITECTURES 86;89;120 v instalator.bat); starší
+; karta by CUDA build nespustila.
 ;
 ; Volba se pamatuje v registru, aby se aktualizace (updater instaluje tiše)
 ; neptaly znovu a nepřepsaly CUDA verzi zpátky Vulkanem.
 
 !include LogicLib.nsh
+!include x64.nsh
 
 !define WEAVE_REGKEY "Software\Weave"
 !define WEAVE_CUDA_AUTO_MB 20000   ; >= 20 GB -> CUDA bez ptaní
@@ -28,6 +34,7 @@
   Push $0
   Push $1
   Push $2
+  Push $3
 
   StrCpy $2 ""
 
@@ -43,17 +50,46 @@
     Goto weave_apply
   ${EndIf}
 
-  ; 2) Detekce karty. nvidia-smi je součástí ovladače NVIDIE (System32),
-  ;    takže jeho úspěšné spuštění je zároveň důkaz, že NVIDIA v stroji je.
-  nsExec::ExecToStack '"nvidia-smi" --query-gpu=memory.total --format=csv,noheader,nounits'
+  ; 2) RTX? nvidia-smi je součástí ovladače NVIDIE (System32), takže jeho
+  ;    úspěšné spuštění je zároveň důkaz, že NVIDIA v stroji je. Starý ovladač
+  ;    pole compute_cap nezná a skončí chybou -> Vulkan.
+  ;    Instalátor je 32bitový: bez vypnutého přesměrování by System32 ukazoval
+  ;    do SysWOW64, kde nvidia-smi není, a vybral by se vždycky Vulkan.
+  ${DisableX64FSRedirection}
+  nsExec::ExecToStack '"nvidia-smi" --query-gpu=compute_cap --format=csv,noheader'
   Pop $0   ; návratový kód
-  Pop $1   ; VRAM v MiB, u víc karet víc řádků
+  Pop $1   ; např. "8.6" nebo "12.0", u víc karet víc řádků
+  ${EnableX64FSRedirection}
   ${If} $0 != "0"
     StrCpy $2 "vulkan"
     Goto weave_apply
   ${EndIf}
+  ; IntOp přečte číslo ze začátku řetězce = hlavní verze ("12.0" -> 12).
+  IntOp $3 $1 + 0
+  ${If} $3 < 8
+    StrCpy $2 "vulkan"
+    Goto weave_apply
+  ${EndIf}
+  ${If} $3 == 8
+    ; "8.x": vedlejší verze je třetí znak.
+    StrCpy $0 $1 1 2
+    IntOp $0 $0 + 0
+    ${If} $0 < 6
+      StrCpy $2 "vulkan"
+      Goto weave_apply
+    ${EndIf}
+  ${EndIf}
 
-  ; IntOp přečte číslo ze začátku řetězce, takže odřízne "\r\n" i další karty.
+  ; 3) VRAM v MiB; IntOp odřízne "\r\n" i další karty.
+  ${DisableX64FSRedirection}
+  nsExec::ExecToStack '"nvidia-smi" --query-gpu=memory.total --format=csv,noheader,nounits'
+  Pop $0
+  Pop $1
+  ${EnableX64FSRedirection}
+  ${If} $0 != "0"
+    StrCpy $2 "vulkan"
+    Goto weave_apply
+  ${EndIf}
   IntOp $1 $1 + 0
 
   ${If} $1 >= ${WEAVE_CUDA_AUTO_MB}
@@ -69,11 +105,11 @@
     ; dát nejde, hook se vkládá dřív, než se jazyky načtou.
     ${If} $LANGUAGE == 1029
       MessageBox MB_YESNO|MB_ICONQUESTION \
-        "Nalezena karta NVIDIA s $0 GB VRAM.$\n$\nPoužít akceleraci CUDA? Na NVIDII je rychlejší, ale zabere o 485 MB víc místa na disku.$\nVolba Ne nainstaluje Vulkan, který funguje všude." \
+        "Nalezena karta NVIDIA RTX s $0 GB VRAM.$\n$\nPoužít akceleraci CUDA? Na NVIDII je rychlejší, ale zabere o 485 MB víc místa na disku.$\nVolba Ne nainstaluje Vulkan, který funguje všude." \
         IDYES weave_pick_cuda
     ${Else}
       MessageBox MB_YESNO|MB_ICONQUESTION \
-        "Found an NVIDIA GPU with $0 GB VRAM.$\n$\nUse CUDA acceleration? It is faster on NVIDIA but takes 485 MB more disk space.$\nChoosing No installs Vulkan, which works everywhere." \
+        "Found an NVIDIA RTX GPU with $0 GB VRAM.$\n$\nUse CUDA acceleration? It is faster on NVIDIA but takes 485 MB more disk space.$\nChoosing No installs Vulkan, which works everywhere." \
         IDYES weave_pick_cuda
     ${EndIf}
       StrCpy $2 "vulkan"
@@ -91,13 +127,14 @@ weave_apply:
     Rename "$INSTDIR\cuda\weave-app.exe" "$INSTDIR\weave-app.exe"
     ; Wildcard, aby změna verze CUDA (cublas64_13 -> _14) nevyžadovala zásah.
     CopyFiles /SILENT "$INSTDIR\cuda\*.dll" "$INSTDIR"
-    DetailPrint "Weave: GPU backend = CUDA (NVIDIA)"
+    DetailPrint "Weave: GPU backend = CUDA (NVIDIA RTX)"
   ${Else}
     DetailPrint "Weave: GPU backend = Vulkan"
   ${EndIf}
   RMDir /r "$INSTDIR\cuda"
   WriteRegStr HKCU "${WEAVE_REGKEY}" "GpuBackend" "$2"
 
+  Pop $3
   Pop $2
   Pop $1
   Pop $0
