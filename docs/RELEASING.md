@@ -114,9 +114,9 @@ Repo žije na Forgeju (`https://git.niderle.cz/elerdir/Weave`), GitHub je jen zr
 4. job `windows` na Windows runneru (VM na NUC) tag postaví složenou akcí
    `.forgejo/actions/windows-installer`, podepíše a nahraje do UpdateHubu jako **Draft**.
 
-Poznámky k vydání se skládají z git logu od předchozího tagu (`scripts/release-notes.sh`):
-bez merge commitů a bez `chore:`/`ci:`/`docs:`/`test:`, prefixy `feat:`/`fix:` a čísla PR se odstraní.
-Piš proto předměty commitů srozumitelně pro uživatele.
+Poznámky k vydání jsou z `CHANGELOG.md` (`scripts/release-notes.sh`): sekce `## [X.Y.Z]`, jinak
+`## [Unreleased]`. Před vydáním tam zapiš změny srozumitelně pro uživatele — jdou do UpdateHubu,
+k aktualizaci v aplikaci i na www.niderle.cz. Po vydání sekci v PR přejmenuj na vydanou verzi.
 
 Windows staví **tentýž kombinovaný instalátor jako lokální `instalator.bat`** (`instalator.bat /nopause`).
 CUDA Toolkit, Vulkan SDK, Ninja, CMake a LLVM jsou ve VM nainstalované natrvalo (instalace při každém

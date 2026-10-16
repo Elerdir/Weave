@@ -1,31 +1,28 @@
 #!/usr/bin/env bash
-# Poznamky k vydani pro UpdateHub z git logu: predmety commitu od predchoziho tagu
-# (bez merge commitu a bez chore/ci/docs/test/build/style), prefixy feat:/fix: se
-# odstrani. Weave nema CHANGELOG.md, a repo je verejne, ale poznamky maji byt cisty text.
-# Bez predchoziho tagu se vezme poslednich 20 commitu.
+# Vypise "co je noveho" pro dany tag z CHANGELOG.md (bez nadpisu sekce) - jde do UpdateHubu,
+# k aktualizaci v aplikaci a na www.niderle.cz. Text je pro uzivatele, ne predmety commitu.
 #
-# Pouziti: scripts/release-notes.sh v0.3.0 > release-notes.md   (tag musi existovat)
+# Commit s verzi zije jen pod tagem (main je chranena), takze sekce `## [X.Y.Z]` casto jeste
+# neexistuje. Poradi: sekce verze -> [Unreleased] -> jedna radka s nazvem verze.
+#
+# Pouziti: scripts/release-notes.sh v0.3.0 > release-notes.md
 set -euo pipefail
 
 tag="${1:?usage: release-notes.sh <tag>}"
 version="${tag#v}"
+changelog="$(dirname "$0")/../CHANGELOG.md"
 
-prev=$(git tag --list 'v*' --sort=-v:refname | grep -vx "$tag" | head -n1 || true)
-if [ -n "$prev" ]; then
-  log=$(git log --no-merges --pretty='%s' "$prev..$tag")
-else
-  log=$(git log --no-merges --pretty='%s' -n 20 "$tag")
-fi
+section() {
+  # Doslovne porovnani (index), ne regex - hranate zavorky a tecky ve verzi by se musely escapovat.
+  awk -v hdr="## $1" '
+    index($0, hdr) == 1 { on = 1; next }
+    on && (/^## / || /^---/) { exit }
+    on { print }
+  ' "$changelog" | sed -e '/./,$!d' | sed -e ':a' -e '/^\n*$/{$d;N;ba' -e '}'
+}
 
-notes=$(printf '%s\n' "$log" \
-  | grep -viE '^(chore|ci|docs|test|tests|build|style|refactor)(\([^)]*\))?!?:' \
-  | sed -E 's/^(feat|fix|perf)(\([^)]*\))?!?:[[:space:]]*//I' \
-  | sed -E 's/[[:space:]]*\(#[0-9]+\)$//' \
-  | sed -E '/^[[:space:]]*$/d' \
-  | awk '!seen[$0]++' \
-  | sed -E 's/^/- /' || true)
-
-if [ -z "$notes" ]; then
-  notes="Weave $version"
-fi
+notes=""
+[ -f "$changelog" ] && notes="$(section "[$version]")"
+[ -z "$notes" ] && [ -f "$changelog" ] && notes="$(section "[Unreleased]")"
+[ -z "$notes" ] && notes="Weave $version"
 printf '%s\n' "$notes"
