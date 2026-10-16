@@ -163,9 +163,11 @@ echo.
 
 REM --- 1/3 CUDA binarka do payloadu -------------------------------------
 echo [1/3] Build CUDA verze (llama.cpp s CUDA kernely - nejdelsi krok)...
-call pnpm build
-if errorlevel 1 goto :buildfail
-cargo build --release -p weave-app --features llm-cuda
+REM Pres tauri CLI, ne holy `cargo build`: jen CLI zapne crate tauri feature
+REM custom-protocol. Bez ni ma tauri cfg(dev) a binarka nema vestaveny
+REM frontend - po instalaci by okno nacitalo devUrl (localhost:5173) a bylo
+REM prazdne. --no-bundle = jen binarka, frontend postavi beforeBuildCommand.
+call pnpm tauri build --no-bundle --features llm-cuda
 if errorlevel 1 goto :buildfail
 
 REM Payload se plni znovu pri kazdem buildu. Stare DLL se musi smazat:
